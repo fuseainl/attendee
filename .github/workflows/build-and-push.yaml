@@ -1,0 +1,53 @@
+name: Build and Push Docker Image
+
+permissions:
+  contents: read  
+  packages: write 
+  actions: read  
+  attestations: write
+  id-token: write
+
+on:
+  push:
+    branches:
+      - main  # Change this to your preferred branch
+      - dev/k8s
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version from package.json
+        id: get_version
+        run: |
+          VERSION=v$(jq -r .version package.json)-amd64
+          echo "VERSION=$VERSION"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          
+      # Debugging: Print out the VERSION to verify it's correct
+      - name: Verify version
+        run: |
+          echo "The extracted version is: ${{ env.VERSION }}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: |
+          docker build --no-cache --platform linux/amd64 -t attendee:latest -f ./Dockerfile .
+
+      - name: Tag Docker image
+        run: |
+          docker tag attendee:latest ghcr.io/fuseainl/attendee:${{ env.VERSION }}
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/fuseainl/attendee:${{ env.VERSION }}
