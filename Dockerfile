@@ -97,4 +97,7 @@ COPY entrypoint.sh /opt/bin/entrypoint.sh
 RUN chmod +x /opt/bin/entrypoint.sh
 RUN adduser root pulse-access
 
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # CMD ["/bin/bash"] is added in entrypoint.sh
