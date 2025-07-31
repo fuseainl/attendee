@@ -392,16 +392,17 @@ class BotController:
 
         if self.get_recording_file_location():
             logger.info("Telling file uploader to upload recording file...")
-            file_uploader = FileUploader(
-                os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                self.get_recording_filename(),
-            )
-            file_uploader.upload_file(self.get_recording_file_location())
-            file_uploader.wait_for_upload()
-            logger.info("File uploader finished uploading file")
-            file_uploader.delete_file(self.get_recording_file_location())
-            logger.info("File uploader deleted file from local filesystem")
-            self.recording_file_saved(file_uploader.key)
+            # file_uploader = FileUploader(
+            #     os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+            #     self.get_recording_filename(),
+            # )
+            logger.info("LOCATION OF FILE LOCALLY", self.get_recording_file_location())
+            # file_uploader.upload_file(self.get_recording_file_location())
+            # file_uploader.wait_for_upload()
+            # logger.info("File uploader finished uploading file")
+            # file_uploader.delete_file(self.get_recording_file_location())
+            # logger.info("File uploader deleted file from local filesystem")
+            # self.recording_file_saved(file_uploader.key)
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()
