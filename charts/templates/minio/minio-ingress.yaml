@@ -1,0 +1,34 @@
+{{- if .Values.minio.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: {{ .Values.namespace | quote }}
+  labels:
+    app: minio
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/proxy-body-size: "9000m"
+    nginx.ingress.kubernetes.io/proxy-max-temp-file-size: "9000m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+spec:
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio
+                port:
+                  number: {{ .Values.minio.service.consolePort }}
+  {{- if .Values.minio.ingress.tlsSecret }}
+  tls:
+    - hosts:
+        - {{ .Values.minio.ingress.host | quote }}
+      secretName: {{ .Values.minio.ingress.tlsSecret | quote }}
+  {{- end }}
+{{- end }}

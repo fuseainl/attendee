@@ -1,0 +1,36 @@
+{{- if .Values.pgadmin.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.frontend.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+  namespace: {{ .Values.customer.namespace | quote }}
+  labels:
+    type: User_Interface
+    app: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.frontend.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.frontend.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+  template:
+    metadata:
+      labels:
+        app: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.frontend.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+    spec:
+      containers:
+      - name: pgadmin
+        image: "{{ .Values.pgadmin.image }}"
+        imagePullPolicy: {{ .Values.pgadmin.imagePullPolicy }}
+        ports:
+          - containerPort: {{ .Values.pgadmin.service.targetPort }}
+        env:
+          - name: PGADMIN_DEFAULT_EMAIL
+            value: "admin@revodata.nl"
+          - name: PGADMIN_DEFAULT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.secret.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+                key: jwt-secret
+          - name: PGADMIN_LISTEN_PORT
+            value: "{{ .Values.pgadmin.service.targetPort }}"
+{{- end }}

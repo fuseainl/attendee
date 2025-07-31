@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendee-app
+  labels:
+    app: attendee-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: attendee-app
+  template:
+    metadata:
+      labels:
+        app: attendee-app
+    spec:
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.attendee.image }}"
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: REDIS_URL
+              value: "{{ .Values.redis.url }}"
+            - name: DJANGO_SETTINGS_MODULE
+              value: "attendee.settings.production"
+          envFrom:
+            - secretRef:
+                name: attendee-secrets
+        - name: collectstatic
+          image: "{{ .Values.attendee.image }}"
+          command: ["python", "manage.py", "collectstatic", "--noinput"]
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: REDIS_URL
+              value: "{{ .Values.redis.url }}"
+            - name: DJANGO_SETTINGS_MODULE
+              value: "attendee.settings.production"
+          envFrom:
+            - secretRef:
+                name: attendee-secrets
+      containers:
+        - name: web
+          image: "{{ .Values.attendee.image }}"
+          command:
+            - "gunicorn"
+            - "attendee.wsgi:application"
+            - "--bind"
+            - "0.0.0.0:8000"
+            - "--workers"
+            - "3"
+            - "--threads"
+            - "2"
+            - "--worker-class"
+            - "gthread"
+            - "--access-logfile"
+            - "-"
+            - "--error-logfile"
+            - "-"
+            - "--log-level"
+            - "info"
+          env:
+            - name: POSTGRES_HOST
+              value: "postgres"
+            - name: REDIS_URL
+              value: "{{ .Values.redis.url }}"
+            - name: DJANGO_SETTINGS_MODULE
+              value: "attendee.settings.production"
+          envFrom:
+            - secretRef:
+                name: attendee-secrets
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: "/"
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: "/"
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
