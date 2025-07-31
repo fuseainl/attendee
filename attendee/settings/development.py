@@ -3,8 +3,14 @@ import os
 from .base import *
 
 DEBUG = True
-ALLOWED_HOSTS = ["tendee-stripe-hooks.ngrok.io", "localhost"]
+ALLOWED_HOSTS = ["*"]
 
+csrf_origins_env = os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "")
+if csrf_origins_env:
+    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_origins_env.split(",")]
+else:
+    CSRF_TRUSTED_ORIGINS = []
+    
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
