@@ -9,6 +9,6 @@ entries:
     name: attendee
     type: application
     urls:
-    - https://fuseainl.github.io/attendee-helm/docs/attendee-0.1.0.tgz
+    - https://fuseainl.github.io/attendee/attendee-0.1.0.tgz
     version: 0.1.0
 generated: "2025-07-31T16:04:46.357528+02:00"
