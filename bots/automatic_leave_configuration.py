@@ -19,4 +19,4 @@ class AutomaticLeaveConfiguration:
     only_participant_in_meeting_timeout_seconds: int = 5
     wait_for_host_to_start_meeting_timeout_seconds: int = 600
     waiting_room_timeout_seconds: int = 900
-    max_uptime_seconds: int | 7200
+    max_uptime_seconds: int = 7200
