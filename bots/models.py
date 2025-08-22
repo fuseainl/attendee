@@ -55,6 +55,113 @@ class Project(models.Model):
         return self.name
 
 
+class CalendarPlatform(models.TextChoices):
+    GOOGLE = "google"
+    MICROSOFT = "microsoft"
+
+
+class CalendarStates(models.IntegerChoices):
+    CONNECTED = 1
+    DISCONNECTED = 2
+
+
+class Calendar(models.Model):
+    OBJECT_ID_PREFIX = "cal_"
+
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+    project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="calendars")
+    platform = models.CharField(max_length=255, choices=CalendarPlatform.choices)
+    state = models.IntegerField(choices=CalendarStates.choices, default=CalendarStates.CONNECTED)
+    connection_failure_data = models.JSONField(null=True, default=None)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    version = IntegerVersionField()
+
+    metadata = models.JSONField(null=True, blank=True)
+    deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating calendars")
+
+    client_id = models.CharField(max_length=255)
+    platform_uuid = models.CharField(max_length=1024, null=True, blank=True)
+
+    last_attempted_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_time_window_start = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_time_window_end = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_started_at = models.DateTimeField(null=True, blank=True)
+    sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    sync_task_requested_at = models.DateTimeField(null=True, blank=True)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        # Within a project, we don't want to allow calendars in the same project with the same deduplication key
+        constraints = [
+            models.UniqueConstraint(fields=["project", "deduplication_key"], name="unique_calendar_deduplication_key"),
+        ]
+
+
+class CalendarEvent(models.Model):
+    OBJECT_ID_PREFIX = "evt_"
+
+    object_id = models.CharField(max_length=255, unique=True, editable=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    calendar = models.ForeignKey(Calendar, on_delete=models.CASCADE, related_name="events")
+
+    platform_uuid = models.CharField(max_length=1024)
+
+    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    is_deleted = models.BooleanField(default=False)
+    attendees = models.JSONField(null=True, blank=True)
+    ical_uid = models.CharField(max_length=1024, null=True, blank=True)
+    name = models.CharField(max_length=1024, null=True, blank=True)
+
+    raw = models.JSONField()
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["calendar", "platform_uuid"], name="unique_calendar_event_platform_uuid"),
+        ]
+
+
 class ProjectAccess(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="project_accesses")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="project_accesses")
@@ -147,11 +254,13 @@ class RecordingFormats(models.TextChoices):
     MP4 = "mp4"
     WEBM = "webm"
     MP3 = "mp3"
+    NONE = "none"
 
 
 class RecordingViews(models.TextChoices):
     SPEAKER_VIEW = "speaker_view"
     GALLERY_VIEW = "gallery_view"
+    SPEAKER_VIEW_NO_SIDEBAR = "speaker_view_no_sidebar"
 
 
 class Bot(models.Model):
@@ -179,6 +288,7 @@ class Bot(models.Model):
 
     join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
     deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating bots")
+    calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -268,6 +378,7 @@ class Bot(models.Model):
         recording_mode_env_var_substring = {
             RecordingTypes.AUDIO_AND_VIDEO: "AUDIO_AND_VIDEO",
             RecordingTypes.AUDIO_ONLY: "AUDIO_ONLY",
+            RecordingTypes.NO_RECORDING: "NO_RECORDING",
         }.get(self.recording_type(), "UNKNOWN")
 
         env_var_name = f"{meeting_type_env_var_substring}_{recording_mode_env_var_substring}_BOT_CPU_REQUEST"
@@ -411,6 +522,8 @@ class Bot(models.Model):
             return RecordingTypes.AUDIO_AND_VIDEO
         elif recording_format == RecordingFormats.MP3:
             return RecordingTypes.AUDIO_ONLY
+        elif recording_format == RecordingFormats.NONE:
+            return RecordingTypes.NO_RECORDING
         else:
             raise ValueError(f"Invalid recording format: {recording_format}")
 
@@ -436,13 +549,25 @@ class Bot(models.Model):
 
         # Temporarily enabling this for all google meet meetings
         bot_meeting_type = meeting_type_from_url(self.meeting_url)
-        if (bot_meeting_type == MeetingTypes.GOOGLE_MEET or bot_meeting_type == MeetingTypes.TEAMS or (bot_meeting_type == MeetingTypes.ZOOM and self.use_zoom_web_adapter)) and not self.recording_type() == RecordingTypes.AUDIO_ONLY:
+        if (bot_meeting_type == MeetingTypes.GOOGLE_MEET or bot_meeting_type == MeetingTypes.TEAMS or (bot_meeting_type == MeetingTypes.ZOOM and self.use_zoom_web_adapter)) and self.recording_type() == RecordingTypes.AUDIO_AND_VIDEO:
             return True
 
         debug_settings = self.settings.get("debug_settings", {})
         if debug_settings is None:
             debug_settings = {}
         return debug_settings.get("create_debug_recording", False)
+
+    def external_media_storage_bucket_name(self):
+        external_media_storage_settings = self.settings.get("external_media_storage_settings", {})
+        if external_media_storage_settings is None:
+            external_media_storage_settings = {}
+        return external_media_storage_settings.get("bucket_name", None)
+
+    def external_media_storage_recording_file_name(self):
+        external_media_storage_settings = self.settings.get("external_media_storage_settings", {})
+        if external_media_storage_settings is None:
+            external_media_storage_settings = {}
+        return external_media_storage_settings.get("recording_file_name", None)
 
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()
@@ -1165,6 +1290,7 @@ class RecordingTranscriptionStates(models.IntegerChoices):
 class RecordingTypes(models.IntegerChoices):
     AUDIO_AND_VIDEO = 1, "Audio and Video"
     AUDIO_ONLY = 2, "Audio Only"
+    NO_RECORDING = 3, "No Recording"
 
 
 class RecordingResolutions(models.TextChoices):
@@ -1267,8 +1393,8 @@ class RecordingManager:
     @classmethod
     def terminate_recording(cls, recording: Recording):
         if recording.state == RecordingStates.IN_PROGRESS or recording.state == RecordingStates.PAUSED:
-            # If we don't have a recording file, then it failed.
-            if recording.file:
+            # If we don't have a recording file AND we intended to generate one, then it failed.
+            if recording.file or recording.bot.recording_type() == RecordingTypes.NO_RECORDING:
                 RecordingManager.set_recording_complete(recording)
             else:
                 RecordingManager.set_recording_failed(recording)
@@ -1448,6 +1574,7 @@ class Credentials(models.Model):
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
+        EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
@@ -1791,6 +1918,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
     TRANSCRIPT_UPDATE = 2, "Transcript Update"
     CHAT_MESSAGES_UPDATE = 3, "Chat Messages Update"
     PARTICIPANT_EVENTS_JOIN_LEAVE = 4, "Participant Join/Leave"
+    CALENDAR_EVENTS_UPDATE = 5, "Calendar Events Update"
+    CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     # add other event types here
 
     @classmethod
@@ -1801,6 +1930,8 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.TRANSCRIPT_UPDATE: "transcript.update",
             cls.CHAT_MESSAGES_UPDATE: "chat_messages.update",
             cls.PARTICIPANT_EVENTS_JOIN_LEAVE: "participant_events.join_leave",
+            cls.CALENDAR_EVENTS_UPDATE: "calendar.events_update",
+            cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
         }
 
     @classmethod
@@ -1850,6 +1981,7 @@ class WebhookDeliveryAttempt(models.Model):
     webhook_trigger_type = models.IntegerField(choices=WebhookTriggerTypes.choices, default=WebhookTriggerTypes.BOT_STATE_CHANGE, null=False)
     idempotency_key = models.UUIDField(unique=True, editable=False)
     bot = models.ForeignKey(Bot, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
+    calendar = models.ForeignKey(Calendar, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
     payload = models.JSONField(default=dict)
     status = models.IntegerField(choices=WebhookDeliveryAttemptStatus.choices, default=WebhookDeliveryAttemptStatus.PENDING, null=False)
     attempt_count = models.IntegerField(default=0)

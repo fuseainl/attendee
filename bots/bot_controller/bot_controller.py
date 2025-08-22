@@ -105,8 +105,8 @@ class BotController:
             recording_view=self.bot_in_db.recording_view(),
             google_meet_closed_captions_language=self.bot_in_db.google_meet_closed_captions_language(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
-            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording,
-            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording,
+            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
+            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
         )
 
@@ -135,8 +135,8 @@ class BotController:
             recording_view=self.bot_in_db.recording_view(),
             teams_closed_captions_language=self.bot_in_db.teams_closed_captions_language(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
-            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording,
-            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording,
+            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
+            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
         )
@@ -172,12 +172,13 @@ class BotController:
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
-            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording,
-            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording,
+            start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
+            stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             zoom_closed_captions_language=self.bot_in_db.zoom_closed_captions_language(),
+            should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
         )
 
     def get_zoom_bot_adapter(self):
@@ -201,8 +202,8 @@ class BotController:
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             meeting_url=self.bot_in_db.meeting_url,
-            add_video_frame_callback=self.gstreamer_pipeline.on_new_video_frame,
-            wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames,
+            add_video_frame_callback=self.gstreamer_pipeline.on_new_video_frame if self.gstreamer_pipeline else None,
+            wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames if self.gstreamer_pipeline else lambda: False,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback,
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.add_participant_event,
@@ -339,6 +340,36 @@ class BotController:
         else:
             raise Exception("No rtmp client found")
 
+    def upload_recording_to_external_media_storage_if_enabled(self):
+        if not self.bot_in_db.external_media_storage_bucket_name():
+            return
+
+        external_media_storage_credentials_record = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
+        if not external_media_storage_credentials_record:
+            logger.error(f"No external media storage credentials found for bot {self.bot_in_db.id}")
+            return
+
+        external_media_storage_credentials = external_media_storage_credentials_record.get_credentials()
+        if not external_media_storage_credentials:
+            logger.error(f"External media storage credentials data not found for bot {self.bot_in_db.id}")
+            return
+
+        try:
+            logger.info(f"Uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
+            file_uploader = FileUploader(
+                bucket=self.bot_in_db.external_media_storage_bucket_name(),
+                key=self.bot_in_db.external_media_storage_recording_file_name() or self.get_recording_filename(),
+                endpoint_url=external_media_storage_credentials.get("endpoint_url") or None,
+                region_name=external_media_storage_credentials.get("region_name"),
+                access_key_id=external_media_storage_credentials.get("access_key_id"),
+                access_key_secret=external_media_storage_credentials.get("access_key_secret"),
+            )
+            file_uploader.upload_file(self.get_recording_file_location())
+            file_uploader.wait_for_upload()
+            logger.info(f"File uploader finished uploading file to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
+        except Exception as e:
+            logger.exception(f"Error uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}: {e}")
+
     def cleanup(self):
         if self.cleanup_called:
             logger.info("Cleanup already called, exiting")
@@ -391,10 +422,13 @@ class BotController:
             self.websocket_audio_client.cleanup()
 
         if self.get_recording_file_location():
+            self.upload_recording_to_external_media_storage_if_enabled()
+
             logger.info("Telling file uploader to upload recording file...")
             file_uploader = FileUploader(
-                os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                self.get_recording_filename(),
+                bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
+                key=self.get_recording_filename(),
+                endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
             )
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
@@ -456,6 +490,12 @@ class BotController:
             else:
                 return PipelineConfiguration.audio_recorder_bot()
 
+        if self.bot_in_db.recording_type() == RecordingTypes.NO_RECORDING:
+            if self.bot_in_db.websocket_audio_url():
+                return PipelineConfiguration.pure_transcription_bot_with_websocket_audio()
+            else:
+                return PipelineConfiguration.pure_transcription_bot()
+
         if self.bot_in_db.websocket_audio_url():
             return PipelineConfiguration.recorder_bot_with_websocket_audio()
 
@@ -481,10 +521,16 @@ class BotController:
     def get_recording_file_location(self):
         if self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.rtmp_stream_video:
             return None
+        elif not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video:
+            return None
         else:
             return os.path.join("/tmp", self.get_recording_filename())
 
     def should_create_gstreamer_pipeline(self):
+        # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a gstreamer pipeline
+        if not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video and not self.pipeline_configuration.rtmp_stream_audio and not self.pipeline_configuration.rtmp_stream_video:
+            return False
+
         # For google meet / teams, we're doing a media recorder based recording technique that does the video processing in the browser
         # so we don't need to create a gstreamer pipeline here
         meeting_type = self.get_meeting_type()
@@ -502,6 +548,10 @@ class BotController:
         return self.pipeline_configuration.websocket_stream_audio
 
     def should_create_screen_and_audio_recorder(self):
+        # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a screen and audio recorder
+        if not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video and not self.pipeline_configuration.rtmp_stream_audio and not self.pipeline_configuration.rtmp_stream_video:
+            return False
+
         return not self.should_create_gstreamer_pipeline()
 
     def connect_to_redis(self):
@@ -837,7 +887,7 @@ class BotController:
         if not BotEventManager.is_state_that_can_pause_recording(self.bot_in_db.state):
             logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot pause recording")
             return
-        pause_recording_success = self.screen_and_audio_recorder.pause_recording()
+        pause_recording_success = self.screen_and_audio_recorder.pause_recording() if self.screen_and_audio_recorder else True
         if not pause_recording_success:
             logger.error(f"Failed to pause recording for bot {self.bot_in_db.object_id}")
             return
@@ -851,7 +901,7 @@ class BotController:
         if not BotEventManager.is_state_that_can_resume_recording(self.bot_in_db.state):
             logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot resume recording")
             return
-        resume_recording_success = self.screen_and_audio_recorder.resume_recording()
+        resume_recording_success = self.screen_and_audio_recorder.resume_recording() if self.screen_and_audio_recorder else True
         if not resume_recording_success:
             logger.error(f"Failed to resume recording for bot {self.bot_in_db.object_id}")
             return
