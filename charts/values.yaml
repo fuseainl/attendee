@@ -1,0 +1,111 @@
+customer:
+  namespace: dev
+  customercode: dev
+
+attendee:
+  image: attendee-labs/attendee:latest
+  service:
+    port: 8000
+  ingress:
+    enabled: true
+    host: fuseai.nl
+    suffix: "-attendee"
+    subdomain: ""
+    tls:
+      enabled: false
+
+postgres:
+  image: "postgres:15.3-alpine"
+  imagePullPolicy: IfNotPresent
+  user: "attendee_development_user"
+  password: "attendee_development_user"
+  db: "attendee_development"
+  secretName: ""
+  persistence:
+    size: 5Gi
+    # optional: storageClassName: "standard"
+
+redis:
+  storageSize: 1Gi
+  url: "redis://redis:6379/5"
+
+minio:
+  enabled: true
+  secretName: "minio-credentials"
+  image: "minio/minio:latest"
+  imagePullPolicy: IfNotPresent
+  persistence:
+    size: 10Gi
+  service:
+    port: 9000
+    consolePort: 9001
+  ingress:
+    enabled: true
+    tlsSecret: ""                 
+
+pgadmin:
+  enabled: true
+  replicaCount: 1
+  image: dpage/pgadmin4:latest
+  imagePullPolicy: IfNotPresent
+  service:
+    port: 80
+    targetPort: 5444
+  ingress:
+    subdomain: ""
+    suffix: -pgadmin-attendee
+  email: "admin@revodata.nl"
+
+ingress:
+  enabled: true
+  host: fuseai.nl
+  tls:
+    enabled: false
+
+namingConvention:
+  backend:
+    shortcode: be
+    vscode: vscode
+    litellm: litellm
+  database:
+    shortcode: db
+    mongodb: mg
+    mongodb_config: mgcfg
+    postgres: psql
+  frontend:
+    shortcode: fe
+    fusionai: fai
+    openwebui: oi
+    pgadmin: pga
+    transcription: trn
+    usermanual: um
+    pages: pgs
+  ingress:
+    shortcode: ing
+  networkpolicy:
+    shortcode: npol
+  monitoring:
+    shortcode: mon
+    grafana: grf
+  persistentvolume:
+    shortcode: pv
+  persistentvolumeclaim:
+    shortcode: pvc
+  pipelining:
+    shortcode: wf
+  service:
+    shortcode: svc
+  vectorstore:
+    shortcode: vs
+    qdrant: qd
+  workflowAutomation:
+    shortcode: wf
+    marker: marker
+    n8n: n8n
+  horizontalautoscaling:
+    shortcode: hpa
+  secret:
+    shortcode: secret
+
+rancher:
+  hostname: svc.cluster.local

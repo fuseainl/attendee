@@ -294,7 +294,7 @@ class AggregatedUtterance:
 
 
 def generate_aggregated_utterances(recording):
-    utterances_sorted = recording.utterances.all().order_by("timestamp_ms")
+    utterances_sorted = sorted(recording.utterances.all(), key=lambda x: x.timestamp_ms)
 
     aggregated_utterances = []
     current_aggregated_utterance = None
@@ -471,6 +471,7 @@ def generate_recordings_json_for_bot_detail_view(bot):
         recordings_data.append(
             {
                 "state": recording.state,
+                "recording_type": recording.bot.recording_type(),
                 "transcription_state": recording.transcription_state,
                 "url": recording.url,
                 "utterances": generate_utterance_json_for_bot_detail_view(recording),

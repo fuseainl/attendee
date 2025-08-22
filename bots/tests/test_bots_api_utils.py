@@ -6,7 +6,8 @@ from django.utils import timezone
 
 from accounts.models import Organization
 from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_meeting_url_and_credentials
-from bots.models import Bot, BotEventTypes, BotStates, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
+from bots.calendars_api_utils import create_calendar
+from bots.models import Bot, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
@@ -93,6 +94,89 @@ class TestCreateBot(TestCase):
         self.assertEqual(events.count(), 1)
         self.assertEqual(events.first().metadata["source"], BotCreationSource.API)
         self.assertEqual(events.first().event_type, BotEventTypes.JOIN_REQUESTED)
+
+    def test_create_bot_with_valid_redaction_settings(self):
+        """Test creating a bot with valid redaction settings."""
+        # Test with single redaction type
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot with PII Redaction", "transcription_settings": {"deepgram": {"redact": ["pii"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.deepgram_redaction_settings(), ["pii"])
+
+        # Test with multiple redaction types
+        bot2, error2 = create_bot(data={"meeting_url": "https://meet.google.com/xyz-uvw-rst", "bot_name": "Test Bot with Multiple Redaction", "transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot2)
+        self.assertIsNone(error2)
+        self.assertEqual(bot2.deepgram_redaction_settings(), ["pii", "pci", "numbers"])
+
+    def test_create_bot_with_empty_redaction_settings(self):
+        """Test creating a bot with empty redaction settings."""
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/empty-redact-test", "bot_name": "Test Bot with Empty Redaction", "transcription_settings": {"deepgram": {"redact": []}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.deepgram_redaction_settings(), [])
+
+    def test_create_bot_with_invalid_redaction_type_returns_error(self):
+        """Test that creating a bot with invalid redaction type returns validation error."""
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/invalid-redact-test", "bot_name": "Test Bot with Invalid Redaction", "transcription_settings": {"deepgram": {"redact": ["invalid_redaction_type"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("transcription_settings", error)
+
+    def test_create_bot_with_duplicate_redaction_types_returns_error(self):
+        """Test that creating a bot with duplicate redaction types returns validation error."""
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/duplicate-redact-test",
+                "bot_name": "Test Bot with Duplicate Redaction",
+                "transcription_settings": {
+                    "deepgram": {
+                        "redact": ["pii", "pci", "pii"]  # Duplicate "pii"
+                    }
+                },
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("transcription_settings", error)
+
+    def test_create_bot_with_null_redaction_settings_handled_correctly(self):
+        """Test that creating a bot with null redaction settings is handled correctly."""
+        bot, error = create_bot(
+            data={
+                "meeting_url": "https://meet.google.com/null-redact-test",
+                "bot_name": "Test Bot with Null Redaction",
+                "transcription_settings": {
+                    "deepgram": {
+                        "language": "en-US",
+                        "model": "nova-3",
+                        # No redact property
+                    }
+                },
+            },
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.deepgram_redaction_settings(), [])
+
+    def test_create_bot_redaction_settings_combined_with_other_deepgram_settings(self):
+        """Test creating a bot with redaction settings combined with other Deepgram settings."""
+        bot, error = create_bot(data={"meeting_url": "https://meet.google.com/combined-settings-test", "bot_name": "Test Bot with Combined Settings", "transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-2", "redact": ["pii", "numbers"], "keywords": ["meeting", "agenda"]}}}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+
+        # Verify redaction settings
+        self.assertEqual(bot.deepgram_redaction_settings(), ["pii", "numbers"])
+
+        # Verify other settings are preserved
+        deepgram_settings = bot.settings["transcription_settings"]["deepgram"]
+        self.assertEqual(deepgram_settings["language"], "en-US")
+        self.assertEqual(deepgram_settings["model"], "nova-2")
+        self.assertEqual(deepgram_settings["keywords"], ["meeting", "agenda"])
 
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
@@ -247,6 +331,70 @@ class TestCreateBot(TestCase):
         self.assertEqual(Bot.objects.count(), 2)
 
 
+class TestCalendarIntegration(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=organization)
+
+    def test_create_bot_with_calendar_event_id(self):
+        """Test creating a bot using a calendar event ID."""
+        # First create a calendar
+        calendar_data = {"platform": CalendarPlatform.GOOGLE, "client_id": "test_client_id", "client_secret": "test_client_secret", "refresh_token": "test_refresh_token"}
+        calendar, error = create_calendar(calendar_data, self.project)
+        self.assertIsNotNone(calendar)
+        self.assertIsNone(error)
+
+        # Create a calendar event
+        future_time = timezone.now() + timedelta(hours=1)
+        calendar_event = CalendarEvent.objects.create(calendar=calendar, platform_uuid="test_event_123", meeting_url="https://meet.google.com/calendar-event-test", start_time=future_time, end_time=future_time + timedelta(hours=1), raw={"event": "data"})
+
+        # Create bot using calendar event ID
+        bot_data = {"calendar_event_id": calendar_event.object_id, "bot_name": "Calendar Test Bot"}
+        bot, error = create_bot(data=bot_data, source=BotCreationSource.API, project=self.project)
+
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.meeting_url, calendar_event.meeting_url)
+        self.assertEqual(bot.join_at, calendar_event.start_time)
+        self.assertEqual(bot.calendar_event, calendar_event)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+    def test_create_bot_with_invalid_calendar_event_id(self):
+        """Test creating a bot with a non-existent calendar event ID."""
+        bot_data = {"calendar_event_id": "evt_nonexistent123456", "bot_name": "Test Bot"}
+        bot, error = create_bot(data=bot_data, source=BotCreationSource.API, project=self.project)
+
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("Calendar event with id evt_nonexistent123456 does not exist", error["error"])
+
+    def test_create_bot_with_calendar_event_validation_errors(self):
+        """Test validation errors when using calendar event ID with conflicting data."""
+        # Create a calendar and event
+        calendar_data = {"platform": CalendarPlatform.GOOGLE, "client_id": "test_client_id", "client_secret": "test_client_secret", "refresh_token": "test_refresh_token"}
+        calendar, error = create_calendar(calendar_data, self.project)
+        self.assertIsNotNone(calendar)
+
+        future_time = timezone.now() + timedelta(hours=1)
+        calendar_event = CalendarEvent.objects.create(calendar=calendar, platform_uuid="test_event_456", meeting_url="https://meet.google.com/calendar-validation-test", start_time=future_time, end_time=future_time + timedelta(hours=1), raw={"event": "data"})
+
+        # Test: providing both calendar_event_id and meeting_url should fail
+        bot_data = {"calendar_event_id": calendar_event.object_id, "meeting_url": "https://meet.google.com/conflicting-url", "bot_name": "Test Bot"}
+        bot, error = create_bot(data=bot_data, source=BotCreationSource.API, project=self.project)
+
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("meeting_url should not be provided when calendar_event_id is specified", error["error"])
+
+        # Test: providing both calendar_event_id and join_at should fail
+        bot_data = {"calendar_event_id": calendar_event.object_id, "join_at": (timezone.now() + timedelta(hours=2)).isoformat(), "bot_name": "Test Bot"}
+        bot, error = create_bot(data=bot_data, source=BotCreationSource.API, project=self.project)
+
+        self.assertIsNone(bot)
+        self.assertIsNotNone(error)
+        self.assertIn("join_at should not be provided when calendar_event_id is specified", error["error"])
+
+
 class TestCreateWebhookSubscription(TestCase):
     def setUp(self):
         organization = Organization.objects.create(name="Test Organization")
@@ -280,3 +428,124 @@ class TestCreateWebhookSubscription(TestCase):
             create_webhook_subscription(f"https://example{i}.com", ["bot.state_change"], self.project)
         with self.assertRaises(ValidationError):
             create_webhook_subscription("https://example3.com", ["bot.state_change"], self.project)
+
+
+class TestPatchBot(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=organization)
+
+    def test_patch_scheduled_bot_both_fields(self):
+        """Test successfully patching both join_at and meeting_url of a scheduled bot."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        future_time = timezone.now() + timedelta(hours=1)
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat()},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        # Update both fields
+        new_join_time = timezone.now() + timedelta(hours=3)
+        new_meeting_url = "https://meet.google.com/new-meeting-url"
+        updated_bot, patch_error = patch_bot(bot, {"join_at": new_join_time.isoformat(), "meeting_url": new_meeting_url})
+
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.join_at.replace(microsecond=0), new_join_time.replace(microsecond=0))
+        self.assertEqual(updated_bot.meeting_url, new_meeting_url)
+
+    def test_patch_bot_not_in_scheduled_state(self):
+        """Test that patching a bot not in scheduled state fails."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a ready bot (not scheduled)
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.JOINING)  # Should be in JOINING state after creation
+
+        # Try to patch the bot
+        future_time = timezone.now() + timedelta(hours=1)
+        updated_bot, patch_error = patch_bot(bot, {"join_at": future_time.isoformat()})
+
+        self.assertIsNone(updated_bot)
+        self.assertIsNotNone(patch_error)
+        self.assertEqual(patch_error["error"], "Bot is in state joining but can only be updated when in scheduled state")
+
+    def test_patch_bot_with_invalid_join_at(self):
+        """Test that patching with invalid join_at fails validation."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        future_time = timezone.now() + timedelta(hours=1)
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat()},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        # Try to patch with a join_at time in the past
+        past_time = timezone.now() - timedelta(hours=1)
+        updated_bot, patch_error = patch_bot(bot, {"join_at": past_time.isoformat()})
+
+        self.assertIsNone(updated_bot)
+        self.assertIsNotNone(patch_error)
+        self.assertIn("join_at", patch_error)
+        self.assertIn("cannot be in the past", str(patch_error["join_at"]))
+
+    def test_patch_bot_with_invalid_meeting_url(self):
+        """Test that patching with invalid meeting_url fails validation."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        future_time = timezone.now() + timedelta(hours=1)
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "join_at": future_time.isoformat()},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+
+        # Try to patch with an invalid meeting URL (http instead of https for Google Meet)
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.google.com/invalid-url"})
+
+        self.assertIsNone(updated_bot)
+        self.assertIsNotNone(patch_error)
+        self.assertIn("meeting_url", patch_error)
+        self.assertIn("Google Meet URL must start with https://meet.google.com/", str(patch_error["meeting_url"]))
+
+    def test_patch_bot_with_empty_data(self):
+        """Test that patching with empty data works (no changes made)."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        future_time = timezone.now() + timedelta(hours=1)
+        original_meeting_url = "https://meet.google.com/abc-defg-hij"
+        bot, error = create_bot(
+            data={"meeting_url": original_meeting_url, "bot_name": "Test Bot", "join_at": future_time.isoformat()},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertEqual(bot.state, BotStates.SCHEDULED)
+        original_join_at = bot.join_at
+
+        # Patch with empty data
+        updated_bot, patch_error = patch_bot(bot, {})
+
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.join_at, original_join_at)
+        self.assertEqual(updated_bot.meeting_url, original_meeting_url)

@@ -35,8 +35,10 @@ from .models import (
     ParticipantEventTypes,
     Project,
     ProjectAccess,
+    Recording,
     RecordingStates,
     RecordingTranscriptionStates,
+    RecordingTypes,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
@@ -99,6 +101,7 @@ class ProjectUrlContextMixin:
             "charge_credits_for_bots_setting": settings.CHARGE_CREDITS_FOR_BOTS,
             "user_projects": Project.accessible_to(self.request.user),
             "UserRole": UserRole,
+            "debug_mode": True if settings.DEBUG else False,
         }
 
 
@@ -232,6 +235,11 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+                credentials_data = {"access_key_id": request.POST.get("access_key_id"), "access_key_secret": request.POST.get("access_key_secret"), "endpoint_url": request.POST.get("endpoint_url"), "region_name": request.POST.get("region_name")}
+
+                if not credentials_data.get("access_key_id") or not credentials_data.get("access_key_secret") or (not credentials_data.get("endpoint_url") and not credentials_data.get("region_name")):
+                    return HttpResponse("Missing required credentials data", status=400)
             else:
                 return HttpResponse("Unsupported credential type", status=400)
 
@@ -258,6 +266,8 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/google_tts_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
                 return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+                return render(request, "projects/partials/external_media_storage_credentials.html", context)
             else:
                 return HttpResponse("Cannot render the partial for this credential type", status=400)
 
@@ -286,6 +296,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
+        external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
+
         context = self.get_project_context(object_id, project)
         context.update(
             {
@@ -305,6 +317,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
+                "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
+                "external_media_storage_credential_type": Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE,
             }
         )
 
@@ -394,16 +408,16 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
 
         try:
-            bot = Bot.objects.get(object_id=bot_object_id, project=project)
+            bot = (
+                Bot.objects.select_related()
+                .prefetch_related(
+                    "bot_events__debug_screenshots",
+                )
+                .get(object_id=bot_object_id, project=project)
+            )
         except Bot.DoesNotExist:
             # Redirect to bots list if bot not found
             return redirect("bots:project-bots", object_id=object_id)
-
-        # Prefetch recordings with their utterances and participants
-        bot.recordings.all().prefetch_related(models.Prefetch("utterances", queryset=Utterance.objects.select_related("participant")))
-
-        # Prefetch bot events with their debug screenshots
-        bot.bot_events.prefetch_related("debug_screenshots")
 
         # Get webhook delivery attempts for this bot (from both project-level and bot-specific webhook subscriptions)
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
@@ -436,9 +450,6 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             {
                 "bot": bot,
                 "BotStates": BotStates,
-                "RecordingStates": RecordingStates,
-                "RecordingTranscriptionStates": RecordingTranscriptionStates,
-                "recordings": generate_recordings_json_for_bot_detail_view(bot),
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,
@@ -452,6 +463,40 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         )
 
         return render(request, "projects/project_bot_detail.html", context)
+
+
+class ProjectBotRecordingsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id, bot_object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            bot = (
+                Bot.objects.select_related()
+                .prefetch_related(
+                    models.Prefetch(
+                        "recordings",
+                        queryset=Recording.objects.prefetch_related(
+                            models.Prefetch(
+                                "utterances",
+                                queryset=Utterance.objects.select_related("participant"),
+                            ),
+                        ),
+                    ),
+                )
+                .get(object_id=bot_object_id, project=project)
+            )
+        except Bot.DoesNotExist:
+            # Redirect to bots list if bot not found
+            return redirect("bots:project-bots", object_id=object_id)
+
+        context = {
+            "RecordingStates": RecordingStates,
+            "RecordingTypes": RecordingTypes,
+            "RecordingTranscriptionStates": RecordingTranscriptionStates,
+            "recordings": generate_recordings_json_for_bot_detail_view(bot),
+        }
+
+        return render(request, "projects/partials/project_bot_recordings.html", context)
 
 
 class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):

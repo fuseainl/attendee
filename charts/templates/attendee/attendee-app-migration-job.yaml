@@ -1,0 +1,22 @@
+# apiVersion: batch/v1
+# kind: Job
+# metadata:
+#   name: attendee-migrate
+# spec:
+#   template:
+#     spec:
+#       restartPolicy: OnFailure
+#       containers:
+#         - name: migrate
+#           image: "{{.Values.attendee.image}}"
+#           command: ["python", "manage.py", "migrate"]
+#           env:
+#             - name: POSTGRES_HOST
+#               value: "postgres"
+#             - name: REDIS_URL
+#               value: "{{ .Values.redis.url }}"
+#             - name: DJANGO_SETTINGS_MODULE
+#               value: "attendee.settings.development"
+#           envFrom:
+#             - secretRef:
+#                 name: attendee-secrets

@@ -218,6 +218,8 @@ class TeamsUIMethods:
             return "speaker"
         elif self.recording_view == RecordingViews.GALLERY_VIEW:
             return "gallery"
+        elif self.recording_view == RecordingViews.SPEAKER_VIEW_NO_SIDEBAR:
+            return "speaker"
         else:
             return "speaker"
 

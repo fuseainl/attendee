@@ -197,7 +197,9 @@
     </div>
 </div>
 <script>
-    htmx.logAll();
+    {% if debug_mode %}
+        htmx.logAll();
+    {% endif %}
     function setActiveLink(element) {
         // Remove active class from all nav links
         document.querySelectorAll('.nav-link').forEach(link => {

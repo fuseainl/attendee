@@ -1,0 +1,30 @@
+{{- if .Values.attendee.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: attendee-app-ingress
+  namespace: {{ .Values.namespace | default "default" | quote }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "32k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
+    nginx.ingress.kubernetes.io/proxy-body-size: "9000m"
+    nginx.ingress.kubernetes.io/proxy-max-temp-file-size: "9000m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+spec:
+  rules:
+    - host: {{- if not .Values.attendee.ingress.subdomain }}
+        ""{{ .Values.customer.namespace }}{{ .Values.attendee.ingress.suffix }}.{{ .Values.attendee.ingress.host }}"
+      {{- else }}
+        "{{ .Values.attendee.ingress.subdomain }}.{{ .Values.attendee.ingress.host }}"
+      {{- end }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: attendee-app
+                port:
+                  number: {{ .Values.attendee.service.port }}
+{{- end }}

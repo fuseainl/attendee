@@ -1,0 +1,24 @@
+{{- if .Values.pgadmin.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.ingress.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+  namespace: {{ .Values.customer.namespace | quote }}
+
+spec:
+  rules:
+    - host: {{ if not .Values.pgadmin.ingress.subdomain }}
+            "{{ .Values.customer.namespace }}{{ .Values.pgadmin.ingress.suffix }}.{{ .Values.ingress.host }}"
+          {{- else }}
+            {{ .Values.pgadmin.ingress.subdomain }}.{{ .Values.ingress.host }}
+      {{- end }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.service.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+                port:
+                  number: {{ .Values.pgadmin.service.port }}
+{{- end }}

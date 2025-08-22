@@ -1,0 +1,14 @@
+{{- if .Values.pgadmin.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.service.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+  namespace: {{ .Values.customer.namespace | quote }}
+spec:
+  selector:
+    # needs to be the same as deployment name
+    app: "{{ .Values.customer.customercode }}-{{ .Values.namingConvention.frontend.shortcode }}-{{ .Values.namingConvention.frontend.pgadmin }}-attendee"
+  ports:
+    - port: {{ .Values.pgadmin.service.port }}
+      targetPort: {{ .Values.pgadmin.service.targetPort }}
+  {{- end }}

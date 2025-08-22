@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: attendee-app
+  labels:
+    app: attendee-app
+spec:
+  type: ClusterIP
+  selector:
+    app: attendee-app
+  ports:
+    - name: http
+      port: {{ .Values.attendee.service.port }}
+      targetPort: {{ .Values.attendee.service.port }}
