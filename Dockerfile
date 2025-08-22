@@ -97,7 +97,7 @@ COPY entrypoint.sh /opt/bin/entrypoint.sh
 RUN chmod +x /opt/bin/entrypoint.sh
 RUN adduser root pulse-access
 
-COPY /app/migration_entrypoint.sh /opt/bin/migration_entrypoint.sh
-RUN chmod +x /opt/bin/migration_entrypoint.sh
+# COPY /app/migration_entrypoint.sh /opt/bin/migration_entrypoint.sh
+# RUN chmod +x /opt/bin/migration_entrypoint.sh
 
 # CMD ["/bin/bash"] is added in entrypoint.sh
