@@ -185,6 +185,11 @@ class ZoomBotAdapter(BotAdapter):
         # https://devforum.zoom.us/t/linux-sdk-gets-stuck-in-meeting-status-connecting-when-the-provided-password-is-incorrect/130441
         self.stuck_in_connecting_state_timeout = 60
 
+        # Breakout room controller
+        self.breakout_room_ctrl = None
+        self.breakout_room_ctrl_event = None
+        self.is_joining_or_leaving_breakout_room = False
+
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
         for joined_user_id in joined_user_ids:
@@ -225,6 +230,9 @@ class ZoomBotAdapter(BotAdapter):
             return
 
         if not self.recording_permission_granted:
+            return
+
+        if self.is_joining_or_leaving_breakout_room:
             return
 
         if not self.video_input_manager:
@@ -402,7 +410,15 @@ class ZoomBotAdapter(BotAdapter):
     def send_participant_event(self, participant_id, event_type, event_data={}):
         self.add_participant_event_callback({"participant_uuid": participant_id, "event_type": event_type, "event_data": event_data, "timestamp_ms": int(time.time() * 1000)})
 
+    def on_has_attendee_rights_notification(self, attendee):
+        logger.info(f"on_has_attendee_rights_notification called. attendee = {attendee}")
+        join_bo_result = attendee.JoinBo()
+        logger.info(f"join_bo_result = {join_bo_result}")
+
     def on_join(self):
+        # Reset breakout room transition flag
+        self.is_joining_or_leaving_breakout_room = False
+
         # Meeting reminder controller
         self.joined_at = time.time()
         self.meeting_reminder_event = zoom.MeetingReminderEventCallbacks(onReminderNotifyCallback=self.on_reminder_notify)
@@ -424,6 +440,11 @@ class ZoomBotAdapter(BotAdapter):
         self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
         self.chat_ctrl.SetEvent(self.chat_ctrl_event)
         self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
+
+        # Breakout room controller
+        self.breakout_room_ctrl = self.meeting_service.GetMeetingBOController()
+        self.breakout_room_ctrl_event = zoom.MeetingBOEventCallbacks(onHasAttendeeRightsNotificationCallback=self.on_has_attendee_rights_notification)
+        self.breakout_room_ctrl.SetEvent(self.breakout_room_ctrl_event)
 
         # Meeting sharing controller
         self.meeting_sharing_controller = self.meeting_service.GetMeetingShareController()
@@ -632,8 +653,9 @@ class ZoomBotAdapter(BotAdapter):
         audio_helper_subscribe_result = self.audio_helper.subscribe(self.audio_source, False)
         logger.info(f"audio_helper_subscribe_result = {audio_helper_subscribe_result}")
 
-        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
-        self.recording_permission_granted = True
+        if not self.recording_permission_granted:
+            self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
+            self.recording_permission_granted = True
 
         GLib.timeout_add(100, self.set_up_video_input_manager)
 
@@ -726,6 +748,9 @@ class ZoomBotAdapter(BotAdapter):
         if self.meeting_status != zoom.MEETING_STATUS_CONNECTING:
             return
 
+        if self.is_joining_or_leaving_breakout_room:
+            return
+
         logger.info(f"We've been in the connecting state for more than {self.stuck_in_connecting_state_timeout} seconds, going to return could not connect to meeting message")
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
@@ -736,6 +761,14 @@ class ZoomBotAdapter(BotAdapter):
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
         self.meeting_status = status
+
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
+            self.is_joining_or_leaving_breakout_room = True
+            self.send_message_callback({"message": self.Messages.JOINING_BREAKOUT_ROOM})
+
+        if status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
+            self.is_joining_or_leaving_breakout_room = True
+            self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_CONNECTING:
             self.wait_to_get_out_of_connecting_state()

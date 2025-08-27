@@ -936,9 +936,9 @@ paths:
   /api/v1/calendar_events:
     get:
       operationId: List Calendar Events
-      description: Returns a list of all calendar events for the authenticated project.
+      description: Returns a list of calendar events for the authenticated project.
         Results are paginated using cursor pagination.
-      summary: List all calendar events
+      summary: List calendar events
       parameters:
       - in: header
         name: Authorization
@@ -1035,9 +1035,9 @@ paths:
   /api/v1/calendars:
     get:
       operationId: List Calendars
-      description: Returns a list of all calendars for the authenticated project.
-        Results are paginated using cursor pagination.
-      summary: List all calendars
+      description: Returns a list of calendars for the authenticated project. Results
+        are paginated using cursor pagination.
+      summary: List calendars
       parameters:
       - in: header
         name: Authorization
@@ -1113,21 +1113,10 @@ paths:
                   refresh_token: 1//04abcdefghijklmnopqrstuvwxyz
                   platform: google
                   metadata:
-                    department: engineering
-                    team: backend
-                  deduplication_key: engineering-main-calendar
+                    tenant_id: '1234567890'
+                  deduplication_key: user-abcd
                 summary: Create Google Calendar
                 description: Example of creating a Google calendar connection
-              CreateMicrosoftCalendar:
-                value:
-                  client_id: 12345678-1234-1234-1234-123456789abc
-                  client_secret: abcdefghijklmnopqrstuvwxyz123456
-                  refresh_token: 0.AXA1234567890abcdef
-                  platform: microsoft
-                  metadata:
-                    department: sales
-                summary: Create Microsoft Calendar
-                description: Example of creating a Microsoft calendar connection
         required: true
       security:
       - {}
@@ -1444,6 +1433,8 @@ components:
       - scheduled
       - staged
       - joined_recording_paused
+      - joining_breakout_room
+      - leaving_breakout_room
     Calendar:
       type: object
       properties:
@@ -1921,6 +1912,26 @@ components:
                   - gu-IN
                   description: The language code to use for transcription
               required: []
+              additionalProperties: false
+            elevenlabs:
+              type: object
+              properties:
+                model_id:
+                  type: string
+                  description: The ElevenLabs model to use for transcription
+                  enum:
+                  - scribe_v1
+                  - scribe_v1_experimental
+                language_code:
+                  type: string
+                  description: An ISO-639-1 or ISO-639-3 language_code corresponding
+                    to the language of the audio file.
+                tag_audio_events:
+                  type: boolean
+                  description: Whether to tag audio events like 'laughter' in the
+                    transcription.
+              required:
+              - model_id
               additionalProperties: false
           required: []
           description: 'The transcription settings for the bot, e.g. {''deepgram'':

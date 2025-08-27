@@ -126,6 +126,16 @@
                     </a>
 
                     <a class="nav-link" 
+                       hx-get="{% url 'projects:project-calendars' project.object_id %}" 
+                       hx-select="#content"
+                       hx-target="#content"
+                       hx-swap="outerHTML"
+                       hx-push-url="true"
+                       onclick="setActiveLink(this)">
+                        <i class="bi bi-calendar3"></i> Calendars
+                    </a>
+
+                    <a class="nav-link" 
                        hx-get="{% url 'projects:project-app-sessions' project.object_id %}" 
                        hx-select="#content"
                        hx-target="#content"
@@ -134,6 +144,7 @@
                        onclick="setActiveLink(this)">
                         <i class="bi bi-app-indicator"></i> App Sessions
                     </a>
+                    
                 </nav>
                 
                 <!-- Added logout link at bottom -->
@@ -224,7 +235,11 @@
         const currentPath = window.location.pathname;        
         document.querySelectorAll('.nav-link').forEach(link => {
             const hxGet = link.getAttribute('hx-get');
-            if (hxGet === currentPath) {
+            const hxGetWithoutPrefix = hxGet?.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
+            const currentPathWithoutPrefix = currentPath?.replace(/^\/projects\/proj_[a-zA-Z0-9]+/, '');
+            const pathNestingMatch = hxGetWithoutPrefix && currentPathWithoutPrefix && currentPathWithoutPrefix.startsWith(hxGetWithoutPrefix);
+            const exactPathMatch = hxGet == currentPath;
+            if (pathNestingMatch || exactPathMatch) {
                 link.classList.add('active');
                 
                 // Check if this is a settings submenu item

@@ -11,6 +11,7 @@ from .calendars_api_utils import create_calendar, delete_calendar
 from .models import Calendar, CalendarEvent
 from .serializers import CalendarEventSerializer, CalendarSerializer, CreateCalendarSerializer, PatchCalendarSerializer
 from .tasks.sync_calendar_task import enqueue_sync_calendar_task
+from .throttling import ProjectPostThrottle
 
 TokenHeaderParameter = [
     OpenApiParameter(
@@ -54,13 +55,14 @@ class CalendarCursorPagination(CursorPagination):
 
 class CalendarListCreateView(GenericAPIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
     pagination_class = CalendarCursorPagination
     serializer_class = CalendarSerializer
 
     @extend_schema(
         operation_id="List Calendars",
-        summary="List all calendars",
-        description="Returns a list of all calendars for the authenticated project. Results are paginated using cursor pagination.",
+        summary="List calendars",
+        description="Returns a list of calendars for the authenticated project. Results are paginated using cursor pagination.",
         responses={
             200: OpenApiResponse(
                 response=CalendarSerializer(many=True),
@@ -277,8 +279,8 @@ class CalendarEventListView(GenericAPIView):
 
     @extend_schema(
         operation_id="List Calendar Events",
-        summary="List all calendar events",
-        description="Returns a list of all calendar events for the authenticated project. Results are paginated using cursor pagination.",
+        summary="List calendar events",
+        description="Returns a list of calendar events for the authenticated project. Results are paginated using cursor pagination.",
         responses={
             200: OpenApiResponse(
                 response=CalendarEventSerializer(many=True),

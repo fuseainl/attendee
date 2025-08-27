@@ -455,6 +455,8 @@ def transcription_provider_from_bot_creation_data(data):
         return TranscriptionProviders.ASSEMBLY_AI
     elif "sarvam" in settings:
         return TranscriptionProviders.SARVAM
+    elif "elevenlabs" in settings:
+        return TranscriptionProviders.ELEVENLABS
     elif "meeting_closed_captions" in settings:
         return TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 

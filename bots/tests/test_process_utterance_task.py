@@ -15,7 +15,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
-from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_deepgram, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
+from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
 class ProcessUtteranceTaskTest(TransactionTestCase):
@@ -1306,3 +1306,157 @@ class SarvamProviderTest(TransactionTestCase):
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
             self.assertEqual(failure["status_code"], 429)
+
+
+class ElevenLabsProviderTest(TransactionTestCase):
+    """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_elevenlabs"""
+
+    def setUp(self):
+        # Minimal DB fixtures ---------------------------------------------------------------
+        self.org = Organization.objects.create(name="Org")
+        self.project = Project.objects.create(name="Proj", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/999")
+
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,  # finished recording
+            transcription_provider=7,  # ELEVENLABS
+        )
+
+        self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_blob=b"pcm-bytes",
+            timestamp_ms=0,
+            duration_ms=600,
+            sample_rate=16_000,
+        )
+        self.utterance.refresh_from_db()
+
+        # "Real" credential row – we'll monkey‑patch get_credentials() later
+        self.cred = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.ELEVENLABS,
+        )
+
+    # ------------------------------------------------------------------ helpers
+
+    def _patch_creds(self):
+        """Always return a fake API key."""
+        return mock.patch.object(Credentials, "get_credentials", return_value={"api_key": "fake‑key"})
+
+    # ------------------------------------------------------------------ SUCCESS PATH
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_success_path(self, mock_pcm, mock_post):
+        """ElevenLabs transcription succeeds and returns formatted transcript with words."""
+        with self._patch_creds():
+            # Mock successful response from ElevenLabs API
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "hello world", "language_probability": 0.9, "words": [{"text": "hello", "start": 0.0, "end": 0.5}, {"text": "world", "start": 0.6, "end": 1.0}]}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+            self.assertEqual(len(transcript["words"]), 2)
+            self.assertEqual(transcript["words"][0]["word"], "hello")
+            self.assertEqual(transcript["words"][0]["start"], 0.0)
+            self.assertEqual(transcript["words"][0]["end"], 0.5)
+            self.assertEqual(transcript["words"][1]["word"], "world")
+            self.assertEqual(transcript["words"][1]["start"], 0.6)
+            self.assertEqual(transcript["words"][1]["end"], 1.0)
+
+            # Verify API call was made correctly
+            mock_pcm.assert_called_once_with(b"pcm-bytes", sample_rate=16_000)
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            # First argument is the URL
+            self.assertEqual(call_args[0][0], "https://api.elevenlabs.io/v1/speech-to-text")
+            # Check headers in kwargs
+            self.assertEqual(call_args[1]["headers"]["xi-api-key"], "fake‑key")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_success_path_with_bot_settings(self, mock_pcm, mock_post):
+        """ElevenLabs transcription succeeds with bot-specific settings applied."""
+        # Configure bot with ElevenLabs settings
+        self.bot.settings = {"transcription_settings": {"elevenlabs": {"model_id": "scribe_v1_experimental", "language_code": "en", "tag_audio_events": True}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            # Mock successful response from ElevenLabs API
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "test transcript", "language_probability": 0.8, "words": [{"text": "test", "start": 0.0, "end": 0.5}]}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "test transcript")
+
+            # Verify settings were passed in the request
+            call_args = mock_post.call_args
+            data = call_args[1]["data"]
+            self.assertEqual(data["model_id"], "scribe_v1_experimental")
+            self.assertEqual(data["language_code"], "en")
+            self.assertTrue(data["tag_audio_events"])
+
+    def test_missing_credentials_row(self):
+        """No Credentials row → CREDENTIALS_NOT_FOUND."""
+        # Remove the credential row created in setUp
+        self.cred.delete()
+
+        transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+        self.assertIsNone(transcript)
+        self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
+        """ElevenLabs returns 401 → CREDENTIALS_INVALID."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=401)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_request_failure_500(self, mock_pcm, mock_post):
+        """ElevenLabs returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=500)
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status_code"], 500)
+            self.assertEqual(failure["response_text"], "Internal Server Error")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_request_exception(self, mock_pcm, mock_post):
+        """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_creds():
+            mock_post.side_effect = Exception("Network error")
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
+            self.assertIn("Network error", failure["error"])

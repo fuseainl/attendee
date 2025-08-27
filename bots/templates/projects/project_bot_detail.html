@@ -119,10 +119,9 @@
             <p><strong>Created:</strong> {{ bot.created_at|date:"M d, Y H:i" }}</p>
             {% if bot.join_at %}
                 <p><strong>Join at:</strong> {{ bot.join_at|date:"M d, Y H:i" }}
-
                 {% if bot.calendar_event %}
-                through {{ bot.calendar_event.name }}
-            {% endif %}
+                    through &nbsp;<a href="{% url 'projects:project-calendar-event-detail' project.object_id bot.calendar_event.calendar.object_id bot.calendar_event.object_id %}" class="text-decoration-none"><i class="bi bi-calendar-event me-1"></i>{{ bot.calendar_event.name }}</a>
+                {% endif %}
                 </p>
             {% endif %}
         </div>

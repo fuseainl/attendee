@@ -307,7 +307,8 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
     """Handler for syncing calendar events with Google Calendar API."""
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
-        if e.response.json().get("error") == "invalid_grant":
+        error_code = e.response.json().get("error")
+        if error_code == "invalid_grant" or error_code == "invalid_client":
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")

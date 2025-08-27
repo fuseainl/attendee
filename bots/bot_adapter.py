@@ -21,6 +21,8 @@ class BotAdapter:
         LOGIN_REQUIRED = "Login required"
         LOGIN_ATTEMPT_FAILED = "Login attempt failed"
         COULD_NOT_CONNECT_TO_MEETING = "Could not connect to meeting"
+        JOINING_BREAKOUT_ROOM = "Joining breakout room"
+        LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

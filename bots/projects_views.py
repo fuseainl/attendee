@@ -1,7 +1,6 @@
 import base64
 import json
 import logging
-import math
 import os
 import uuid
 
@@ -30,6 +29,10 @@ from .models import (
     BotEventTypes,
     BotSession,
     BotStates,
+    Calendar,
+    CalendarEvent,
+    CalendarPlatform,
+    CalendarStates,
     ChatMessage,
     Credentials,
     CreditTransaction,
@@ -49,7 +52,7 @@ from .models import (
     WebhookSubscription,
     WebhookTriggerTypes,
 )
-from .stripe_utils import process_checkout_session_completed
+from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .utils import generate_recordings_json_for_bot_detail_view
 
 logger = logging.getLogger(__name__)
@@ -77,6 +80,22 @@ def get_api_key_for_user(user, api_key_object_id):
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=api_key.project, user=user).exists():
         raise PermissionDenied
     return api_key
+
+
+def get_calendar_for_user(user, calendar_object_id):
+    calendar = get_object_or_404(Calendar, object_id=calendar_object_id, project__organization=user.organization)
+    # If you're an admin you can access any calendar in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=calendar.project, user=user).exists():
+        raise PermissionDenied
+    return calendar
+
+
+def get_calendar_event_for_user(user, calendar_event_object_id):
+    calendar_event = get_object_or_404(CalendarEvent, object_id=calendar_event_object_id, calendar__project__organization=user.organization)
+    # If you're an admin you can access any calendar event in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=calendar_event.calendar.project, user=user).exists():
+        raise PermissionDenied
+    return calendar_event
 
 
 class AdminRequiredMixin(LoginRequiredMixin):
@@ -228,6 +247,11 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
@@ -265,6 +289,8 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/assembly_ai_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.SARVAM:
                 return render(request, "projects/partials/sarvam_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.ELEVENLABS:
+                return render(request, "projects/partials/elevenlabs_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 return render(request, "projects/partials/google_tts_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
@@ -297,6 +323,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         sarvam_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.SARVAM).first()
 
+        elevenlabs_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
+
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
@@ -318,6 +346,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "assembly_ai_credential_type": Credentials.CredentialTypes.ASSEMBLY_AI,
                 "sarvam_credentials": sarvam_credentials.get_credentials() if sarvam_credentials else None,
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
+                "elevenlabs_credentials": elevenlabs_credentials.get_credentials() if elevenlabs_credentials else None,
+                "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
@@ -416,6 +446,167 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
 
         return context
+
+
+class ProjectCalendarsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
+    template_name = "projects/project_calendars.html"
+    context_object_name = "calendars"
+    paginate_by = 20
+
+    def get_queryset(self):
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
+
+        # Start with the base queryset
+        queryset = Calendar.objects.filter(project=project)
+
+        # Apply date filters if provided
+        start_date = self.request.GET.get("start_date")
+        end_date = self.request.GET.get("end_date")
+
+        if start_date:
+            queryset = queryset.filter(created_at__gte=start_date)
+        if end_date:
+            # Add 1 day to include the end date fully
+            from datetime import datetime, timedelta
+
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+                end_date_obj = end_date_obj + timedelta(days=1)
+                queryset = queryset.filter(created_at__lt=end_date_obj)
+            except (ValueError, TypeError):
+                # Handle invalid date format
+                pass
+
+        # Apply state filters if provided
+        states = self.request.GET.getlist("states")
+        if states:
+            # Convert string values to integers
+            try:
+                state_values = [int(state) for state in states if state.isdigit()]
+                if state_values:
+                    queryset = queryset.filter(state__in=state_values)
+            except (ValueError, TypeError):
+                # Handle invalid state values
+                pass
+
+        # Apply deduplication key filter if provided
+        deduplication_key = self.request.GET.get("deduplication_key")
+        if deduplication_key:
+            # Filter for calendars with specific deduplication key
+            queryset = queryset.filter(deduplication_key__icontains=deduplication_key)
+
+        # Order by most recently created
+        queryset = queryset.order_by("-created_at")
+
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
+        context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Add CalendarStates and CalendarPlatform for the template
+        context["CalendarStates"] = CalendarStates
+        context["CalendarPlatform"] = CalendarPlatform
+
+        # Add filter parameters to context for maintaining state
+        context["filter_params"] = {
+            "start_date": self.request.GET.get("start_date", ""),
+            "end_date": self.request.GET.get("end_date", ""),
+            "states": self.request.GET.getlist("states"),
+            "deduplication_key": self.request.GET.get("deduplication_key", ""),
+        }
+
+        return context
+
+
+class ProjectCalendarDetailView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
+    template_name = "projects/project_calendar_detail.html"
+    context_object_name = "calendar_events"
+    paginate_by = 20
+
+    def get_calendar(self):
+        """Get the calendar object, cached for multiple calls"""
+        if not hasattr(self, "_calendar"):
+            try:
+                self._calendar = get_calendar_for_user(user=self.request.user, calendar_object_id=self.kwargs["calendar_object_id"])
+            except PermissionDenied:
+                self._calendar = None
+        return self._calendar
+
+    def get_queryset(self):
+        calendar = self.get_calendar()
+        if not calendar:
+            return []
+
+        # Get calendar events for this calendar, ordered by start time (most recent first)
+        return calendar.events.all().order_by("-start_time")
+
+    def get(self, request, object_id, calendar_object_id):
+        # Check if calendar exists, if not redirect
+        calendar = self.get_calendar()
+        if not calendar:
+            return redirect("bots:project-calendars", object_id=object_id)
+
+        # Check if project from url is the same as the calendar's project
+        if calendar.project.object_id != object_id:
+            return redirect("bots:project-calendars", object_id=object_id)
+
+        # Continue with normal ListView processing
+        return super().get(request, object_id, calendar_object_id)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        calendar = self.get_calendar()
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
+
+        # Get webhook delivery attempts for this calendar (from calendar-related webhook subscriptions)
+        webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(calendar=calendar).select_related("webhook_subscription").order_by("-created_at")
+
+        context.update(self.get_project_context(self.kwargs["object_id"], project))
+        context.update(
+            {
+                "calendar": calendar,
+                "CalendarStates": CalendarStates,
+                "CalendarPlatform": CalendarPlatform,
+                "webhook_delivery_attempts": webhook_delivery_attempts,
+                "WebhookDeliveryAttemptStatus": WebhookDeliveryAttemptStatus,
+            }
+        )
+
+        return context
+
+
+class ProjectCalendarEventDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id, calendar_object_id, event_object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        calendar_event = get_calendar_event_for_user(user=request.user, calendar_event_object_id=event_object_id)
+
+        # Verify the calendar event belongs to the specified calendar
+        if calendar_event.calendar.object_id != calendar_object_id:
+            return redirect("bots:project-calendar-detail", object_id=object_id, calendar_object_id=calendar_object_id)
+
+        # Check if project from url is the same as the calendar's project
+        if calendar_event.calendar.project.object_id != object_id:
+            return redirect("bots:project-calendar-detail", object_id=object_id, calendar_object_id=calendar_object_id)
+
+        # Get any bots that were created for this calendar event
+        bots_for_event = Bot.objects.filter(calendar_event=calendar_event).order_by("-created_at")
+
+        context = self.get_project_context(object_id, project)
+        context.update(
+            {
+                "calendar": calendar_event.calendar,
+                "calendar_event": calendar_event,
+                "bots_for_event": bots_for_event,
+                "CalendarStates": CalendarStates,
+                "CalendarPlatform": CalendarPlatform,
+                "BotStates": BotStates,
+            }
+        )
+
+        return render(request, "projects/project_calendar_event_detail.html", context)
 
 
 class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
@@ -722,6 +913,23 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
         context = super().get_context_data(**kwargs)
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Check if organization has a valid payment method
+        has_payment_method = False
+        if project.organization.autopay_stripe_customer_id:
+            try:
+                # Retrieve the customer to check for default payment method
+                customer = stripe.Customer.retrieve(
+                    project.organization.autopay_stripe_customer_id,
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+                # Check if customer has a default payment method
+                has_payment_method = customer.invoice_settings.default_payment_method is not None
+            except stripe.error.StripeError:
+                # If there's an error querying Stripe, assume no payment method
+                has_payment_method = False
+
+        context["has_payment_method"] = has_payment_method
         return context
 
 
@@ -752,23 +960,7 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
         except (ValueError, TypeError):
             purchase_amount = 50.0  # Default fallback
 
-        # Calculate credits based on tiered pricing
-        if purchase_amount <= 200:
-            # Tier 1: $0.50 per credit
-            credit_amount = purchase_amount / 0.5
-        elif purchase_amount <= 1000:
-            # Tier 2: $0.40 per credit
-            credit_amount = purchase_amount / 0.4
-        else:
-            # Tier 3: $0.35 per credit
-            credit_amount = purchase_amount / 0.35
-
-        # Floor the credit amount to ensure whole credits
-        credit_amount = math.floor(credit_amount)
-
-        # Ensure at least 1 credit
-        if credit_amount < 1:
-            credit_amount = 1
+        credit_amount = credit_amount_for_purchase_amount_dollars(purchase_amount)
 
         # Convert purchase amount to cents for Stripe
         unit_amount = int(purchase_amount * 100)  # in cents
@@ -866,3 +1058,109 @@ class EditProjectView(AdminRequiredMixin, View):
         project.save()
 
         return HttpResponse("ok", status=200)
+
+
+class ProjectAutopayStripePortalView(AdminRequiredMixin, View):
+    def post(self, request, object_id):
+        """Create or update Stripe customer and redirect to billing portal for payment method setup."""
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        organization = project.organization
+
+        try:
+            # Check if organization already has a Stripe customer
+            if not organization.autopay_stripe_customer_id:
+                # Create a new Stripe customer
+                customer = stripe.Customer.create(
+                    email=request.user.email,
+                    name=organization.name,
+                    metadata={
+                        "organization_id": str(organization.id),
+                        "user_id": str(request.user.id),
+                    },
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+
+                # Save the customer ID to the organization
+                organization.autopay_stripe_customer_id = customer.id
+                organization.save()
+
+            # Check if customer already has a default payment method
+            customer = stripe.Customer.retrieve(
+                organization.autopay_stripe_customer_id,
+                api_key=os.getenv("STRIPE_SECRET_KEY"),
+            )
+            has_default_payment_method = customer.invoice_settings.default_payment_method is not None
+
+            # Create billing portal session with conditional flow_data
+            session_params = {
+                "customer": organization.autopay_stripe_customer_id,
+                "return_url": request.build_absolute_uri(reverse("projects:project-billing", args=[project.object_id])),
+                "api_key": os.getenv("STRIPE_SECRET_KEY"),
+            }
+
+            # Only add flow_data if customer doesn't have a default payment method
+            if not has_default_payment_method:
+                session_params["flow_data"] = {"type": "payment_method_update"}
+
+            session = stripe.billing_portal.Session.create(**session_params)
+
+            # Redirect to the billing portal
+            return redirect(session.url)
+
+        except stripe.error.StripeError as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error setting up payment method (error_id={error_id}): {e}")
+            return HttpResponse(f"Error setting up payment method. Error ID: {error_id}", status=400)
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"An error occurred setting up payment method (error_id={error_id}): {e}")
+            return HttpResponse(f"An error occurred. Error ID: {error_id}", status=500)
+
+
+class ProjectAutopayView(AdminRequiredMixin, View):
+    def patch(self, request, object_id):
+        """Update autopay settings for the organization."""
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        organization = project.organization
+
+        try:
+            # Parse JSON body
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return HttpResponse("Invalid JSON", status=400)
+
+        # Validate and update autopay_enabled
+        if "autopay_enabled" in data:
+            autopay_enabled = data["autopay_enabled"]
+            if not isinstance(autopay_enabled, bool):
+                return HttpResponse("autopay_enabled must be a boolean", status=400)
+            organization.autopay_enabled = autopay_enabled
+
+        # Validate and update autopay_threshold_centricredits
+        if "autopay_threshold_credits" in data:
+            threshold_credits = data["autopay_threshold_credits"]
+            if not isinstance(threshold_credits, (int, float)) or threshold_credits <= 0:
+                return HttpResponse("Credit threshold must be a positive number", status=400)
+            if threshold_credits > 10000:
+                return HttpResponse("Credit threshold cannot exceed 10,000 credits", status=400)
+            # Convert credits to centicredits
+            organization.autopay_threshold_centricredits = int(threshold_credits * 100)
+
+        # Validate and update autopay_amount_to_purchase_cents
+        if "autopay_amount_dollars" in data:
+            amount_dollars = data["autopay_amount_dollars"]
+            if not isinstance(amount_dollars, (int, float)) or amount_dollars <= 0:
+                return HttpResponse("Purchase amount must be a positive number", status=400)
+            if amount_dollars < 10:
+                return HttpResponse("Purchase amount must be at least $10", status=400)
+            if amount_dollars > 10000:
+                return HttpResponse("Purchase amount cannot exceed $10,000", status=400)
+            # Convert dollars to cents
+            organization.autopay_amount_to_purchase_cents = int(amount_dollars * 100)
+
+        try:
+            organization.save()
+            return HttpResponse("Autopay settings updated successfully", status=200)
+        except Exception as e:
+            logger.error(f"Error saving autopay settings: {e}")
+            return HttpResponse("Error saving autopay settings", status=500)

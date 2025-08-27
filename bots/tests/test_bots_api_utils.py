@@ -1,13 +1,14 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
-from bots.models import Bot, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
+from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
@@ -549,3 +550,168 @@ class TestPatchBot(TestCase):
         self.assertIsNone(patch_error)
         self.assertEqual(updated_bot.join_at, original_join_at)
         self.assertEqual(updated_bot.meeting_url, original_meeting_url)
+
+
+class TestConcurrentBotLimit(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=organization)
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_validate_bot_concurrency_limit_under_limit(self, mock_limit):
+        """Test that validation passes when under the concurrent bot limit."""
+        mock_limit.return_value = 5
+
+        # Create a few bots in in-meeting states (under the mocked limit)
+        for i in range(4):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/test-{i}",
+                name=f"Test Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+        mock_limit.assert_called_once()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_validate_bot_concurrency_limit_at_limit(self, mock_limit):
+        """Test that validation fails when at the concurrent bot limit."""
+        mock_limit.return_value = 3
+
+        # Create bots equal to the mocked limit
+        for i in range(3):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/test-{i}",
+                name=f"Test Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNotNone(error)
+        self.assertEqual(error["error"], "You have exceeded the maximum number of concurrent bots (3) for your account. Please reach out to customer support to increase the limit.")
+        mock_limit.assert_called_once()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_only_in_meeting_bots_count_toward_limit(self, mock_limit):
+        """Test that only bots in in-meeting states count toward the concurrent limit."""
+        mock_limit.return_value = 5
+
+        # Create 3 bots in in-meeting states
+        in_meeting_states = [
+            BotStates.JOINING,
+            BotStates.JOINED_NOT_RECORDING,
+            BotStates.JOINED_RECORDING,
+        ]
+
+        for i, state in enumerate(in_meeting_states):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/in-meeting-{i}",
+                name=f"In Meeting Bot {i}",
+                state=state,
+            )
+
+        # Create 3 bots in pre-meeting states (should not count)
+        pre_meeting_states = [BotStates.READY, BotStates.SCHEDULED, BotStates.STAGED]
+        for i, state in enumerate(pre_meeting_states):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/pre-meeting-{i}",
+                name=f"Pre Meeting Bot {i}",
+                state=state,
+            )
+
+        # Create 3 bots in post-meeting states (should not count)
+        post_meeting_states = [BotStates.FATAL_ERROR, BotStates.ENDED, BotStates.DATA_DELETED]
+        for i, state in enumerate(post_meeting_states):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/post-meeting-{i}",
+                name=f"Post Meeting Bot {i}",
+                state=state,
+            )
+
+        # Should pass validation because only 3 bots are in in-meeting states (under limit of 5)
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+
+        # Verify the counts
+        active_bots_count = Bot.objects.filter(project=self.project).filter(BotEventManager.get_in_meeting_states_q_filter()).count()
+        self.assertEqual(active_bots_count, 3)
+
+        total_bots_count = Bot.objects.filter(project=self.project).count()
+        self.assertEqual(total_bots_count, 9)
+        mock_limit.assert_called_once()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_scheduled_bots_dont_count_toward_limit(self, mock_limit):
+        """Test that scheduled bots specifically don't count toward the limit."""
+        mock_limit.return_value = 3
+
+        # Create 5 scheduled bots (more than the limit)
+        future_time = timezone.now() + timedelta(hours=1)
+        for i in range(5):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/scheduled-{i}",
+                name=f"Scheduled Bot {i}",
+                state=BotStates.SCHEDULED,
+                join_at=future_time,
+            )
+
+        # Should pass validation because scheduled bots don't count
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+
+        # Add 2 bots in in-meeting states - should still pass (under limit of 3)
+        for i in range(2):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/active-bot-{i}",
+                name=f"Active Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+        mock_limit.assert_called()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_different_projects_have_separate_limits(self, mock_limit):
+        """Test that different projects have separate concurrent bot limits."""
+        mock_limit.return_value = 2
+
+        # Create a second project
+        organization2 = Organization.objects.create(name="Test Organization 2")
+        project2 = Project.objects.create(name="Test Project 2", organization=organization2)
+
+        # Fill up the first project to the limit
+        for i in range(2):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/project1-{i}",
+                name=f"Project 1 Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        # First project should be at limit
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNotNone(error)
+
+        # Second project should still allow bots (no bots created yet)
+        error = validate_bot_concurrency_limit(project2)
+        self.assertIsNone(error)
+
+        # Create a bot in the second project - should succeed
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/project2-bot", "bot_name": "Project 2 Bot"},
+            source=BotCreationSource.API,
+            project=project2,
+        )
+
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        mock_limit.assert_called()
