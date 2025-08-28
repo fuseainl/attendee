@@ -221,6 +221,7 @@ class ZoomRTMSAdapter(BotAdapter):
         self.connected_at = None
         self.waiting_for_keyframe = False
         self.last_keyframe_received_at = time.time()
+        self.rtms_paused = False
 
     def send_black_frame(self):
         current_time = time.time()
@@ -347,7 +348,8 @@ class ZoomRTMSAdapter(BotAdapter):
         Called for each Opus audio frame (mixed, 16kHz mono).
         """
         self.last_audio_received_at = time.time()
-        self.last_audio_frame_speaker_name = userName
+        if not self.rtms_paused:
+            self.last_audio_frame_speaker_name = userName
         try:
             # Prefer mixed-audio callback when available.
             if self.use_mixed_audio and self.add_mixed_audio_chunk_callback:
@@ -611,13 +613,13 @@ class ZoomRTMSAdapter(BotAdapter):
             if op == 2:
                 logger.info("RTMS sessionUpdate: Paused")
                 self.last_audio_frame_speaker_name = "Paused"
-
+                self.rtms_paused = True
             # This means it was resumed
             if op == 3:
                 logger.info("RTMS sessionUpdate: Resumed")
                 self.last_audio_frame_speaker_name = None
                 self.waiting_for_keyframe = True
-                
+                self.rtms_paused = False
 
     def send_to_rtms_stdin(self, data):
         """
