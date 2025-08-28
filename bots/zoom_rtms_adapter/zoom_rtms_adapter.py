@@ -20,6 +20,39 @@ from bots.models import ParticipantEventTypes
 logger = logging.getLogger(__name__)
 
 
+def iter_annexb_nals(bs: bytes):
+    i, n = 0, len(bs)
+    def _next_start(i0):
+        i = i0
+        while i + 3 < n:
+            if bs[i] == 0 and bs[i+1] == 0 and bs[i+2] == 1:
+                return i
+            if i + 4 < n and bs[i] == 0 and bs[i+1] == 0 and bs[i+2] == 0 and bs[i+3] == 1:
+                return i
+            i += 1
+        return -1
+
+    start = _next_start(0)
+    while start != -1:
+        next_start = _next_start(start + 3)
+        nal = bs[start: next_start if next_start != -1 else n]
+        # nal header is after the start code
+        hdr_idx = start + (4 if bs[start+2] == 0 else 3)
+        if hdr_idx < len(bs):
+            nal_type = bs[hdr_idx] & 0x1F
+            yield nal, nal_type
+        start = next_start
+
+def is_keyframe(bs: bytes) -> bool:
+    """Return True if this buffer contains SPS(7)/PPS(8) and an IDR(5)."""
+    saw_sps = saw_pps = saw_idr = False
+    for _, t in iter_annexb_nals(bs):
+        if t == 7: saw_sps = True
+        elif t == 8: saw_pps = True
+        elif t == 5: saw_idr = True
+    # IDR is the key; SPS/PPS often precede it (parser can also inject), but prefer all three.
+    return saw_idr or (saw_sps and saw_pps)
+
 def make_black_h264_annexb(width: int, height: int, fps=(30, 1)) -> bytes:
     """
     One *AU-aligned* Annex-B black frame (AUD+SPS+PPS+IDR) that matches:
@@ -186,10 +219,12 @@ class ZoomRTMSAdapter(BotAdapter):
 
         self.black_frame_timer_id = None
         self.connected_at = None
+        self.waiting_for_keyframe = False
+        self.last_keyframe_received_at = time.time()
 
     def send_black_frame(self):
         current_time = time.time()
-        if current_time - self.connected_at >= 0.5:
+        if current_time - self.connected_at >= 1.0:
             if self.last_video_received_at is None or current_time - self.last_video_received_at >= 0.25:
                 # Create a black frame of the same dimensions
                 self._on_video_frame(self.black_frame, self.last_audio_frame_speaker_name)
@@ -330,6 +365,16 @@ class ZoomRTMSAdapter(BotAdapter):
         """
         Called for each H.264 frame with username.
         """
+        if frame != self.black_frame:
+            if is_keyframe(frame):
+                self.waiting_for_keyframe = False
+                self.last_keyframe_received_at = time.time()
+                logger.info("Received keyframe")
+            else:
+                if self.waiting_for_keyframe:
+                    logger.info("Received video frame but not a keyframe. Waiting for keyframe...")
+                    return
+
         self.last_video_received_at = time.time()
         try:
             # If you don't currently need video frames, still drain the pipe
@@ -559,6 +604,20 @@ class ZoomRTMSAdapter(BotAdapter):
 
         elif json_data.get("type") == "firstVideoFrameReceived":
             self.first_buffer_timestamp_ms = time.time() * 1000
+
+        elif json_data.get("type") == "sessionUpdate":
+            op = json_data.get("op")
+            # This means it was paused
+            if op == 2:
+                logger.info("RTMS sessionUpdate: Paused")
+                self.last_audio_frame_speaker_name = "Paused"
+
+            # This means it was resumed
+            if op == 3:
+                logger.info("RTMS sessionUpdate: Resumed")
+                self.last_audio_frame_speaker_name = None
+                self.waiting_for_keyframe = True
+                
 
     def send_to_rtms_stdin(self, data):
         """
