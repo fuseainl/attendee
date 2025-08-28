@@ -19,6 +19,40 @@ from bots.models import ParticipantEventTypes
 
 logger = logging.getLogger(__name__)
 
+def make_black_h264_annexb(width: int, height: int, fps=(30,1)) -> bytes:
+    """
+    One *AU-aligned* Annex-B black frame (AUD+SPS+PPS+IDR) that matches:
+        video/x-h264,stream-format=byte-stream,alignment=au
+    """
+    import gi
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+
+    pipe = Gst.parse_launch(
+        f"videotestsrc pattern=black is-live=false num-buffers=1 ! "
+        f"video/x-raw,format=I420,width={width},height={height},"
+        f"framerate={fps[0]}/{fps[1]} ! "
+        # x264 in Annex-B
+        "x264enc tune=zerolatency speed-preset=ultrafast key-int-max=1 bframes=0 "
+        "byte-stream=true aud=true ! "
+        # parse + FORCE downstream caps to Annex-B + AU alignment
+        "h264parse disable-passthrough=true ! "
+        "video/x-h264,stream-format=byte-stream,alignment=au ! "
+        "appsink name=bsink emit-signals=true sync=false max-buffers=1 drop=false"
+    )
+
+    sink = pipe.get_by_name("bsink")
+    pipe.set_state(Gst.State.PLAYING)
+    sample = sink.emit("pull-sample")          # our single AU
+    buf = sample.get_buffer()
+    data = buf.extract_dup(0, buf.get_size())
+    pipe.set_state(Gst.State.NULL)
+
+    # sanity: Annex-B should start with 00 00 00 01
+    assert data.startswith(b"\x00\x00\x00\x01") or data.startswith(b"\x00\x00\x01")
+    return data
+
 class ZoomRTMSAdapter(BotAdapter):
     def __init__(
         self,
@@ -143,7 +177,8 @@ class ZoomRTMSAdapter(BotAdapter):
         self.pipe_reading_lock = threading.Lock()
 
         self.last_audio_frame_speaker_name = None
-
+        self.black_frame = make_black_h264_annexb(1080, 720)
+        
     def _read_exact(self, f, n: int) -> bytes | None:
         """Read exactly n bytes from file-like f (blocking). Return None on EOF."""
         buf = bytearray()
@@ -285,7 +320,10 @@ class ZoomRTMSAdapter(BotAdapter):
             if self.add_video_frame_callback:
                 # Many pipelines just accept the encoded bytes; if yours needs metadata,
                 # pass it here (e.g., codec, width/height).
-                self.add_video_frame_callback(frame, time.time_ns(), self.last_audio_frame_speaker_name or "")
+                if not self.last_audio_frame_speaker_name:
+                    self.add_video_frame_callback(self.black_frame, time.time_ns(), "")
+                else:
+                    self.add_video_frame_callback(frame, time.time_ns(), self.last_audio_frame_speaker_name)
         except Exception:
             logger.exception("Video frame handling failed")
 
