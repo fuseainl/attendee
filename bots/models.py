@@ -1198,9 +1198,9 @@ class BotEventManager:
         RecordingManager.set_recording_in_progress(pending_recording)
 
     @classmethod
-    def after_new_state_is_connected(cls, bot: Bot, new_state: BotStates):
+    def after_new_state_is_connected(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
         # It's the same thing as if we moved to joined recording
-        cls.after_new_state_is_joined_recording(bot, new_state)
+        cls.after_new_state_is_joined_recording(bot, event_type, new_state)
 
     @classmethod
     def after_new_state_is_joined_recording_paused(cls, bot: Bot, new_state: BotStates):
@@ -1325,7 +1325,7 @@ class BotEventManager:
                         cls.after_new_state_is_joined_recording(bot=bot, event_type=event_type, new_state=new_state)
 
                     if new_state == BotStates.CONNECTED:
-                        cls.after_new_state_is_connected(bot=bot, new_state=new_state)
+                        cls.after_new_state_is_connected(bot=bot, event_type=event_type, new_state=new_state)
 
                     if new_state == BotStates.JOINED_RECORDING_PAUSED:
                         cls.after_new_state_is_joined_recording_paused(bot=bot, new_state=new_state)
