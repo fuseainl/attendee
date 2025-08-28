@@ -633,6 +633,7 @@ class AppSessionEndView(APIView):
         except AppSession.DoesNotExist:
             return Response({"error": "App session not found"}, status=status.HTTP_404_NOT_FOUND)
 
+
 class AppSessionMediaView(APIView):
     authentication_classes = [ApiKeyAuthentication]
 
@@ -680,6 +681,7 @@ class AppSessionMediaView(APIView):
 
         except AppSession.DoesNotExist:
             return Response({"error": "App session not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class RecordingView(APIView):
     authentication_classes = [ApiKeyAuthentication]

@@ -788,7 +788,6 @@ class BotEventTypes(models.IntegerChoices):
     APP_SESSION_DISCONNECT_REQUESTED = 102, "App Session Disconnect Requested"
     APP_SESSION_DISCONNECTED = 103, "App Session Disconnected"
 
-
     @classmethod
     def type_to_api_code(cls, value):
         """Returns the API code for a given type value"""

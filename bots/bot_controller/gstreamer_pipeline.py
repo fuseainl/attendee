@@ -82,6 +82,7 @@ class GstreamerPipeline:
             except Exception as e:
                 logger.info(f"Failed to set overlay text: {e}")
             return False  # don't repeat
+
         GLib.idle_add(_apply)
 
     def on_new_sample_from_appsink(self, sink):
@@ -182,7 +183,7 @@ class GstreamerPipeline:
             if self.video_format == self.VIDEO_FORMAT_I420:
                 video_caps = Gst.Caps.from_string(f"video/x-raw,format=I420,width={self.video_frame_size[0]},height={self.video_frame_size[1]},framerate=30/1")
             elif self.video_format == self.VIDEO_FORMAT_H264:
-                video_caps = Gst.Caps.from_string(f"video/x-h264,stream-format=byte-stream,alignment=au")
+                video_caps = Gst.Caps.from_string("video/x-h264,stream-format=byte-stream,alignment=au")
             else:
                 raise ValueError(f"Invalid video format: {self.video_format}")
             self.appsrc.set_property("caps", video_caps)

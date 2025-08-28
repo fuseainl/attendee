@@ -1,32 +1,35 @@
 import json
-import subprocess
-import time
 import os
 import struct
+import subprocess
 import threading
-import errno
-import stat
+import time
+
 import gi
 
 from bots.bot_adapter import BotAdapter
 
 gi.require_version("GLib", "2.0")
-from gi.repository import GLib
 import logging
+
+from gi.repository import GLib
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.models import ParticipantEventTypes
 
 logger = logging.getLogger(__name__)
 
-def make_black_h264_annexb(width: int, height: int, fps=(30,1)) -> bytes:
+
+def make_black_h264_annexb(width: int, height: int, fps=(30, 1)) -> bytes:
     """
     One *AU-aligned* Annex-B black frame (AUD+SPS+PPS+IDR) that matches:
         video/x-h264,stream-format=byte-stream,alignment=au
     """
     import gi
+
     gi.require_version("Gst", "1.0")
     from gi.repository import Gst
+
     Gst.init(None)
 
     pipe = Gst.parse_launch(
@@ -44,7 +47,7 @@ def make_black_h264_annexb(width: int, height: int, fps=(30,1)) -> bytes:
 
     sink = pipe.get_by_name("bsink")
     pipe.set_state(Gst.State.PLAYING)
-    sample = sink.emit("pull-sample")          # our single AU
+    sample = sink.emit("pull-sample")  # our single AU
     buf = sample.get_buffer()
     data = buf.extract_dup(0, buf.get_size())
     pipe.set_state(Gst.State.NULL)
@@ -52,6 +55,7 @@ def make_black_h264_annexb(width: int, height: int, fps=(30,1)) -> bytes:
     # sanity: Annex-B should start with 00 00 00 01
     assert data.startswith(b"\x00\x00\x00\x01") or data.startswith(b"\x00\x00\x01")
     return data
+
 
 class ZoomRTMSAdapter(BotAdapter):
     def __init__(
@@ -129,6 +133,7 @@ class ZoomRTMSAdapter(BotAdapter):
 
         self.only_one_participant_in_meeting_at = None
         self.last_audio_received_at = None
+        self.last_video_received_at = None
         self.silence_detection_activated = False
         self.cleaned_up = False
         self.requested_leave = False
@@ -177,8 +182,21 @@ class ZoomRTMSAdapter(BotAdapter):
         self.pipe_reading_lock = threading.Lock()
 
         self.last_audio_frame_speaker_name = None
-        self.black_frame = make_black_h264_annexb(1080, 720)
-        
+        self.black_frame = make_black_h264_annexb(self.video_frame_size[0], self.video_frame_size[1])
+
+        self.black_frame_timer_id = None
+        self.connected_at = None
+
+    def send_black_frame(self):
+        current_time = time.time()
+        if current_time - self.connected_at >= 0.5:
+            if self.last_video_received_at is None or current_time - self.last_video_received_at >= 0.25:
+                # Create a black frame of the same dimensions
+                self._on_video_frame(self.black_frame, self.last_audio_frame_speaker_name)
+                logger.info("Sent black frame")
+
+        return not self.cleaned_up
+
     def _read_exact(self, f, n: int) -> bytes | None:
         """Read exactly n bytes from file-like f (blocking). Return None on EOF."""
         buf = bytearray()
@@ -200,37 +218,37 @@ class ZoomRTMSAdapter(BotAdapter):
                     with self.pipe_reading_lock:
                         if self.stop_pipe_reading:
                             break
-                    
+
                     # Audio format: username_length + username + data_length + data
                     username_length_header = self._read_exact(f, 4)
                     if username_length_header is None:
                         break
                     (username_length,) = struct.unpack("<i", username_length_header)
-                    
+
                     if username_length < 0:
                         continue
-                        
+
                     username_bytes = b""
                     if username_length > 0:
                         username_bytes = self._read_exact(f, username_length)
                         if username_bytes is None:
                             break
-                    
-                    username = username_bytes.decode('utf-8', errors='replace')
-                    
+
+                    username = username_bytes.decode("utf-8", errors="replace")
+
                     # Now read the audio data length and data
                     data_length_header = self._read_exact(f, 4)
                     if data_length_header is None:
                         break
                     (data_length,) = struct.unpack("<i", data_length_header)
-                    
+
                     if data_length <= 0:
                         continue
-                        
+
                     data = self._read_exact(f, data_length)
                     if data is None:
                         break
-                    
+
                     try:
                         on_frame(data, username)
                     except Exception:
@@ -250,37 +268,37 @@ class ZoomRTMSAdapter(BotAdapter):
                     with self.pipe_reading_lock:
                         if self.stop_pipe_reading:
                             break
-                    
+
                     # Video format: username_length + username + data_length + data
                     username_length_header = self._read_exact(f, 4)
                     if username_length_header is None:
                         break
                     (username_length,) = struct.unpack("<i", username_length_header)
-                    
+
                     if username_length < 0:
                         continue
-                        
+
                     username_bytes = b""
                     if username_length > 0:
                         username_bytes = self._read_exact(f, username_length)
                         if username_bytes is None:
                             break
-                    
-                    username = username_bytes.decode('utf-8', errors='replace')
-                    
+
+                    username = username_bytes.decode("utf-8", errors="replace")
+
                     # Now read the video data length and data
                     data_length_header = self._read_exact(f, 4)
                     if data_length_header is None:
                         break
                     (data_length,) = struct.unpack("<i", data_length_header)
-                    
+
                     if data_length <= 0:
                         continue
-                        
+
                     data = self._read_exact(f, data_length)
                     if data is None:
                         break
-                    
+
                     try:
                         on_frame(data, username)
                     except Exception:
@@ -312,6 +330,7 @@ class ZoomRTMSAdapter(BotAdapter):
         """
         Called for each H.264 frame with username.
         """
+        self.last_video_received_at = time.time()
         try:
             # If you don't currently need video frames, still drain the pipe
             # but skip invoking the callback to save downstream work.
@@ -320,10 +339,7 @@ class ZoomRTMSAdapter(BotAdapter):
             if self.add_video_frame_callback:
                 # Many pipelines just accept the encoded bytes; if yours needs metadata,
                 # pass it here (e.g., codec, width/height).
-                if not self.last_audio_frame_speaker_name:
-                    self.add_video_frame_callback(self.black_frame, time.time_ns(), "")
-                else:
-                    self.add_video_frame_callback(frame, time.time_ns(), self.last_audio_frame_speaker_name)
+                self.add_video_frame_callback(frame, time.time_ns(), self.last_audio_frame_speaker_name or "")
         except Exception:
             logger.exception("Video frame handling failed")
 
@@ -368,11 +384,15 @@ class ZoomRTMSAdapter(BotAdapter):
     def cleanup(self):
         logger.info("cleanup called")
         self.cleaned_up = True
-                
+
         # Remove stdout IO watch
         if self.stdout_watch_id:
             GLib.source_remove(self.stdout_watch_id)
             self.stdout_watch_id = None
+
+        if self.black_frame_timer_id is not None:
+            GLib.source_remove(self.black_frame_timer_id)
+            self.black_frame_timer_id = None
 
         self._stop_fd_readers()
 
@@ -417,11 +437,11 @@ class ZoomRTMSAdapter(BotAdapter):
         try:
             # Start the subprocess with stdin and stdout pipes opened
             process = subprocess.Popen(
-                cmd, 
-                env=cmd_env, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE, 
-                stdin=subprocess.PIPE, 
+                cmd,
+                env=cmd_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE,
                 text=True,
                 bufsize=1,  # Line buffered
                 universal_newlines=True,
@@ -439,16 +459,19 @@ class ZoomRTMSAdapter(BotAdapter):
                 os.close(self.video_wfd)
                 self.video_wfd = None
 
-
             # Set up stdout monitoring
             self.setup_stdout_monitoring()
 
             # Start pipe readers right away; they will block until Node opens pipes
             self._start_fd_readers()
 
+            # Start black frame timer
+            self.black_frame_timer_id = GLib.timeout_add(250, self.send_black_frame)
+            self.connected_at = time.time()
+
             logger.info("RTMS client started successfully")
             self.send_message_callback({"message": self.Messages.APP_SESSION_CONNECTED})
-                
+
         except Exception as e:
             logger.error(f"Failed to start RTMS client: {e}")
 
@@ -462,13 +485,9 @@ class ZoomRTMSAdapter(BotAdapter):
 
         # Get the file descriptor for stdout
         stdout_fd = self.rtms_process.stdout.fileno()
-        
+
         # Set up GLib IO watch
-        self.stdout_watch_id = GLib.io_add_watch(
-            stdout_fd,
-            GLib.IO_IN | GLib.IO_HUP,
-            self._on_stdout_data_available
-        )
+        self.stdout_watch_id = GLib.io_add_watch(stdout_fd, GLib.IO_IN | GLib.IO_HUP, self._on_stdout_data_available)
         logger.info("Set up stdout monitoring with GLib IO watch")
 
     def _on_stdout_data_available(self, fd, condition):
@@ -477,14 +496,14 @@ class ZoomRTMSAdapter(BotAdapter):
             # Process has closed stdout
             logger.info("RTMS process stdout closed")
             return False  # Remove the watch
-        
+
         if condition & GLib.IO_IN:
             try:
                 # Read a line from stdout
                 line = self.rtms_process.stdout.readline()
                 if line:
                     # Remove trailing newline and call the callback
-                    data = line.rstrip('\n')
+                    data = line.rstrip("\n")
                     logger.debug(f"Read from RTMS stdout: {data}")
                     # Handle stdout data internally
                     self.on_stdout_data_received(data)
@@ -495,14 +514,14 @@ class ZoomRTMSAdapter(BotAdapter):
             except Exception as e:
                 logger.error(f"Error reading stdout: {e}")
                 return False  # Remove the watch
-        
+
         return True  # Continue watching
 
     def on_stdout_data_received(self, data):
         """
         Handle stdout data received from the RTMS process.
         Override this method or modify it to handle stdout data as needed.
-        
+
         Args:
             data (str): The stdout line received from the RTMS process
         """
@@ -512,7 +531,7 @@ class ZoomRTMSAdapter(BotAdapter):
 
     def get_participant(self, participant_id):
         return self._participant_cache.get(participant_id)
-    
+
     def handle_rtms_json_message(self, json_data):
         logger.info(f"handle_rtms_json_message called with json_data: {json_data}")
         json_data = json.loads(json_data)
@@ -521,7 +540,7 @@ class ZoomRTMSAdapter(BotAdapter):
             # {'op': 0, 'user': {'id': 16778240, 'name': 'Noah Duncan'}, 'type': 'userUpdate'}
             user_id = json_data.get("user").get("id")
             user_name = json_data.get("user").get("name")
-            
+
             self._participant_cache[user_id] = {
                 "participant_uuid": user_id,
                 "participant_user_uuid": None,
@@ -529,31 +548,17 @@ class ZoomRTMSAdapter(BotAdapter):
                 "participant_is_the_bot": False,
             }
 
-            self.add_participant_event_callback(
-                {
-                    "participant_uuid": user_id, 
-                    "event_type": ParticipantEventTypes.JOIN if json_data.get("op") == 0 else ParticipantEventTypes.LEAVE, 
-                    "event_data": {}, 
-                    "timestamp_ms": int(time.time() * 1000)
-                }
-            )
+            self.add_participant_event_callback({"participant_uuid": user_id, "event_type": ParticipantEventTypes.JOIN if json_data.get("op") == 0 else ParticipantEventTypes.LEAVE, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
         elif json_data.get("type") == "transcriptUpdate":
             logger.info(f"RTMS transcriptUpdate: {json_data}")
             # {'user': {'userId': 16778240, 'name': 'Noah Duncan'}, 'text': 'Hello, how are you?', 'type': 'transcriptUpdate'}
-            
-            itemConverted = {
-                "deviceId": json_data.get("user").get("userId"),
-                "captionId": json_data.get("id"),
-                "text": json_data.get("text"),
-                "isFinal": True
-            };
+
+            itemConverted = {"deviceId": json_data.get("user").get("userId"), "captionId": json_data.get("id"), "text": json_data.get("text"), "isFinal": True}
 
             self.upsert_caption_callback(itemConverted)
-        
+
         elif json_data.get("type") == "firstVideoFrameReceived":
             self.first_buffer_timestamp_ms = time.time() * 1000
-    
-        
 
     def send_to_rtms_stdin(self, data):
         """
@@ -594,7 +599,7 @@ class ZoomRTMSAdapter(BotAdapter):
         if self.left_meeting:
             return
         logger.info("disconnect called")
-        
+
         self.send_to_rtms_stdin("leave")
         logger.info("sent leave command to RTMS process")
         self.rtms_process.wait(timeout=20)

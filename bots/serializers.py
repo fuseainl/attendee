@@ -550,7 +550,6 @@ class CallbackSettingsJSONField(serializers.JSONField):
     pass
 
 
-
 @extend_schema_field(
     {
         "type": "object",
@@ -570,6 +569,7 @@ class CallbackSettingsJSONField(serializers.JSONField):
 )
 class ExternalMediaStorageSettingsJSONField(serializers.JSONField):
     pass
+
 
 class CreateSessionMixin(serializers.Serializer):
     deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
@@ -1301,7 +1301,6 @@ class CreateSessionMixin(serializers.Serializer):
             raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
 
         return data
-
 
 
 @extend_schema_serializer(

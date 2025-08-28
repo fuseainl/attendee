@@ -306,7 +306,7 @@ class BotController:
         if meeting_type == MeetingTypes.ZOOM:
             if self.bot_in_db.zoom_rtms_stream_id:
                 return GstreamerPipeline.VIDEO_FORMAT_H264
-            
+
         return GstreamerPipeline.VIDEO_FORMAT_I420
 
     def get_audio_format(self):
