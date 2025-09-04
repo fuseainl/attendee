@@ -4,6 +4,7 @@ import os
 from dataclasses import asdict
 
 import jsonschema
+from dateutil.relativedelta import relativedelta
 from django.utils import timezone
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -83,6 +84,9 @@ class BotValidationMixin:
 
         if value < timezone.now():
             raise serializers.ValidationError("join_at cannot be in the past")
+
+        if value > timezone.now() + relativedelta(years=3):
+            raise serializers.ValidationError("join_at cannot be more than 3 years in the future")
 
         return value
 
@@ -359,6 +363,21 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "enum": ["web", "native"],
                 "description": "The Zoom SDK to use for the bot. Use 'web' when you need closed caption based transcription.",
                 "default": "native",
+            },
+            "meeting_settings": {
+                "type": "object",
+                "properties": {
+                    "allow_participants_to_unmute_self": {"type": "boolean"},
+                    "allow_participants_to_share_whiteboard": {"type": "boolean"},
+                    "allow_participants_to_request_cloud_recording": {"type": "boolean"},
+                    "allow_participants_to_request_local_recording": {"type": "boolean"},
+                    "allow_participants_to_share_screen": {"type": "boolean"},
+                    "allow_participants_to_chat": {"type": "boolean"},
+                    "enable_focus_mode": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+                "description": "Settings for various aspects of the Zoom Meeting. To use these settings, the bot must have host privileges.",
             },
         },
         "required": [],
@@ -1179,6 +1198,20 @@ class CreateSessionMixin(serializers.Serializer):
         "type": "object",
         "properties": {
             "sdk": {"type": "string", "enum": ["web", "native"]},
+            "meeting_settings": {
+                "type": "object",
+                "properties": {
+                    "allow_participants_to_unmute_self": {"type": "boolean"},
+                    "allow_participants_to_share_whiteboard": {"type": "boolean"},
+                    "allow_participants_to_request_cloud_recording": {"type": "boolean"},
+                    "allow_participants_to_request_local_recording": {"type": "boolean"},
+                    "allow_participants_to_share_screen": {"type": "boolean"},
+                    "allow_participants_to_chat": {"type": "boolean"},
+                    "enable_focus_mode": {"type": "boolean"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1393,6 +1426,7 @@ class SessionMixin(serializers.Serializer):
     events = serializers.SerializerMethodField()
     transcription_state = serializers.SerializerMethodField()
     recording_state = serializers.SerializerMethodField()
+    deduplication_key = serializers.CharField()
 
     @extend_schema_field(
         {
@@ -1473,6 +1507,7 @@ class BotSerializer(SessionMixin, serializers.ModelSerializer):
             "transcription_state",
             "recording_state",
             "join_at",
+            "deduplication_key",
         ]
         read_only_fields = fields
 
@@ -1491,6 +1526,7 @@ class AppSessionSerializer(SessionMixin, serializers.ModelSerializer):
             "transcription_state",
             "recording_state",
             "zoom_rtms_stream_id",
+            "deduplication_key",
         ]
         read_only_fields = fields
 

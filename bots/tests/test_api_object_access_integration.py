@@ -145,7 +145,7 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         scheduled_bot_a = Bot.objects.create(project=self.project_a, name="Scheduled Bot A", meeting_url="https://meet.google.com/scheduled-a", state=BotStates.SCHEDULED, join_at=datetime.now(timezone.utc))
         scheduled_bot_b = Bot.objects.create(project=self.project_b, name="Scheduled Bot B", meeting_url="https://meet.google.com/scheduled-b", state=BotStates.SCHEDULED, join_at=datetime.now(timezone.utc))
 
-        patch_data = {"join_at": "2054-12-31T23:59:59Z"}
+        patch_data = {"join_at": "2026-12-31T23:59:59Z"}
 
         # API key A can patch bot A
         response = self._make_authenticated_request("PATCH", f"/api/v1/bots/{scheduled_bot_a.object_id}", self.api_key_a_plain, json.dumps(patch_data))
@@ -391,3 +391,44 @@ class ApiObjectAccessIntegrationTest(TransactionTestCase):
         response = self._make_authenticated_request("GET", "/api/v1/bots/bot_nonexistent12345", self.api_key_a_plain)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.json()["error"], "Bot not found")
+
+    # Tests for Bot List View (GET /api/bots)
+    def test_bot_list_access_control(self):
+        """Test that bot list only returns bots from the authenticated project"""
+        # API key A can only see bots from project A
+        response = self._make_authenticated_request("GET", "/api/v1/bots", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.json().get("results", response.json())
+        if isinstance(results, list):
+            # Should only see bot_a, not bot_b
+            bot_ids = [bot["id"] for bot in results]
+            self.assertIn(self.bot_a.object_id, bot_ids)
+            self.assertNotIn(self.bot_b.object_id, bot_ids)
+
+        # API key B can only see bots from project B
+        response = self._make_authenticated_request("GET", "/api/v1/bots", self.api_key_b_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.json().get("results", response.json())
+        if isinstance(results, list):
+            # Should only see bot_b, not bot_a
+            bot_ids = [bot["id"] for bot in results]
+            self.assertIn(self.bot_b.object_id, bot_ids)
+            self.assertNotIn(self.bot_a.object_id, bot_ids)
+
+    def test_bot_list_meeting_url_filter(self):
+        """Test filtering bots by meeting_url"""
+        # Create additional bots with different meeting URLs
+        Bot.objects.create(project=self.project_a, name="Bot A2", meeting_url="https://meet.google.com/different-url", state=BotStates.JOINED_RECORDING)
+
+        # Test filtering by exact meeting URL
+        response = self._make_authenticated_request("GET", f"/api/v1/bots?meeting_url={self.bot_a.meeting_url}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.json().get("results", response.json())
+        if isinstance(results, list):
+            # Should only return the bot with matching meeting URL
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["id"], self.bot_a.object_id)
+            self.assertEqual(results[0]["meeting_url"], self.bot_a.meeting_url)

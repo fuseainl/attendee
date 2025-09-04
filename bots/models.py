@@ -236,9 +236,9 @@ class BotStates(models.IntegerChoices):
     DISCONNECTING = 102, "Disconnecting"
 
     @classmethod
-    def state_to_api_code(cls, value):
-        """Returns the API code for a given state value"""
-        mapping = {
+    def _get_state_to_api_code_mapping(cls):
+        """Get the trigger type to API code mapping"""
+        return {
             cls.READY: "ready",
             cls.JOINING: "joining",
             cls.JOINED_NOT_RECORDING: "joined_not_recording",
@@ -258,7 +258,17 @@ class BotStates(models.IntegerChoices):
             cls.CONNECTED: "connected",
             cls.DISCONNECTING: "disconnecting",
         }
-        return mapping.get(value)
+
+    @classmethod
+    def state_to_api_code(cls, value):
+        """Returns the API code for a given state value"""
+        return cls._get_state_to_api_code_mapping().get(value)
+
+    @classmethod
+    def api_code_to_state(cls, api_code):
+        """Returns the state value for a given API code"""
+        reverse_mapping = {v: k for k, v in cls._get_state_to_api_code_mapping().items()}
+        return reverse_mapping.get(api_code)
 
     @classmethod
     def post_meeting_states(cls):
@@ -514,6 +524,9 @@ class Bot(models.Model):
 
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
+
+    def zoom_meeting_settings(self):
+        return self.settings.get("zoom_settings", {}).get("meeting_settings", {})
 
     def rtmp_destination_url(self):
         rtmp_settings = self.settings.get("rtmp_settings")
@@ -1134,6 +1147,10 @@ class BotEventManager:
 
     @classmethod
     def is_state_that_can_play_media(cls, state: int):
+        return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PAUSED
+
+    @classmethod
+    def is_state_that_can_admit_from_waiting_room(cls, state: int):
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod

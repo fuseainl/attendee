@@ -21,7 +21,7 @@ class ProjectThrottleTests(TestCase):
         self.chat_msg_payload = {"text": "hello world", "text_to_speech_settings": {}}
 
         # Common view callables
-        self.create_bot_view = bots_views.BotCreateView.as_view()
+        self.create_bot_view = bots_views.BotListCreateView.as_view()
         self.send_chat_view = bots_views.SendChatMessageView.as_view()
 
     def _authed_project(self, project_id: str):
@@ -59,7 +59,7 @@ class ProjectThrottleTests(TestCase):
         With rate 2/min, the 3rd POST for the same project should be 429.
         """
         with patch.object(bots_views.ApiKeyAuthentication, "authenticate") as mock_auth, patch.object(bots_views, "create_bot") as mock_create_bot, patch.object(bots_views, "launch_bot") as mock_launch_bot, patch.object(bots_views, "BotSerializer") as MockSerializer, patch.object(ProjectPostThrottle, "get_rate", return_value="2/min"):
-            # Stub out internals of BotCreateView
+            # Stub out internals of BotListCreateView
             dummy_bot = SimpleNamespace(object_id="bot_stub", state=bots_views.BotStates.JOINING)
             mock_create_bot.return_value = (dummy_bot, None)
             mock_launch_bot.return_value = None
@@ -109,7 +109,7 @@ class ProjectThrottleTests(TestCase):
     def test_throttle_scope_is_shared_across_views(self):
         """
         Using the same scope ('project_post') across different POST endpoints should share the budget.
-        After 2 POSTs to BotCreateView, a POST to SendChatMessageView should be throttled (429).
+        After 2 POSTs to BotListCreateView, a POST to SendChatMessageView should be throttled (429).
         """
         with patch.object(bots_views.ApiKeyAuthentication, "authenticate") as mock_auth, patch.object(bots_views, "create_bot") as mock_create_bot, patch.object(bots_views, "launch_bot") as mock_launch_bot, patch.object(bots_views, "BotSerializer") as MockSerializer, patch.object(bots_views, "Bot") as MockBotModel, patch.object(bots_views, "BotChatMessageRequestSerializer") as MockChatSer, patch.object(bots_views, "create_bot_chat_message_request") as mock_create_msg_req, patch.object(bots_views, "send_sync_command") as mock_sync_cmd, patch.object(bots_views.BotEventManager, "is_state_that_can_play_media", return_value=True), patch.object(ProjectPostThrottle, "get_rate", return_value="2/min"):
             # ---- Set up CreateBot stubs
@@ -145,7 +145,7 @@ class ProjectThrottleTests(TestCase):
             mock_create_msg_req.return_value = None
             mock_sync_cmd.return_value = None
 
-            # Consume the two allowed POSTs on BotCreateView
+            # Consume the two allowed POSTs on BotListCreateView
             r1 = self._post_create_bot(mock_auth, "projScope")
             r2 = self._post_create_bot(mock_auth, "projScope")
             self.assertEqual(r1.status_code, 201)

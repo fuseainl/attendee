@@ -5,6 +5,83 @@ info:
   description: Meetings bots made easy
 paths:
   /api/v1/bots:
+    get:
+      operationId: List Bots
+      description: Returns a list of bots for the authenticated project. Results are
+        paginated using cursor pagination.
+      summary: List bots in a project
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      - in: query
+        name: deduplication_key
+        schema:
+          type: string
+        description: Filter bots by deduplication key
+        examples:
+          DeduplicationKeyExample:
+            value: my-unique-bot-key
+            summary: Deduplication Key Example
+      - in: query
+        name: meeting_url
+        schema:
+          type: string
+        description: Filter bots by meeting URL
+        examples:
+          MeetingURLExample:
+            value: https://zoom.us/j/123456789
+            summary: Meeting URL Example
+      - in: query
+        name: states
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - ready
+            - joining
+            - joined_not_recording
+            - joined_recording
+            - leaving
+            - post_processing
+            - fatal_error
+            - waiting_room
+            - ended
+            - data_deleted
+            - scheduled
+            - staged
+            - joined_recording_paused
+            - joining_breakout_room
+            - leaving_breakout_room
+        description: Filter bots by state. Can specify multiple states.
+      tags:
+      - Bots
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedBotList'
+          description: List of bots
     post:
       operationId: Create Bot
       description: After being created, the bot will attempt to join the specified
@@ -214,6 +291,22 @@ paths:
           description: Scheduled bot deleted successfully
         '404':
           description: Bot not found
+  /api/v1/bots/{object_id}/admit_from_waiting_room:
+    post:
+      operationId: api_v1_bots_admit_from_waiting_room_create
+      parameters:
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - api
+      security:
+      - {}
+      responses:
+        '200':
+          description: No response body
   /api/v1/bots/{object_id}/chat_messages:
     get:
       operationId: Get Chat Messages
@@ -1365,7 +1458,10 @@ components:
         join_at:
           type: string
           format: date-time
+        deduplication_key:
+          type: string
       required:
+      - deduplication_key
       - events
       - id
       - join_at
@@ -2028,6 +2124,27 @@ components:
               description: The Zoom SDK to use for the bot. Use 'web' when you need
                 closed caption based transcription.
               default: native
+            meeting_settings:
+              type: object
+              properties:
+                allow_participants_to_unmute_self:
+                  type: boolean
+                allow_participants_to_share_whiteboard:
+                  type: boolean
+                allow_participants_to_request_cloud_recording:
+                  type: boolean
+                allow_participants_to_request_local_recording:
+                  type: boolean
+                allow_participants_to_share_screen:
+                  type: boolean
+                allow_participants_to_chat:
+                  type: boolean
+                enable_focus_mode:
+                  type: boolean
+              required: []
+              additionalProperties: false
+              description: Settings for various aspects of the Zoom Meeting. To use
+                these settings, the bot must have host privileges.
           required: []
           additionalProperties: false
           default:
@@ -2123,6 +2240,25 @@ components:
       - client_secret
       - platform
       - refresh_token
+    PaginatedBotList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Bot'
     PaginatedCalendarEventList:
       type: object
       required:

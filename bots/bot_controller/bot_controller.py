@@ -209,6 +209,7 @@ class BotController:
             automatic_leave_configuration=self.automatic_leave_configuration,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_tokens=zoom_tokens,
+            zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
         )
 
     def get_zoom_rtms_adapter(self):
@@ -944,8 +945,18 @@ class BotController:
                 logger.info(f"Resuming recording for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
                 self.resume_recording()
+            elif command == "admit_from_waiting_room":
+                logger.info(f"Admitting from waiting room for bot {self.bot_in_db.object_id}")
+                self.bot_in_db.refresh_from_db()
+                self.admit_from_waiting_room()
             else:
                 logger.info(f"Unknown command: {command}")
+
+    def admit_from_waiting_room(self):
+        if not BotEventManager.is_state_that_can_admit_from_waiting_room(self.bot_in_db.state):
+            logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot admit from waiting room")
+            return
+        self.adapter.admit_from_waiting_room()
 
     def pause_recording(self):
         if not BotEventManager.is_state_that_can_pause_recording(self.bot_in_db.state):
