@@ -3,7 +3,6 @@ from django.urls import path
 from . import bots_api_views
 
 urlpatterns = [
-    path("bots", bots_api_views.BotCreateView.as_view(), name="bot-create"),
     path("app_sessions", bots_api_views.AppSessionCreateView.as_view(), name="app-session-create"),
     path("bots", bots_api_views.BotListCreateView.as_view(), name="bot-list-create"),
     path(
