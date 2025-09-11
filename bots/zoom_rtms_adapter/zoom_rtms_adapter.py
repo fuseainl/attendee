@@ -623,6 +623,10 @@ class ZoomRTMSAdapter(BotAdapter):
 
             self.add_participant_event_callback({"participant_uuid": user_id, "event_type": ParticipantEventTypes.JOIN if json_data.get("op") == 0 else ParticipantEventTypes.LEAVE, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
         elif json_data.get("type") == "transcriptUpdate":
+            # Don't need captions if we're transcribing from audio
+            if self.add_audio_chunk_callback:
+                return
+
             logger.info(f"RTMS transcriptUpdate: {json_data}")
             # {'user': {'userId': 16778240, 'name': 'Noah Duncan'}, 'text': 'Hello, how are you?', 'type': 'transcriptUpdate'}
 
