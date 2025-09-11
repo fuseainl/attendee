@@ -4,6 +4,7 @@ import struct
 import subprocess
 import threading
 import time
+from datetime import datetime
 
 import gi
 
@@ -22,12 +23,13 @@ logger = logging.getLogger(__name__)
 
 def iter_annexb_nals(bs: bytes):
     i, n = 0, len(bs)
+
     def _next_start(i0):
         i = i0
         while i + 3 < n:
-            if bs[i] == 0 and bs[i+1] == 0 and bs[i+2] == 1:
+            if bs[i] == 0 and bs[i + 1] == 0 and bs[i + 2] == 1:
                 return i
-            if i + 4 < n and bs[i] == 0 and bs[i+1] == 0 and bs[i+2] == 0 and bs[i+3] == 1:
+            if i + 4 < n and bs[i] == 0 and bs[i + 1] == 0 and bs[i + 2] == 0 and bs[i + 3] == 1:
                 return i
             i += 1
         return -1
@@ -35,23 +37,28 @@ def iter_annexb_nals(bs: bytes):
     start = _next_start(0)
     while start != -1:
         next_start = _next_start(start + 3)
-        nal = bs[start: next_start if next_start != -1 else n]
+        nal = bs[start : next_start if next_start != -1 else n]
         # nal header is after the start code
-        hdr_idx = start + (4 if bs[start+2] == 0 else 3)
+        hdr_idx = start + (4 if bs[start + 2] == 0 else 3)
         if hdr_idx < len(bs):
             nal_type = bs[hdr_idx] & 0x1F
             yield nal, nal_type
         start = next_start
 
+
 def is_keyframe(bs: bytes) -> bool:
     """Return True if this buffer contains SPS(7)/PPS(8) and an IDR(5)."""
     saw_sps = saw_pps = saw_idr = False
     for _, t in iter_annexb_nals(bs):
-        if t == 7: saw_sps = True
-        elif t == 8: saw_pps = True
-        elif t == 5: saw_idr = True
+        if t == 7:
+            saw_sps = True
+        elif t == 8:
+            saw_pps = True
+        elif t == 5:
+            saw_idr = True
     # IDR is the key; SPS/PPS often precede it (parser can also inject), but prefer all three.
     return saw_idr or (saw_sps and saw_pps)
+
 
 def make_black_h264_annexb(width: int, height: int, fps=(30, 1)) -> bytes:
     """
@@ -228,7 +235,7 @@ class ZoomRTMSAdapter(BotAdapter):
         if current_time - self.connected_at >= 1.0:
             if self.last_video_received_at is None or current_time - self.last_video_received_at >= 0.25:
                 # Create a black frame of the same dimensions
-                self._on_video_frame(self.black_frame, self.last_audio_frame_speaker_name)
+                self._on_video_frame(self.black_frame, self.last_audio_frame_speaker_name, -1)
                 logger.info("Sent black frame")
 
         return not self.cleaned_up
@@ -245,7 +252,7 @@ class ZoomRTMSAdapter(BotAdapter):
 
     def _read_audio_frames_from_fd(self, fd: int, on_frame):
         """
-        Blocking loop: read [int32LE username_length][username][int32LE data_length][payload] audio frames from fd and call on_frame(bytes, username).
+        Blocking loop: read [int32LE username_length][username][int32LE userId][int32LE data_length][payload] audio frames from fd and call on_frame(bytes, username, userId).
         """
         try:
             # buffering=0 gives us unbuffered reads so length boundaries behave nicely
@@ -255,7 +262,7 @@ class ZoomRTMSAdapter(BotAdapter):
                         if self.stop_pipe_reading:
                             break
 
-                    # Audio format: username_length + username + data_length + data
+                    # Audio format: username_length + username + userId + data_length + data
                     username_length_header = self._read_exact(f, 4)
                     if username_length_header is None:
                         break
@@ -271,6 +278,12 @@ class ZoomRTMSAdapter(BotAdapter):
                             break
 
                     username = username_bytes.decode("utf-8", errors="replace")
+
+                    # Now read the userId
+                    user_id_header = self._read_exact(f, 4)
+                    if user_id_header is None:
+                        break
+                    (user_id,) = struct.unpack("<i", user_id_header)
 
                     # Now read the audio data length and data
                     data_length_header = self._read_exact(f, 4)
@@ -286,7 +299,7 @@ class ZoomRTMSAdapter(BotAdapter):
                         break
 
                     try:
-                        on_frame(data, username)
+                        on_frame(data, username, user_id)
                     except Exception:
                         logger.exception("Error in audio frame callback")
         except Exception:
@@ -295,7 +308,7 @@ class ZoomRTMSAdapter(BotAdapter):
 
     def _read_video_frames_from_fd(self, fd: int, on_frame):
         """
-        Blocking loop: read [int32LE username_length][username][int32LE data_length][payload] video frames from fd and call on_frame(bytes, username).
+        Blocking loop: read [int32LE username_length][username][int32LE userId][int32LE data_length][payload] video frames from fd and call on_frame(bytes, username, userId).
         """
         try:
             # buffering=0 gives us unbuffered reads so length boundaries behave nicely
@@ -305,7 +318,7 @@ class ZoomRTMSAdapter(BotAdapter):
                         if self.stop_pipe_reading:
                             break
 
-                    # Video format: username_length + username + data_length + data
+                    # Video format: username_length + username + userId + data_length + data
                     username_length_header = self._read_exact(f, 4)
                     if username_length_header is None:
                         break
@@ -322,6 +335,12 @@ class ZoomRTMSAdapter(BotAdapter):
 
                     username = username_bytes.decode("utf-8", errors="replace")
 
+                    # Now read the userId
+                    user_id_header = self._read_exact(f, 4)
+                    if user_id_header is None:
+                        break
+                    (user_id,) = struct.unpack("<i", user_id_header)
+
                     # Now read the video data length and data
                     data_length_header = self._read_exact(f, 4)
                     if data_length_header is None:
@@ -336,36 +355,43 @@ class ZoomRTMSAdapter(BotAdapter):
                         break
 
                     try:
-                        on_frame(data, username)
+                        on_frame(data, username, user_id)
                     except Exception:
                         logger.exception("Error in video frame callback")
         except Exception:
             # Normal during shutdown if we close fds
             logger.exception("Video pipe reader exiting")
 
-    def _on_audio_frame(self, frame: bytes, userName: str):
+    def _on_audio_frame(self, frame: bytes, userName: str, userId: int):
         """
         Called for each Opus audio frame (mixed, 16kHz mono).
+
+        Args:
+            frame: The audio frame data as bytes
+            userName: The username associated with the frame
+            userId: The user ID as an integer
         """
         self.last_audio_received_at = time.time()
         if not self.rtms_paused:
             self.last_audio_frame_speaker_name = userName
         try:
-            # Prefer mixed-audio callback when available.
             if self.use_mixed_audio and self.add_mixed_audio_chunk_callback:
-                # Signature assumed: (bytes, sample_rate_hz)
                 self.add_mixed_audio_chunk_callback(frame)
-            elif self.add_audio_chunk_callback:
-                self.add_audio_chunk_callback(frame, 16000)
-            else:
-                # No consumer; frame is implicitly dropped.
-                pass
+            if self.use_one_way_audio and self.add_audio_chunk_callback:
+                current_time = datetime.utcnow()
+                self.add_audio_chunk_callback(userId, current_time, frame)
+
         except Exception:
             logger.exception("Audio frame handling failed")
 
-    def _on_video_frame(self, frame: bytes, userName: str):
+    def _on_video_frame(self, frame: bytes, userName: str, userId: int):
         """
-        Called for each H.264 frame with username.
+        Called for each H.264 frame with username and user ID.
+
+        Args:
+            frame: The video frame data as bytes
+            userName: The username associated with the frame
+            userId: The user ID as an integer
         """
         if frame != self.black_frame:
             if is_keyframe(frame):

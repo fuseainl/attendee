@@ -223,7 +223,10 @@ class BotController:
 
         zoom_oauth_credentials = self.get_zoom_oauth_credentials()
 
-        add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
+        if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+            add_audio_chunk_callback = None
+        else:
+            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
 
         return ZoomRTMSAdapter(
             use_one_way_audio=self.pipeline_configuration.transcribe_audio,
@@ -284,7 +287,7 @@ class BotController:
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
             if self.bot_in_db.zoom_rtms_stream_id:
-                return 32000
+                return 16000
             elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
             else:
@@ -298,7 +301,7 @@ class BotController:
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
             if self.bot_in_db.zoom_rtms_stream_id:
-                return 32000
+                return 16000
             elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
             else:
