@@ -52,17 +52,23 @@ class ZoomWebUIMethods:
 
         # Then find an <a> tag with the arial label "Captions" and click it
         logger.info("Waiting for captions button")
-        captions_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Captions']")))
-        logger.info("Captions button found, clicking")
-        self.driver.execute_script("arguments[0].click();", captions_button)
+        closed_captions_enabled = False
+        try:
+            captions_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Captions']")))
+            logger.info("Captions button found, clicking")
+            self.driver.execute_script("arguments[0].click();", captions_button)
+            closed_captions_enabled = True
+        except TimeoutException:
+            logger.info("Captions button not found, so unable to transcribe via closed-captions, continuing")
 
-        # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
-        logger.info("Waiting for your caption settings grouping Show Captions button")
-        your_caption_settings_grouping_show_captions_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your caption settings grouping Show Captions']")))
-        logger.info("Your caption settings grouping Show Captions button found, clicking")
-        self.driver.execute_script("arguments[0].click();", your_caption_settings_grouping_show_captions_button)
+        if closed_captions_enabled:
+            # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
+            logger.info("Waiting for your caption settings grouping Show Captions button")
+            your_caption_settings_grouping_show_captions_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your caption settings grouping Show Captions']")))
+            logger.info("Your caption settings grouping Show Captions button found, clicking")
+            self.driver.execute_script("arguments[0].click();", your_caption_settings_grouping_show_captions_button)
 
-        self.set_zoom_closed_captions_language()
+            self.set_zoom_closed_captions_language()
 
         # Then see if it created a modal to select the caption language. If so, just click the save button
         try:

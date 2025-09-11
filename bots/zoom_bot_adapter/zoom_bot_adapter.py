@@ -195,11 +195,25 @@ class ZoomBotAdapter(BotAdapter):
         # Waiting room controller
         self.waiting_room_ctrl = None
 
+    def request_permission_to_record_if_joined_user_is_host(self, joined_user_id):
+        # No need to request permission if we already have it
+        if self.recording_permission_granted:
+            return
+
+        try:
+            joined_user = self.participants_ctrl.GetUserByUserID(joined_user_id)
+            if joined_user and joined_user.IsHost():
+                logger.info("Re-requesting recording privilege since host just joined.")
+                self.recording_ctrl.RequestLocalRecordingPrivilege()
+        except Exception as e:
+            logger.info(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
+
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
         for joined_user_id in joined_user_ids:
             self.get_participant(joined_user_id)
             self.send_participant_event(joined_user_id, event_type=ParticipantEventTypes.JOIN)
+            self.request_permission_to_record_if_joined_user_is_host(joined_user_id)
 
     def on_user_left_callback(self, left_user_ids, _):
         logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
