@@ -503,6 +503,8 @@ class ZoomRTMSAdapter(BotAdapter):
             cmd_env["VIDEO_FD"] = str(self.video_wfd)
             pass_fds.append(self.video_wfd)
 
+        # cmd = ["/usr/local/bin/node", "bots/zoom_rtms_adapter/zoom_rtms_node_app/rtms_attendee.js", "--", f"--recording_file_path={recording_file_path}", f"--join_payload={json.dumps(self.zoom_rtms)}"]
+
         cmd = ["node", "/home/nduncan/Documents/attendee_stuff/rtms-developer-preview-js/index.js", "--", f"--recording_file_path={recording_file_path}", f"--join_payload={json.dumps(self.zoom_rtms)}"]
 
         logger.info(f"Executing RTMS client with command: {' '.join(cmd)}")
@@ -619,6 +621,7 @@ class ZoomRTMSAdapter(BotAdapter):
                 "participant_user_uuid": None,
                 "participant_full_name": user_name,
                 "participant_is_the_bot": False,
+                "participant_is_host": False,
             }
 
             self.add_participant_event_callback({"participant_uuid": user_id, "event_type": ParticipantEventTypes.JOIN if json_data.get("op") == 0 else ParticipantEventTypes.LEAVE, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})

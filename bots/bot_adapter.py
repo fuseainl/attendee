@@ -25,14 +25,14 @@ class BotAdapter:
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
 
+        # App session messages
+        APP_SESSION_CONNECTED = "App session connected"
+        APP_SESSION_DISCONNECTED = "App session disconnected"
+
     class BOT_RECORDING_PERMISSION_DENIED_REASON:
         HOST_DENIED_PERMISSION = "HOST_DENIED_PERMISSION"
         REQUEST_TIMED_OUT = "REQUEST_TIMED_OUT"
         HOST_CLIENT_CANNOT_GRANT_PERMISSION = "HOST_CLIENT_CANNOT_GRANT_PERMISSION"
-
-        # App session messages
-        APP_SESSION_CONNECTED = "App session connected"
-        APP_SESSION_DISCONNECTED = "App session disconnected"
 
     class LEAVE_REASON:
         AUTO_LEAVE_SILENCE = "AUTO_LEAVE_SILENCE"
