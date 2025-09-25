@@ -8,25 +8,7 @@ from gi.repository import GLib
 
 logger = logging.getLogger(__name__)
 
-
-def create_black_i420_frame(video_frame_size):
-    width, height = video_frame_size
-    # Ensure dimensions are even for proper chroma subsampling
-    if width % 2 != 0 or height % 2 != 0:
-        raise ValueError("Width and height must be even numbers for I420 format")
-
-    # Y plane (black = 0 in Y plane)
-    y_plane = np.zeros((height, width), dtype=np.uint8)
-
-    # U and V planes (black = 128 in UV planes)
-    # Both are quarter size of original due to 4:2:0 subsampling
-    u_plane = np.full((height // 2, width // 2), 128, dtype=np.uint8)
-    v_plane = np.full((height // 2, width // 2), 128, dtype=np.uint8)
-
-    # Concatenate all planes
-    yuv_frame = np.concatenate([y_plane.flatten(), u_plane.flatten(), v_plane.flatten()])
-
-    return yuv_frame.astype(np.uint8).tobytes()
+from bots.utils import create_black_i420_frame
 
 
 def scale_i420(frame, new_size):
@@ -221,6 +203,7 @@ class VideoInputManager:
     class Mode:
         ACTIVE_SPEAKER = 1
         ACTIVE_SHARER = 2
+        INACTIVE = 3
 
     def __init__(self, *, new_frame_callback, wants_any_frames_callback, video_frame_size):
         self.new_frame_callback = new_frame_callback
@@ -257,12 +240,16 @@ class VideoInputManager:
             input_stream.cleanup()
 
     def set_mode(self, *, mode, active_speaker_id, active_sharer_id, active_sharer_source_id):
-        if mode != VideoInputManager.Mode.ACTIVE_SPEAKER and mode != VideoInputManager.Mode.ACTIVE_SHARER:
+        if mode != VideoInputManager.Mode.ACTIVE_SPEAKER and mode != VideoInputManager.Mode.ACTIVE_SHARER and mode != VideoInputManager.Mode.INACTIVE:
             raise Exception("Unsupported mode " + str(mode))
 
         logger.info(f"In VideoInputManager.set_mode mode = {mode} active_speaker_id = {active_speaker_id} active_sharer_id = {active_sharer_id} active_sharer_source_id = {active_sharer_source_id}")
 
         self.mode = mode
+
+        if self.mode == VideoInputManager.Mode.INACTIVE:
+            self.add_input_streams_if_needed([])
+            return
 
         if self.mode == VideoInputManager.Mode.ACTIVE_SPEAKER:
             self.active_speaker_id = active_speaker_id

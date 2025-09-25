@@ -3,8 +3,8 @@ import io
 import cv2
 import numpy as np
 from pydub import AudioSegment
-from tldextract import tldextract
 
+from .meeting_url_utils import meeting_type_from_url
 from .models import (
     MeetingTypes,
     TranscriptionProviders,
@@ -111,6 +111,54 @@ def calculate_audio_duration_ms(audio_data: bytes, content_type: str) -> int:
     # len(audio) returns duration in milliseconds for pydub AudioSegment objects
     duration_ms = len(audio)
     return duration_ms
+
+
+def create_zero_pcm_audio(audio_format, duration_ms=250):
+    """Create zero'd PCM audio for the given format and duration"""
+    # Parse the audio format to get sample rate and format
+    if "rate=32000" in audio_format:
+        sample_rate = 32000
+    elif "rate=48000" in audio_format:
+        sample_rate = 48000
+    else:
+        # Default to 32000 if not specified
+        sample_rate = 32000
+
+    # Calculate number of samples for the duration
+    samples_count = int((duration_ms / 1000.0) * sample_rate)
+
+    if "format=S16LE" in audio_format:
+        # 16-bit signed little endian
+        zero_audio = np.zeros(samples_count, dtype=np.int16)
+    elif "format=F32LE" in audio_format:
+        # 32-bit float little endian
+        zero_audio = np.zeros(samples_count, dtype=np.float32)
+    else:
+        # Default to S16LE
+        zero_audio = np.zeros(samples_count, dtype=np.int16)
+
+    return zero_audio.tobytes()
+
+
+def create_black_i420_frame(video_frame_size):
+    """Create a black I420 frame for the given dimensions"""
+    width, height = video_frame_size
+    # Ensure dimensions are even for proper chroma subsampling
+    if width % 2 != 0 or height % 2 != 0:
+        raise ValueError("Width and height must be even numbers for I420 format")
+
+    # Y plane (black = 0 in Y plane)
+    y_plane = np.zeros((height, width), dtype=np.uint8)
+
+    # U and V planes (black = 128 in UV planes)
+    # Both are quarter size of original due to 4:2:0 subsampling
+    u_plane = np.full((height // 2, width // 2), 128, dtype=np.uint8)
+    v_plane = np.full((height // 2, width // 2), 128, dtype=np.uint8)
+
+    # Concatenate all planes
+    yuv_frame = np.concatenate([y_plane.flatten(), u_plane.flatten(), v_plane.flatten()])
+
+    return yuv_frame.astype(np.uint8).tobytes()
 
 
 def half_ceil(x):
@@ -294,7 +342,7 @@ class AggregatedUtterance:
 
 
 def generate_aggregated_utterances(recording):
-    utterances_sorted = sorted(recording.utterances.all(), key=lambda x: x.timestamp_ms)
+    utterances_sorted = sorted(recording.utterances.filter(async_transcription=None).all(), key=lambda x: x.timestamp_ms)
 
     aggregated_utterances = []
     current_aggregated_utterance = None
@@ -319,7 +367,7 @@ def generate_aggregated_utterances(recording):
 
 
 def generate_failed_utterance_json_for_bot_detail_view(recording):
-    failed_utterances = recording.utterances.filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
+    failed_utterances = recording.utterances.filter(async_transcription=None).filter(failure_data__isnull=False).order_by("timestamp_ms")[:10]
 
     failed_utterances_data = []
 
@@ -408,36 +456,6 @@ def generate_utterance_json_for_bot_detail_view(recording):
         utterances_data.append(utterance_data)
 
     return utterances_data
-
-
-def root_domain_from_url(url):
-    if not url:
-        return None
-    return tldextract.extract(url).registered_domain
-
-
-def domain_and_subdomain_from_url(url):
-    if not url:
-        return None
-    extract_from_url = tldextract.extract(url)
-    return extract_from_url.subdomain + "." + extract_from_url.registered_domain
-
-
-def meeting_type_from_url(url):
-    if not url:
-        return None
-
-    root_domain = root_domain_from_url(url)
-    domain_and_subdomain = domain_and_subdomain_from_url(url)
-
-    if root_domain == "zoom.us":
-        return MeetingTypes.ZOOM
-    elif domain_and_subdomain == "meet.google.com":
-        return MeetingTypes.GOOGLE_MEET
-    elif domain_and_subdomain == "teams.microsoft.com" or domain_and_subdomain == "teams.live.com":
-        return MeetingTypes.TEAMS
-    else:
-        return None
 
 
 def transcription_provider_from_bot_creation_data(data):

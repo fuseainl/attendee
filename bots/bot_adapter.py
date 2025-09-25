@@ -23,6 +23,12 @@ class BotAdapter:
         COULD_NOT_CONNECT_TO_MEETING = "Could not connect to meeting"
         JOINING_BREAKOUT_ROOM = "Joining breakout room"
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
+        BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
+
+    class BOT_RECORDING_PERMISSION_DENIED_REASON:
+        HOST_DENIED_PERMISSION = "HOST_DENIED_PERMISSION"
+        REQUEST_TIMED_OUT = "REQUEST_TIMED_OUT"
+        HOST_CLIENT_CANNOT_GRANT_PERMISSION = "HOST_CLIENT_CANNOT_GRANT_PERMISSION"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

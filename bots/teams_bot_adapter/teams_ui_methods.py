@@ -7,7 +7,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -172,8 +172,8 @@ class TeamsUIMethods:
         # Check for Microsoft login form (email input)
         microsoft_login_element = self.find_element_by_selector(By.CSS_SELECTOR, 'input[name="loginfmt"][type="email"]')
         if microsoft_login_element:
-            logger.info("Microsoft login form detected. Raising UiLoginRequiredException")
-            raise UiLoginRequiredException("Microsoft login form detected", step)
+            logger.info("Microsoft login form detected. Raising UiMeetingNotFoundException")
+            raise UiMeetingNotFoundException("Microsoft login form detected", step)
 
     def look_for_we_could_not_connect_you_element(self, step):
         we_could_not_connect_you_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "we couldn\'t connect you")]')

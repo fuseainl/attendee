@@ -35,7 +35,7 @@ class TestTeamsBot(TransactionTestCase):
         # Create a bot for each test
         self.bot = Bot.objects.create(
             name="Test Teams Bot",
-            meeting_url="https://teams.microsoft.com/test-meeting",
+            meeting_url="https://teams.microsoft.com/meet/123123213?p=123123213",
             state=BotStates.READY,
             project=self.project,
         )

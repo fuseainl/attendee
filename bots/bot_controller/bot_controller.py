@@ -18,7 +18,9 @@ from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_websocket_client import BotWebsocketClient
 from bots.bots_api_utils import BotCreationSource
 from bots.external_callback_utils import get_zoom_tokens
+from bots.meeting_url_utils import meeting_type_from_url
 from bots.models import (
+    AudioChunk,
     Bot,
     BotChatMessageRequestManager,
     BotChatMessageRequestStates,
@@ -45,7 +47,6 @@ from bots.models import (
     Utterance,
     WebhookTriggerTypes,
 )
-from bots.utils import meeting_type_from_url
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
@@ -109,6 +110,7 @@ class BotController:
             start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
+            record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
         )
 
     def get_teams_bot_adapter(self):
@@ -142,6 +144,7 @@ class BotController:
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
+            record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
         )
 
     def get_zoom_oauth_credentials(self):
@@ -184,6 +187,7 @@ class BotController:
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             zoom_closed_captions_language=self.bot_in_db.zoom_closed_captions_language(),
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
+            record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
         )
 
     def get_zoom_bot_adapter(self):
@@ -216,6 +220,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_tokens=zoom_tokens,
             zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
+            record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
         )
 
     def get_zoom_rtms_adapter(self):
@@ -967,29 +972,56 @@ class BotController:
             return
         self.adapter.admit_from_waiting_room()
 
+    def pause_recording_for_pipeline_objects(self):
+        pause_recording_success = self.screen_and_audio_recorder.pause_recording() if self.screen_and_audio_recorder else True
+        if not pause_recording_success:
+            return False
+        if self.gstreamer_pipeline:
+            self.gstreamer_pipeline.pause_recording()
+        self.adapter.pause_recording()
+        return True
+
+    def pause_recording_for_pipeline_objects_raise_on_failure(self):
+        pause_recording_for_pipeline_objects_success = self.pause_recording_for_pipeline_objects()
+        if not pause_recording_for_pipeline_objects_success:
+            raise Exception(f"Failed to pause recording for bot {self.bot_in_db.object_id}")
+
     def pause_recording(self):
         if not BotEventManager.is_state_that_can_pause_recording(self.bot_in_db.state):
             logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot pause recording")
             return
-        pause_recording_success = self.screen_and_audio_recorder.pause_recording() if self.screen_and_audio_recorder else True
-        if not pause_recording_success:
+        pause_recording_for_pipeline_objects_success = self.pause_recording_for_pipeline_objects()
+        if not pause_recording_for_pipeline_objects_success:
             logger.error(f"Failed to pause recording for bot {self.bot_in_db.object_id}")
             return
-        self.adapter.pause_recording()
         BotEventManager.create_event(
             bot=self.bot_in_db,
             event_type=BotEventTypes.RECORDING_PAUSED,
         )
 
+    def start_or_resume_recording_for_pipeline_objects(self):
+        resume_recording_success = self.screen_and_audio_recorder.resume_recording() if self.screen_and_audio_recorder else True
+        if not resume_recording_success:
+            logger.error(f"Failed to resume recording for bot {self.bot_in_db.object_id}")
+            return False
+        if self.gstreamer_pipeline:
+            self.gstreamer_pipeline.resume_recording()
+        self.adapter.start_or_resume_recording()
+        return True
+
+    def start_or_resume_recording_for_pipeline_objects_raise_on_failure(self):
+        start_or_resume_recording_for_pipeline_objects_success = self.start_or_resume_recording_for_pipeline_objects()
+        if not start_or_resume_recording_for_pipeline_objects_success:
+            raise Exception(f"Failed to resume recording for bot {self.bot_in_db.object_id}")
+
     def resume_recording(self):
         if not BotEventManager.is_state_that_can_resume_recording(self.bot_in_db.state):
             logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot resume recording")
             return
-        resume_recording_success = self.screen_and_audio_recorder.resume_recording() if self.screen_and_audio_recorder else True
-        if not resume_recording_success:
+        start_or_resume_recording_for_pipeline_objects_success = self.start_or_resume_recording_for_pipeline_objects()
+        if not start_or_resume_recording_for_pipeline_objects_success:
             logger.error(f"Failed to resume recording for bot {self.bot_in_db.object_id}")
             return
-        self.adapter.resume_recording()
         BotEventManager.create_event(
             bot=self.bot_in_db,
             event_type=BotEventTypes.RECORDING_RESUMED,
@@ -1068,6 +1100,7 @@ class BotController:
                 "user_uuid": message["participant_user_uuid"],
                 "full_name": message["participant_full_name"],
                 "is_the_bot": message["participant_is_the_bot"],
+                "is_host": message["participant_is_host"],
             },
         )
 
@@ -1112,6 +1145,7 @@ class BotController:
                 "user_uuid": message["participant_user_uuid"],
                 "full_name": message["participant_full_name"],
                 "is_the_bot": message["participant_is_the_bot"],
+                "is_host": message["participant_is_host"],
             },
         )
 
@@ -1121,15 +1155,25 @@ class BotController:
             logger.warning("Warning: No recording in progress found so cannot save individual audio utterance.")
             return
 
-        utterance = Utterance.objects.create(
-            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+        audio_chunk = AudioChunk.objects.create(
             recording=recording_in_progress,
-            participant=participant,
             audio_blob=message["audio_data"],
-            audio_format=Utterance.AudioFormat.PCM,
+            audio_format=AudioChunk.AudioFormat.PCM,
             timestamp_ms=message["timestamp_ms"] - self.get_per_participant_audio_utterance_delay_ms(),
             duration_ms=len(message["audio_data"]) / ((message["sample_rate"] / 1000) * 2),
             sample_rate=message["sample_rate"],
+            source=AudioChunk.Sources.PER_PARTICIPANT_AUDIO,
+            participant=participant,
+        )
+
+        utterance = Utterance.objects.create(
+            source=Utterance.Sources.PER_PARTICIPANT_AUDIO,
+            async_transcription=None,  # This utterance is created during the meeting, so it's not associated with an async transcription
+            recording=recording_in_progress,
+            participant=participant,
+            audio_chunk=audio_chunk,
+            timestamp_ms=audio_chunk.timestamp_ms,
+            duration_ms=audio_chunk.duration_ms,
         )
 
         # Set the recording transcription in progress
@@ -1159,6 +1203,7 @@ class BotController:
                 "user_uuid": participant["participant_user_uuid"],
                 "full_name": participant["participant_full_name"],
                 "is_the_bot": participant["participant_is_the_bot"],
+                "is_host": participant["participant_is_host"],
             },
         )
 
@@ -1197,6 +1242,7 @@ class BotController:
                 "user_uuid": participant["participant_user_uuid"],
                 "full_name": participant["participant_full_name"],
                 "is_the_bot": participant["participant_is_the_bot"],
+                "is_host": participant["participant_is_host"],
             },
         )
 
@@ -1535,9 +1581,35 @@ class BotController:
 
         if message.get("message") == BotAdapter.Messages.BOT_RECORDING_PERMISSION_GRANTED:
             logger.info("Received message that bot recording permission granted")
+
+            # The internal pipeline needs to start or resume recording.
+            self.start_or_resume_recording_for_pipeline_objects_raise_on_failure()
+
             BotEventManager.create_event(
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
+            )
+            return
+
+        if message.get("message") == BotAdapter.Messages.BOT_RECORDING_PERMISSION_DENIED:
+            logger.info("Received message that bot recording permission denied")
+
+            # The internal pipeline needs to stop recording.
+            self.pause_recording_for_pipeline_objects_raise_on_failure()
+
+            if message.get("denied_reason") == BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION:
+                event_sub_type_for_permission_denied = BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION
+            elif message.get("denied_reason") == BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.REQUEST_TIMED_OUT:
+                event_sub_type_for_permission_denied = BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT
+            elif message.get("denied_reason") == BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION:
+                event_sub_type_for_permission_denied = BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION
+            else:
+                raise Exception(f"Received unexpected denied reason from bot adapter: {message.get('denied_reason')}")
+
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED,
+                event_sub_type=event_sub_type_for_permission_denied,
             )
             return
 

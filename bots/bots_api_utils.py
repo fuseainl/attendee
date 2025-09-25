@@ -9,6 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 
+from .meeting_url_utils import meeting_type_from_url
 from .models import (
     AppSession,
     Bot,
@@ -35,7 +36,7 @@ from .serializers import (
     CreateBotSerializer,
     PatchBotSerializer,
 )
-from .utils import meeting_type_from_url, transcription_provider_from_bot_creation_data
+from .utils import transcription_provider_from_bot_creation_data
 
 logger = logging.getLogger(__name__)
 

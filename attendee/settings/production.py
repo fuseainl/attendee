@@ -46,3 +46,24 @@ if os.getenv("ERROR_REPORTS_RECEIVER_EMAIL_ADDRESS"):
     )
 
 SERVER_EMAIL = "noreply@mail.attendee.dev"
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
+            "propagate": False,
+        },
+    },
+}

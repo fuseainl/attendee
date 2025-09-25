@@ -48,9 +48,9 @@ class TestExtractMeetingUrlFromText(TestCase):
 
     def test_extract_teams_url(self):
         """Test extracting Microsoft Teams URL from text."""
-        text = "Join <https://teams.microsoft.com/l/meetup-join/19%3ameeting>"
+        text = "Join <https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D>"
         result = extract_meeting_url_from_text(text)
-        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19%3ameeting")
+        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D")
 
     def test_no_meeting_url_found(self):
         """Test when no meeting URL is found in text."""
@@ -76,9 +76,9 @@ class TestExtractMeetingUrlFromText(TestCase):
 
     def test_html_href_attribute(self):
         # URL appears inside an HTML attribute
-        text = '<a href="https://teams.microsoft.com/l/meetup-join/19%3ameeting?tenantId=abc#frag">Join</a>'
+        text = '<a href="https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D#frag">Join</a>'
         result = extract_meeting_url_from_text(text)
-        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19%3ameeting?tenantId=abc#frag")
+        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D#frag")
 
     def test_url_with_query_and_fragment(self):
         text = "Join: https://meet.google.com/xyz-abcd-efg?hs=122&pli=1#anchor"
@@ -102,9 +102,9 @@ class TestExtractMeetingUrlFromText(TestCase):
         self.assertEqual(result, "https://meet.google.com/xyz-abcd-efg")
 
     def test_ignores_non_meeting_urls_until_valid_found(self):
-        text = "See https://example.com/page then https://teams.microsoft.com/l/meetup-join/19%3ameeting"
+        text = "See https://example.com/page then https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D"
         result = extract_meeting_url_from_text(text)
-        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19%3ameeting")
+        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D")
 
     # --- desirable behavior (enable after you add URL normalization/stripping) ---
 
@@ -119,9 +119,9 @@ class TestExtractMeetingUrlFromText(TestCase):
         self.assertEqual(result, "https://zoom.us/j/123456789")
 
     def test_markdown_link(self):
-        text = "Click [Join](https://teams.microsoft.com/l/meetup-join/19%3ameeting)"
+        text = "Click [Join](https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D)"
         result = extract_meeting_url_from_text(text)
-        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19%3ameeting")
+        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/19:meeting_YWVhM2VmN2MtOGJhZC00bjdvLTksNzcfffffffffffffffff@thread.v2/0?context=%7B%22Tid%22%3A%2247e45b5d-93ff-45b2-9d36-0e8a2643a5f5%22%2C%22Oid%22%3A%22e3beb726-5124-e6a3-8ee4-ed1e2e43ef68%22%7D")
 
 
 class TestSyncBotWithCalendarEvent(TestCase):
@@ -681,21 +681,21 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
         """Test extracting meeting URL from onlineMeeting object."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
 
-        event = {"onlineMeeting": {"joinUrl": "https://teams.microsoft.com/l/meetup-join/123"}}
+        event = {"onlineMeeting": {"joinUrl": "https://teams.microsoft.com/meet/123123213?p=123123213"}}
 
         result = handler._extract_meeting_url(event)
 
-        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/123")
+        self.assertEqual(result, "https://teams.microsoft.com/meet/123123213?p=123123213")
 
     def test_extract_meeting_url_from_legacy_field(self):
         """Test extracting meeting URL from legacy onlineMeetingUrl field."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
 
-        event = {"onlineMeetingUrl": "https://teams.microsoft.com/l/meetup-join/456"}
+        event = {"onlineMeetingUrl": "https://teams.microsoft.com/meet/123123213?p=11111111"}
 
         result = handler._extract_meeting_url(event)
 
-        self.assertEqual(result, "https://teams.microsoft.com/l/meetup-join/456")
+        self.assertEqual(result, "https://teams.microsoft.com/meet/123123213?p=11111111")
 
     @patch("bots.tasks.sync_calendar_task.extract_meeting_url_from_text")
     def test_extract_meeting_url_from_subject_and_body(self, mock_extract_url):
@@ -728,12 +728,12 @@ class TestMicrosoftCalendarSyncHandler(TestCase):
         """Test converting Microsoft event to CalendarEvent data."""
         handler = MicrosoftCalendarSyncHandler(self.calendar.id)
 
-        ms_event = {"id": "ms_event_123", "start": {"dateTime": "2023-12-01T10:00:00.0000000", "timeZone": "UTC"}, "end": {"dateTime": "2023-12-01T11:00:00.0000000", "timeZone": "UTC"}, "isCancelled": False, "iCalUId": "ical_uid_123", "attendees": [{"emailAddress": {"address": "user1@example.com", "name": "User One"}}], "onlineMeeting": {"joinUrl": "https://teams.microsoft.com/l/meetup-join/123"}}
+        ms_event = {"id": "ms_event_123", "start": {"dateTime": "2023-12-01T10:00:00.0000000", "timeZone": "UTC"}, "end": {"dateTime": "2023-12-01T11:00:00.0000000", "timeZone": "UTC"}, "isCancelled": False, "iCalUId": "ical_uid_123", "attendees": [{"emailAddress": {"address": "user1@example.com", "name": "User One"}}], "onlineMeeting": {"joinUrl": "https://teams.microsoft.com/meet/123123213?p=3333333"}}
 
         result = handler._remote_event_to_calendar_event_data(ms_event)
 
         self.assertEqual(result["platform_uuid"], "ms_event_123")
-        self.assertEqual(result["meeting_url"], "https://teams.microsoft.com/l/meetup-join/123")
+        self.assertEqual(result["meeting_url"], "https://teams.microsoft.com/meet/123123213?p=3333333")
         self.assertEqual(result["ical_uid"], "ical_uid_123")
         self.assertFalse(result["is_deleted"])
         self.assertEqual(len(result["attendees"]), 1)

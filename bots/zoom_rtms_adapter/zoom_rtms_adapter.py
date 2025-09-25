@@ -412,7 +412,7 @@ class ZoomRTMSAdapter(BotAdapter):
             if self.add_video_frame_callback:
                 # Many pipelines just accept the encoded bytes; if yours needs metadata,
                 # pass it here (e.g., codec, width/height).
-                self.add_video_frame_callback(frame, time.time_ns(), self.last_audio_frame_speaker_name or "")
+                self.add_video_frame_callback(frame, time.time_ns(), overlay_text=self.last_audio_frame_speaker_name or "")
         except Exception:
             logger.exception("Video frame handling failed")
 

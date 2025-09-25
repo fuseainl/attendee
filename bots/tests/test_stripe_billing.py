@@ -288,7 +288,7 @@ class StripeBillingTestCase(TestCase):
                 "object": mock_customer,
                 "previous_attributes": {
                     "invoice_settings": {
-                        "default_payment_method": "pm_old123"  # This indicates payment method changed
+                        "default_payment_method": None  # This indicates payment method changed
                     }
                 },
             },

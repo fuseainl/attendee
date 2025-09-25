@@ -47,6 +47,7 @@ class WebBotAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
         voice_agent_url: str,
         webpage_streamer_service_hostname: str,
+        record_chat_messages_when_paused: bool,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -61,7 +62,7 @@ class WebBotAdapter(BotAdapter):
         self.start_recording_screen_callback = start_recording_screen_callback
         self.stop_recording_screen_callback = stop_recording_screen_callback
         self.recording_view = recording_view
-
+        self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.meeting_url = meeting_url
 
         self.video_frame_size = video_frame_size
@@ -108,7 +109,7 @@ class WebBotAdapter(BotAdapter):
     def pause_recording(self):
         self.recording_paused = True
 
-    def resume_recording(self):
+    def start_or_resume_recording(self):
         self.recording_paused = False
 
     def process_encoded_mp4_chunk(self, message):
@@ -128,6 +129,7 @@ class WebBotAdapter(BotAdapter):
                 "participant_full_name": self.participants_info[participant_id]["fullName"],
                 "participant_user_uuid": None,
                 "participant_is_the_bot": self.participants_info[participant_id]["isCurrentUser"],
+                "participant_is_host": self.participants_info[participant_id].get("isHost", False),
             }
 
         return None
@@ -254,7 +256,7 @@ class WebBotAdapter(BotAdapter):
         self.upsert_caption_callback(json_data["caption"])
 
     def handle_chat_message(self, json_data):
-        if self.recording_paused:
+        if self.recording_paused and not self.record_chat_messages_when_paused:
             return
 
         self.upsert_chat_message_callback(json_data)
@@ -321,6 +323,8 @@ class WebBotAdapter(BotAdapter):
                         elif json_data.get("type") == "RecordingPermissionChange":
                             if json_data.get("change") == "granted":
                                 self.after_bot_can_record_meeting()
+                            elif json_data.get("change") == "denied":
+                                self.after_bot_recording_permission_denied()
 
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
@@ -608,6 +612,9 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
+
+    def after_bot_recording_permission_denied(self):
+        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
 
     def after_bot_can_record_meeting(self):
         if self.recording_permission_granted_at is not None:

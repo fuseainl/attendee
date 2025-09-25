@@ -94,7 +94,9 @@ class PerParticipantStreamingAudioInputManager:
 
     def monitor_transcription(self):
         speakers_to_remove = []
-        for speaker_id, streaming_transcriber in self.streaming_transcribers.items():
+        streaming_transcriber_keys = list(self.streaming_transcribers.keys())
+        for speaker_id in streaming_transcriber_keys:
+            streaming_transcriber = self.streaming_transcribers[speaker_id]
             if time.time() - self.last_nonsilent_audio_time[speaker_id] > self.SILENCE_DURATION_LIMIT:
                 streaming_transcriber.finish()
                 speakers_to_remove.append(speaker_id)

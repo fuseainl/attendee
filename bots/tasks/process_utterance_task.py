@@ -79,19 +79,33 @@ def process_utterance(self, utterance_id):
                 logger.info(f"Transcription failed for utterance {utterance_id}, failure data: {failure_data}")
                 return
 
-        utterance.audio_blob = b""  # set the audio blob binary field to empty byte string
+        # The direct audio_blob column on the utterance model is deprecated, but for backwards compatibility, we need to clear it if it exists
+        if utterance.audio_blob:
+            utterance.audio_blob = b""  # set the audio blob binary field to empty byte string
+
+        # If the utterance has an associated audio chunk, clear the audio blob on the audio chunk.
+        # If async transcription is enabled for the organization, do NOT clear it, because we may use it later in an async transcription.
+        if utterance.audio_chunk and not utterance.recording.bot.project.organization.is_async_transcription_enabled:
+            utterance_audio_chunk = utterance.audio_chunk
+            utterance_audio_chunk.audio_blob = b""
+            utterance_audio_chunk.save()
+
         utterance.transcription = transcription
         utterance.save()
 
         logger.info(f"Transcription complete for utterance {utterance_id}")
 
-        # Don't send webhook for empty transcript
-        if utterance.transcription.get("transcript"):
+        # Don't send webhook for empty transcript or an async transcription
+        if utterance.transcription.get("transcript") and utterance.async_transcription is None:
             trigger_webhook(
                 webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE,
                 bot=recording.bot,
                 payload=utterance_webhook_payload(utterance),
             )
+
+    # If the utterance is for an async transcription, we don't need to do anything with the recording state.
+    if utterance.async_transcription is not None:
+        return
 
     # If the recording is in a terminal state and there are no more utterances to transcribe, set the recording's transcription state to complete
     if RecordingManager.is_terminal_state(utterance.recording.state) and Utterance.objects.filter(recording=utterance.recording, transcription__isnull=True).count() == 0:
@@ -110,7 +124,7 @@ def get_transcription_via_gladia(utterance):
 
     upload_url = "https://api.gladia.io/v2/upload"
 
-    payload_mp3 = pcm_to_mp3(utterance.audio_blob.tobytes(), sample_rate=utterance.sample_rate)
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
     headers = {
         "x-gladia-key": gladia_credentials["api_key"],
     }
@@ -209,7 +223,7 @@ def get_transcription_via_deepgram(utterance):
 
     recording = utterance.recording
     payload: FileSource = {
-        "buffer": utterance.audio_blob.tobytes(),
+        "buffer": utterance.get_audio_blob().tobytes(),
     }
 
     deepgram_model = recording.bot.deepgram_model()
@@ -222,7 +236,7 @@ def get_transcription_via_deepgram(utterance):
         keyterm=recording.bot.deepgram_keyterms(),
         keywords=recording.bot.deepgram_keywords(),
         encoding="linear16",  # for 16-bit PCM
-        sample_rate=utterance.sample_rate,
+        sample_rate=utterance.get_sample_rate(),
         redact=recording.bot.deepgram_redaction_settings(),
     )
 
@@ -270,7 +284,7 @@ def get_transcription_via_openai(utterance):
         return {"transcript": ""}, None
 
     # Convert PCM audio to MP3
-    payload_mp3 = pcm_to_mp3(utterance.audio_blob.tobytes(), sample_rate=utterance.sample_rate)
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
 
     # Prepare the request for OpenAI's transcription API
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -316,9 +330,9 @@ def get_transcription_via_assemblyai(utterance):
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
 
     headers = {"authorization": api_key}
-    base_url = "https://api.assemblyai.com/v2"
+    base_url = recording.bot.assemblyai_base_url()
 
-    payload_mp3 = pcm_to_mp3(utterance.audio_blob.tobytes(), sample_rate=utterance.sample_rate)
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
 
     upload_response = requests.post(f"{base_url}/upload", headers=headers, data=payload_mp3)
 
@@ -347,6 +361,13 @@ def get_transcription_via_assemblyai(utterance):
     speech_model = recording.bot.assemblyai_speech_model()
     if speech_model:
         data["speech_model"] = speech_model
+
+    if recording.bot.assemblyai_speaker_labels():
+        data["speaker_labels"] = True
+
+    language_detection_options = recording.bot.assemblyai_language_detection_options()
+    if language_detection_options:
+        data["language_detection_options"] = language_detection_options
 
     url = f"{base_url}/transcript"
     response = requests.post(url, json=data, headers=headers)
@@ -388,16 +409,18 @@ def get_transcription_via_assemblyai(utterance):
             formatted_words = []
             if words:
                 for word in words:
-                    formatted_words.append(
-                        {
-                            "word": word["text"],
-                            "start": word["start"] / 1000.0,
-                            "end": word["end"] / 1000.0,
-                            "confidence": word["confidence"],
-                        }
-                    )
+                    formatted_word = {
+                        "word": word["text"],
+                        "start": word["start"] / 1000.0,
+                        "end": word["end"] / 1000.0,
+                        "confidence": word["confidence"],
+                    }
+                    if "speaker" in word:
+                        formatted_word["speaker"] = word["speaker"]
 
-            transcription = {"transcript": transcript_text, "words": formatted_words}
+                    formatted_words.append(formatted_word)
+
+            transcription = {"transcript": transcript_text, "words": formatted_words, "language": transcription_result.get("language_code", None)}
             return transcription, None
 
         elif transcription_result["status"] == "error":
@@ -443,7 +466,7 @@ def get_transcription_via_sarvam(utterance):
         return {"transcript": ""}, None
 
     # Sarvam says 16kHz sample rate works best
-    payload_mp3 = pcm_to_mp3(utterance.audio_blob.tobytes(), sample_rate=utterance.sample_rate, output_sample_rate=16000)
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate(), output_sample_rate=16000)
 
     files = {"file": ("audio.mp3", payload_mp3, "audio/mpeg")}
 
@@ -504,7 +527,7 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
 
     # Convert PCM audio to MP3 for ElevenLabs
-    payload_mp3 = pcm_to_mp3(utterance.audio_blob.tobytes(), sample_rate=utterance.sample_rate)
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
 
     # Prepare the request for ElevenLabs speech-to-text API
     url = "https://api.elevenlabs.io/v1/speech-to-text"
@@ -550,7 +573,7 @@ def get_transcription_via_elevenlabs(utterance):
         words = list(map(lambda word: {"word": word.get("text"), "start": word.get("start"), "end": word.get("end")}, result.get("words", [])))
 
         # Format the response to match our expected schema
-        transcription = {"transcript": transcript_text, "words": words}
+        transcription = {"transcript": transcript_text, "words": words, "language": result.get("language_code", None)}
 
         return transcription, None
 

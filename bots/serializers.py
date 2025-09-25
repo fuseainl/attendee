@@ -1,7 +1,10 @@
 import base64
 import json
+import logging
 import os
 from dataclasses import asdict
+
+logger = logging.getLogger(__name__)
 
 import jsonschema
 from dateutil.relativedelta import relativedelta
@@ -15,6 +18,8 @@ from rest_framework import serializers
 
 from .automatic_leave_configuration import AutomaticLeaveConfiguration
 from .models import (
+    AsyncTranscription,
+    AsyncTranscriptionStates,
     Bot,
     BotChatMessageToOptions,
     BotEventSubTypes,
@@ -47,7 +52,8 @@ def get_openai_model_enum():
     return default_models
 
 
-from .utils import is_valid_png, meeting_type_from_url, transcription_provider_from_bot_creation_data
+from .meeting_url_utils import meeting_type_from_url, normalize_meeting_url
+from .utils import is_valid_png, transcription_provider_from_bot_creation_data
 
 # Define the schema once
 BOT_IMAGE_SCHEMA = {
@@ -67,15 +73,14 @@ class BotValidationMixin:
     """Mixin class providing meeting URL validation for serializers."""
 
     def validate_meeting_url(self, value):
-        meeting_type = meeting_type_from_url(value)
+        meeting_type, normalized_url = normalize_meeting_url(value)
         if meeting_type is None:
+            logger.error(f"Invalid meeting URL: {value}")
             raise serializers.ValidationError("Invalid meeting URL")
 
-        if meeting_type == MeetingTypes.GOOGLE_MEET:
-            if not value.startswith("https://meet.google.com/"):
-                raise serializers.ValidationError("Google Meet URL must start with https://meet.google.com/")
-
-        return value
+        if normalized_url != value:
+            logger.info(f"Normalized Meeting URL: {normalized_url} from {value}")
+        return normalized_url
 
     def validate_join_at(self, value):
         """Validate that join_at cannot be in the past."""
@@ -229,6 +234,9 @@ class BotImageSerializer(serializers.Serializer):
                     "language_detection": {"type": "boolean", "description": "Whether to automatically detect the spoken language."},
                     "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
                     "speech_model": {"type": "string", "enum": ["best", "nano", "slam-1", "universal"], "description": "The speech model to use for transcription. See AssemblyAI docs for details."},
+                    "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
+                    "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
+                    "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
                 },
                 "additionalProperties": False,
             },
@@ -307,7 +315,13 @@ class RTMPSettingsJSONField(serializers.JSONField):
                 "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
                 "enum": RecordingResolutions.values,
             },
+            "record_chat_messages_when_paused": {
+                "type": "boolean",
+                "description": "Whether to record chat messages even when the recording is paused. Defaults to false.",
+                "default": False,
+            },
         },
+        "additionalProperties": False,
         "required": [],
     }
 )
@@ -822,6 +836,9 @@ class CreateSessionMixin(serializers.Serializer):
                     "language_detection": {"type": "boolean"},
                     "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. See AssemblyAI docs for details."},
                     "speech_model": {"type": "string", "enum": ["best", "nano", "slam-1", "universal"], "description": "The speech model to use for transcription. See AssemblyAI docs for details."},
+                    "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
+                    "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
+                    "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
                 },
                 "required": [],
                 "additionalProperties": False,
@@ -1168,7 +1185,7 @@ class CreateSessionMixin(serializers.Serializer):
     recording_settings = RecordingSettingsJSONField(
         help_text="The settings for the bot's recording.",
         required=False,
-        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P},
+        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False},
     )
 
     RECORDING_SETTINGS_SCHEMA = {
@@ -1180,7 +1197,9 @@ class CreateSessionMixin(serializers.Serializer):
                 "type": "string",
                 "enum": list(RecordingResolutions.values),
             },
+            "record_chat_messages_when_paused": {"type": "boolean"},
         },
+        "additionalProperties": False,
         "required": [],
     }
 
@@ -1189,7 +1208,7 @@ class CreateSessionMixin(serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P}
+        defaults = {"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False}
 
         try:
             jsonschema.validate(instance=value, schema=self.RECORDING_SETTINGS_SCHEMA)
@@ -1713,6 +1732,14 @@ class ChatMessageSerializer(serializers.Serializer):
         return obj.timestamp * 1000
 
 
+class ParticipantSerializer(serializers.Serializer):
+    id = serializers.CharField(source="object_id")
+    name = serializers.CharField(source="full_name")
+    uuid = serializers.CharField()
+    user_uuid = serializers.CharField(allow_null=True)
+    is_host = serializers.BooleanField()
+
+
 class ParticipantEventSerializer(serializers.Serializer):
     id = serializers.CharField(source="object_id")
     participant_name = serializers.CharField(source="participant.full_name")
@@ -2002,3 +2029,22 @@ class CalendarEventSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+class AsyncTranscriptionSerializer(serializers.ModelSerializer):
+    bot_id = serializers.SerializerMethodField()
+    state = serializers.SerializerMethodField()
+    id = serializers.CharField(source="object_id")
+
+    class Meta:
+        model = AsyncTranscription
+        fields = ["bot_id", "id", "created_at", "updated_at", "state", "failure_data"]
+        read_only_fields = fields
+
+    def get_bot_id(self, obj):
+        """Return the bot's object_id from the related recording"""
+        return obj.recording.bot.object_id
+
+    def get_state(self, obj):
+        """Return the state as an API code"""
+        return AsyncTranscriptionStates.state_to_api_code(obj.state)

@@ -14,8 +14,8 @@ from django.utils import timezone
 
 from bots.bots_api_utils import delete_bot, patch_bot
 from bots.calendars_api_utils import remove_bots_from_calendar
+from bots.meeting_url_utils import meeting_type_from_url
 from bots.models import Bot, BotStates, Calendar, CalendarEvent, CalendarPlatform, CalendarStates, WebhookTriggerTypes
-from bots.utils import meeting_type_from_url
 from bots.webhook_payloads import calendar_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
@@ -311,6 +311,8 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         if error_code == "invalid_grant" or error_code == "invalid_client":
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
         if "ACCESS_TOKEN_SCOPE_INSUFFICIENT" in e.response.text:
+            raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
+        if "PERMISSION_DENIED" in e.response.text:
             raise CalendarAPIAuthenticationError(f"Google Authentication error: {e.response.json()}")
 
         return

@@ -66,6 +66,14 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
         self.assertEqual(bot.use_zoom_web_adapter(), True)
 
+    def test_create_teams_bot_with_bracket_in_the_url(self):
+        teams_url_with_trailing_carat = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ttttttttttttttttttttttcqqqqqqqqqqqqqqqqqqqqqqqqq%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-f793-49bc-1111-111111111111%22%2c%22Oid%22%3a%22216d2e11-ffff-ffff-1111-ffffffffffff%22%7d>"
+        bot, error = create_bot(data={"meeting_url": teams_url_with_trailing_carat, "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        teams_url_normalized = 'https://teams.microsoft.com/l/meetup-join/19:meeting_ttttttttttttttttttttttcqqqqqqqqqqqqqqqqqqqqqqqqq@thread.v2/0?context={"Tid":"b8291b4b-f793-49bc-1111-111111111111","Oid":"216d2e11-ffff-ffff-1111-ffffffffffff"}'
+        self.assertEqual(bot.meeting_url, teams_url_normalized)
+        self.assertIsNone(error)
+
     def test_create_bot_with_explicit_transcription_settings(self):
         """Test creating bots with explicit transcription settings for different providers and meeting types"""
 
@@ -86,7 +94,7 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot2.use_zoom_web_adapter(), True)
 
     def test_create_bot_with_image(self):
-        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meeting/123", "bot_name": "Test Bot", "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, source=BotCreationSource.API, project=self.project)
+        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot", "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNotNone(bot.recordings.first())
         self.assertIsNotNone(bot.media_requests.first())
@@ -181,10 +189,10 @@ class TestCreateBot(TestCase):
 
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
-        self.assertIsNone(bot)
-        self.assertEqual(Bot.objects.count(), 0)
-        self.assertIsNotNone(error)
-        self.assertEqual(error, {"meeting_url": ["Google Meet URL must start with https://meet.google.com/"]})
+        self.assertIsNotNone(bot)
+        self.assertEqual(Bot.objects.count(), 1)
+        self.assertIsNone(error)
+        self.assertEqual(bot.meeting_url, "https://meet.google.com/abc-defg-hij")
 
     def test_create_scheduled_bot(self):
         """Test creating a bot with join_at timestamp"""
@@ -520,12 +528,18 @@ class TestPatchBot(TestCase):
         self.assertEqual(bot.state, BotStates.SCHEDULED)
 
         # Try to patch with an invalid meeting URL (http instead of https for Google Meet)
-        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.google.com/invalid-url"})
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.google.com/xx-xx-xx"})
+
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.meeting_url, "https://meet.google.com/xx-xx-xx")
+
+        # Try to patch with an invalid meeting URL (http instead of https for Google Meet)
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.googlec.com/xx-xx-xx"})
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertIn("meeting_url", patch_error)
-        self.assertIn("Google Meet URL must start with https://meet.google.com/", str(patch_error["meeting_url"]))
+        self.assertEqual(patch_error["meeting_url"], ["Invalid meeting URL"])
 
     def test_patch_bot_with_empty_data(self):
         """Test that patching with empty data works (no changes made)."""

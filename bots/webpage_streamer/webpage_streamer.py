@@ -93,6 +93,7 @@ class WebpageStreamer:
         self.display_var_for_recording = None
         self.display = None
         self.last_keepalive_time = None
+        self.web_app = None
 
     def run(self):
         self.display_var_for_recording = os.environ.get("DISPLAY")
@@ -168,7 +169,9 @@ class WebpageStreamer:
                 self.driver.quit()
             if self.display:
                 self.display.stop()
-            logger.info("Process shutting down due to keepalive timeout")
+            if self.web_app:
+                await self.web_app.shutdown()
+            logger.info("Process shutting down")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         finally:
@@ -330,6 +333,7 @@ class WebpageStreamer:
         audio_player = MediaPlayer(audio_device, format=audio_format, options=a_opts)
 
         app = web.Application()
+        self.web_app = app
 
         # Start keepalive monitoring task
         async def init_keepalive_monitor(app):
