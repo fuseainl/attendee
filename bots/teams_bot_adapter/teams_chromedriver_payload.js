@@ -1482,6 +1482,46 @@ const wsInterceptor = new WebSocketInterceptor({
     }
 });
 
+class ReceiverManager {
+    constructor() {
+        this.receiverMap = new Set();
+        setInterval(() => {
+            this.pollReceivers();
+        }, 50);
+    }
+
+    pollReceivers() {
+        for (const receiver of this.receiverMap) {
+            const contributingSources = receiver.getContributingSources();
+            //realConsole?.log('contributingSources', contributingSources);
+
+            const currentTime = Date.now();
+            const speakingParticipants = [];
+            for (const contributingSource of contributingSources) {
+                if (currentTime - contributingSource.timestamp <= 50) {
+                    speakingParticipants.push(virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(contributingSource.source.toString()));
+                }
+            }
+
+            realConsole?.log('speakingParticipants at time', currentTime, 'are', JSON.stringify(speakingParticipants.map(participant => participant.displayName)));
+            
+            /*
+            {
+    "rtpTimestamp": 506968569,
+    "source": 414,
+    "timestamp": 1759288487277
+}
+            */
+        }
+    }
+
+    addReceiver(receiver) {
+        if (!receiver || this.receiverMap.has(receiver)) return;
+        if (!receiver?.track?.id?.includes("mainAudio")) return;
+        realConsole?.log('adding receiver', receiver);
+        this.receiverMap.add(receiver);
+    }
+}
 
 const ws = new WebSocketClient();
 window.ws = ws;
@@ -1497,6 +1537,9 @@ const dominantSpeakerManager = new DominantSpeakerManager();
 
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
+
+const receiverManager = new ReceiverManager();
+window.receiverManager = receiverManager;
 
 if (!realConsole) {
     if (document.readyState === 'complete') {
@@ -1838,6 +1881,8 @@ const handleVideoTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
     const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+
+    window.receiverManager.addReceiver(event.receiver);
     
     // Start continuous background processing of the audio queue
     const processAudioQueue = () => {
