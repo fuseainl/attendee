@@ -1482,9 +1482,75 @@ const wsInterceptor = new WebSocketInterceptor({
     }
 });
 
+class ParticipantSpeakingStateMachine {
+    constructor(participantId) {
+        this.participantId = participantId;
+        this.state = 'NOT_SPEAKING';
+        this.stateStartTime = Date.now();
+    }
+    
+    updateIsSpeaking(isSpeaking) {
+        const now = Date.now();
+        const timeInCurrentState = now - this.stateStartTime;
+        
+        switch(this.state) {
+            case 'NOT_SPEAKING':
+                if (isSpeaking) {
+                    this.state = 'STARTING_SPEECH';
+                    this.stateStartTime = now;
+                }
+                break;
+                
+            case 'STARTING_SPEECH':
+                if (isSpeaking) {
+                    if (timeInCurrentState > 600) {
+                        realConsole?.log('STARTING_SPEECH: adding caption audio time for participant', this.participantId);
+                        dominantSpeakerManager.addCaptionAudioTime(this.stateStartTime, this.participantId);
+                        this.state = 'SPEAKING';
+                        this.stateStartTime = now;
+                    }
+                } else {
+                    realConsole?.log('STARTING_SPEECH GOING TO NOT_SPEAKING for participant', this.participantId);
+                    this.state = 'NOT_SPEAKING';
+                    this.stateStartTime = now;
+                }
+                break;
+                
+            case 'SPEAKING':
+                if (!isSpeaking) {
+                    this.state = 'STOPPING_SPEECH';
+                    this.stateStartTime = now;
+                }
+                break;
+                
+            case 'STOPPING_SPEECH':
+                if (isSpeaking) {
+                    this.state = 'SPEAKING';
+                    this.stateStartTime = now;
+                } else {
+                    if (timeInCurrentState > 300) {
+                        realConsole?.log('STOPPING_SPEECH for participant', this.participantId);
+                        this.state = 'NOT_SPEAKING';
+                        this.stateStartTime = now;
+                    }
+                }
+                break;
+        }
+    }
+    
+    getState() {
+        return this.state;
+    }
+    
+    isSpeaking() {
+        return this.state === 'SPEAKING' || this.state === 'STARTING_SPEECH';
+    }
+}
+
 class ReceiverManager {
     constructor() {
         this.receiverMap = new Set();
+        this.participantSpeakingStateMachineMap = new Map();
         setInterval(() => {
             this.pollReceivers();
         }, 50);
@@ -1493,17 +1559,26 @@ class ReceiverManager {
     pollReceivers() {
         for (const receiver of this.receiverMap) {
             const contributingSources = receiver.getContributingSources();
-            //realConsole?.log('contributingSources', contributingSources);
 
             const currentTime = Date.now();
-            const speakingParticipants = [];
+            const speakingParticipantIds = [];
             for (const contributingSource of contributingSources) {
                 if (currentTime - contributingSource.timestamp <= 50) {
-                    speakingParticipants.push(virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(contributingSource.source.toString()));
+                    const speakingParticipant = virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(contributingSource.source.toString());
+                    speakingParticipantIds.push(speakingParticipant.id);
                 }
             }
 
-            realConsole?.log('speakingParticipants at time', currentTime, 'are', JSON.stringify(speakingParticipants.map(participant => participant.displayName)));
+            for (const speakingParticipantId of speakingParticipantIds) {
+                if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
+                    this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
+                }
+            }
+
+            // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
+            for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
+                participantSpeakingStateMachine.updateIsSpeaking(speakingParticipantIds.includes(participantId));
+            }
             
             /*
             {
@@ -1517,8 +1592,7 @@ class ReceiverManager {
 
     addReceiver(receiver) {
         if (!receiver || this.receiverMap.has(receiver)) return;
-        if (!receiver?.track?.id?.includes("mainAudio")) return;
-        realConsole?.log('adding receiver', receiver);
+        realConsole?.log('ReceiverManager is adding receiver', receiver);
         this.receiverMap.add(receiver);
     }
 }
@@ -1602,12 +1676,14 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
+const captureDominantSpeakerViaCaptions = true;
+
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
     // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
     // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio)
+    if (window.initialData.sendPerParticipantAudio && captureDominantSpeakerViaCaptions)
     {
         const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
         dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
