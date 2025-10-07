@@ -513,8 +513,8 @@ class ZoomBotAdapter(BotAdapter):
 
         allow_participants_to_share_screen = self.zoom_meeting_settings.get("allow_participants_to_share_screen", None)
         if allow_participants_to_share_screen is not None:
-            lock_share_result = self.meeting_sharing_controller.LockShare(allow_participants_to_share_screen)
-            logger.info(f"LockShare({allow_participants_to_share_screen}) returned {lock_share_result}")
+            lock_share_result = self.meeting_sharing_controller.LockShare(not allow_participants_to_share_screen)
+            logger.info(f"LockShare({not allow_participants_to_share_screen}) returned {lock_share_result}")
 
         allow_participants_to_chat = self.zoom_meeting_settings.get("allow_participants_to_chat", None)
         if allow_participants_to_chat is not None:
