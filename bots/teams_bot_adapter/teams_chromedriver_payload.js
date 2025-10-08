@@ -410,9 +410,23 @@ class DominantSpeakerManager {
             }
         }
         
-        // Find the speaker with the highest timestampMsOfLastStart
         if (speakersAtTimestamp.length === 0)
             return null;
+
+        if (speakersAtTimestamp.length === 1)
+            return speakersAtTimestamp[0].speakerId;
+
+        // If there were multiple speakers in this interval, we need a "tie breaker"
+
+        // If we have captions, then look at the participant for the last caption audio time
+        if (this.captionAudioTimes.length > 0)
+        {
+            const participantForLastCaptionAudioTime = this.getLastSpeakerIdForTimestampMs(timestampMs);
+            if (participantForLastCaptionAudioTime && speakersAtTimestamp.some(speaker => speaker.speakerId === participantForLastCaptionAudioTime))
+                return participantForLastCaptionAudioTime;
+        }
+
+        // Otherwise use the speaker with the highest timestampMsOfLastStart
 
         return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
     }
@@ -1580,7 +1594,7 @@ class ParticipantSpeakingStateMachine {
             dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp - 250, this.participantId);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
-            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 250, this.participantId);
+            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp, this.participantId);
         }
     }
 }
@@ -1717,14 +1731,14 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
-const captureDominantSpeakerViaCaptions = false;
+window.captureDominantSpeakerViaCaptions = true;
 
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
     // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
     // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio && captureDominantSpeakerViaCaptions)
+    if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
     {
         const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
         dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
