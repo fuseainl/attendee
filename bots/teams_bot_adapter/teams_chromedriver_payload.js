@@ -426,9 +426,11 @@ class DominantSpeakerManager {
                 return participantForLastCaptionAudioTime;
         }
 
-        // Otherwise use the speaker with the highest timestampMsOfLastStart
+        // Otherwise use the the speaker with the earliest timestampMsOfLastStart
+        return speakersAtTimestamp.reduce((min, speaker) => speaker.timestampMsOfLastStart < min.timestampMsOfLastStart ? speaker : min).speakerId;
 
-        return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
+        // Otherwise use the speaker with the highest timestampMsOfLastStart (Not using)
+        // return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
     }
 
     addSpeechIntervalStart(timestampMs, speakerId) {
