@@ -1552,86 +1552,36 @@ class ParticipantSpeakingStateMachine {
     constructor(participantId) {
         this.participantId = participantId;
         this.state = 'NOT_SPEAKING';
-        this.stateStartTime = Date.now();
-        this.recentIsSpeakingValues = [];
+        this.samples = [];
     }
-    
-    updateIsSpeaking(isSpeaking) {
-        const now = Date.now();
-        const timeInCurrentState = now - this.stateStartTime;
 
-        this.recentIsSpeakingValues.push(isSpeaking);
-        if (this.recentIsSpeakingValues.length > 10) {
-            this.recentIsSpeakingValues.shift();
+    addSample(sample) {
+        this.samples.push(sample);
+
+        if (this.samples.length > 10) {
+            this.samples.shift();
         }
-        
-        switch(this.state) {
-            case 'NOT_SPEAKING':
-                if (isSpeaking) {
-                    this.state = 'STARTING_SPEECH';
-                    this.stateStartTime = now;
-                }
-                break;
-                
-            case 'STARTING_SPEECH':
-                if (timeInCurrentState > 500)
-                {
 
-                    const nSamples = 7;
-                    const lastNSamples = this.recentIsSpeakingValues.slice(-nSamples);
-                    const majorityOfLastNSamplesWereTrue = lastNSamples.filter(sample => sample).length > nSamples / 2 + 1;
+        const lastFiveSamples = this.samples.slice(-5);
+        if (lastFiveSamples.length < 5)
+            return;
 
-
-                    if (majorityOfLastNSamplesWereTrue) {
-                        realConsole?.log('STARTING_SPEECH: adding caption audio time for participant', this.participantId);
-                        dominantSpeakerManager.addSpeechIntervalStart(this.stateStartTime - 250, this.participantId);
-                        this.state = 'SPEAKING';
-                        this.stateStartTime = now;
-                    } else {
-                        realConsole?.log('STARTING_SPEECH GOING TO NOT_SPEAKING for participant', this.participantId);
-                        this.state = 'NOT_SPEAKING';
-                        this.stateStartTime = now;
-                    }
-                }
-                break;
-                
-            case 'SPEAKING':
-                if (!isSpeaking) {
-                    this.state = 'STOPPING_SPEECH';
-                    this.stateStartTime = now;
-                }
-                break;
-                
-            case 'STOPPING_SPEECH':
-                if (timeInCurrentState > 500)
-                {
-
-                    const nSamples = 7;
-                    const lastNSamples = this.recentIsSpeakingValues.slice(-nSamples);
-                    const majorityOfLastNSamplesWereTrue = lastNSamples.filter(sample => sample).length > nSamples / 2 + 1;
-
-
-                    if (majorityOfLastNSamplesWereTrue) {
-                        realConsole?.log('STOPPING_SPEECH: staying in SPEAKING for participant', this.participantId);
-                        this.state = 'SPEAKING';
-                        this.stateStartTime = now;
-                    } else {
-                        realConsole?.log('STOPPING_SPEECH GOING TO NOT_SPEAKING for participant', this.participantId);
-                        dominantSpeakerManager.addSpeechIntervalEnd(this.stateStartTime - 250, this.participantId);
-                        this.state = 'NOT_SPEAKING';
-                        this.stateStartTime = now;
-                    }
-                }
-                break;
+        const majorityOfLastFiveSamplesWereTrue = lastFiveSamples.filter(sample => sample.isSpeaking).length > 3;
+        const previousState = this.state;
+        const firstOfLastFiveSamplesTimestamp = lastFiveSamples[0].timestamp;
+        if (majorityOfLastFiveSamplesWereTrue) {
+            this.state = 'SPEAKING';
+        } else {
+            this.state = 'NOT_SPEAKING';
         }
-    }
-    
-    getState() {
-        return this.state;
-    }
-    
-    isSpeaking() {
-        return this.state === 'SPEAKING' || this.state === 'STARTING_SPEECH';
+
+        if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
+            realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
+            dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp - 250, this.participantId);
+        } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
+            realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
+            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 250, this.participantId);
+        }
     }
 }
 
@@ -1641,7 +1591,7 @@ class ReceiverManager {
         this.participantSpeakingStateMachineMap = new Map();
         setInterval(() => {
             this.pollReceivers();
-        }, 50);
+        }, 100);
     }
 
     pollReceivers() {
@@ -1665,7 +1615,10 @@ class ReceiverManager {
 
             // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
             for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
-                participantSpeakingStateMachine.updateIsSpeaking(speakingParticipantIds.includes(participantId));
+                participantSpeakingStateMachine.addSample({
+                    isSpeaking: speakingParticipantIds.includes(participantId),
+                    timestamp: currentTime
+                });
             }
             
             /*
