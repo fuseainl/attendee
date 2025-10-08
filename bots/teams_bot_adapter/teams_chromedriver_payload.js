@@ -385,6 +385,7 @@ class DominantSpeakerManager {
         for (const [speakerId, intervals] of Object.entries(this.speechIntervalsPerParticipant)) {
             
             let isCurrentlySpeaking = false;
+            let timestampMsOfLastStart = null;
             
             // Process each interval event to determine if participant is speaking at timestampMs
             for (const interval of intervals) {
@@ -395,22 +396,25 @@ class DominantSpeakerManager {
                 
                 if (interval.type === 'start') {
                     isCurrentlySpeaking = true;
+                    timestampMsOfLastStart = interval.timestampMs;
                 } else if (interval.type === 'end') {
                     isCurrentlySpeaking = false;
                 }
             }
             
             if (isCurrentlySpeaking) {
-                speakersAtTimestamp.push(speakerId);
+                speakersAtTimestamp.push({
+                    speakerId,
+                    timestampMsOfLastStart
+                });
             }
         }
         
-        // Return the speaker only if exactly one is found, otherwise return null
-        if (speakersAtTimestamp.length === 1) {
-            return speakersAtTimestamp[0];
-        }
-        
-        return null;
+        // Find the speaker with the highest timestampMsOfLastStart
+        if (speakersAtTimestamp.length === 0)
+            return null;
+
+        return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
     }
 
     addSpeechIntervalStart(timestampMs, speakerId) {
@@ -418,6 +422,12 @@ class DominantSpeakerManager {
             this.speechIntervalsPerParticipant[speakerId] = [];
 
         this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
+
+        window.ws.sendJson({
+            type: 'SpeechStart',
+            participant_uuid: speakerId,
+            timestamp: timestampMs
+        });
     }
 
     addSpeechIntervalEnd(timestampMs, speakerId) {
@@ -425,6 +435,12 @@ class DominantSpeakerManager {
             this.speechIntervalsPerParticipant[speakerId] = [];
 
         this.speechIntervalsPerParticipant[speakerId].push({type: 'end', timestampMs: timestampMs});
+
+        window.ws.sendJson({
+            type: 'SpeechStop',
+            participant_uuid: speakerId,
+            timestamp: timestampMs
+        });
     }
 
     addCaptionAudioTime(timestampMs, speakerId) {
@@ -1558,7 +1574,7 @@ class ParticipantSpeakingStateMachine {
                 break;
                 
             case 'STARTING_SPEECH':
-                if (timeInCurrentState > 600)
+                if (timeInCurrentState > 500)
                 {
 
                     const nSamples = 7;
@@ -1587,7 +1603,7 @@ class ParticipantSpeakingStateMachine {
                 break;
                 
             case 'STOPPING_SPEECH':
-                if (timeInCurrentState > 600)
+                if (timeInCurrentState > 500)
                 {
 
                     const nSamples = 7;
