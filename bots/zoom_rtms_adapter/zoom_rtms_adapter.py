@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import struct
@@ -503,7 +504,9 @@ class ZoomRTMSAdapter(BotAdapter):
             cmd_env["VIDEO_FD"] = str(self.video_wfd)
             pass_fds.append(self.video_wfd)
 
-        cmd = ["/usr/local/bin/node", "bots/zoom_rtms_adapter/zoom_rtms_node_app/rtms_attendee.js", "--", f"--recording_file_path={recording_file_path}", f"--join_payload='{json.dumps(self.zoom_rtms)}'"]
+        # Base64 encode the join payload to avoid argument parsing issues with special characters
+        join_payload_b64 = base64.b64encode(json.dumps(self.zoom_rtms).encode('utf-8')).decode('ascii')
+        cmd = ["/usr/local/bin/node", "bots/zoom_rtms_adapter/zoom_rtms_node_app/rtms_attendee.js", "--", f"--recording_file_path={recording_file_path}", f"--join_payload={join_payload_b64}"]
 
         logger.info(f"Executing RTMS client with command: {' '.join(cmd)}")
 

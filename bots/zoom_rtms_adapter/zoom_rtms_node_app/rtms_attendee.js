@@ -19,7 +19,9 @@ const parseArgs = () => {
     } else if (arg.startsWith('--join_payload=')) {
       const payloadStr = arg.substring('--join_payload='.length);
       try {
-        result.join_payload = JSON.parse(payloadStr);
+        // Decode from base64 first
+        const decodedStr = Buffer.from(payloadStr, 'base64').toString('utf-8');
+        result.join_payload = JSON.parse(decodedStr);
       } catch (e) {
         console.error('Failed to parse join_payload as JSON:', e);
         console.error('Raw payload string:', payloadStr);
