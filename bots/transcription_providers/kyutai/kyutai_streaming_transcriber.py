@@ -22,7 +22,6 @@ class KyutaiStreamingTranscriber:
 
     Based on:
     https://github.com/kyutai-labs/delayed-streams-modeling/
-    blob/main/scripts/stt_from_mic_mlx.py
     """
 
     def __init__(self, *, server_url, sample_rate, metadata=None, interim_results=True, model=None, api_key=None, callback=None):
@@ -51,8 +50,10 @@ class KyutaiStreamingTranscriber:
 
         # Track current transcript
         self.current_transcript = []
-        # Track last utterance emission time
+        # Track last utterance emission time (wall clock)
         self.last_utterance_time = time.time()
+        # Track last word end time (audio timestamp in seconds)
+        self.last_word_end_time = 0.0
 
         # WebSocket connection
         self.ws = None
@@ -72,16 +73,13 @@ class KyutaiStreamingTranscriber:
     def _connect(self):
         """Establish WebSocket connection to Kyutai server."""
         try:
-            # Build WebSocket URL with parameters
-            ws_url = self._build_connection_url()
-
             # Add authentication header if API key is provided
             headers = {}
             if self.api_key:
                 headers["kyutai-api-key"] = self.api_key
 
             # Create WebSocket connection
-            self.ws = websocket.WebSocketApp(ws_url, header=headers, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close, on_open=self._on_open)
+            self.ws = websocket.WebSocketApp(self.server_url, header=headers, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close, on_open=self._on_open)
 
             # Start WebSocket in a separate thread
             self.receive_thread = threading.Thread(target=self._run_websocket, daemon=True)
@@ -94,26 +92,13 @@ class KyutaiStreamingTranscriber:
 
             if not self.connected:
                 logger.error("Failed to connect to Kyutai server within timeout")
-            else:
-                logger.info(f"Connected to Kyutai server at {self.server_url}")
 
         except Exception as e:
             logger.error(f"Error connecting to Kyutai server: {e}")
 
-    def _build_connection_url(self):
-        """Build WebSocket URL with query parameters."""
-        # If URL doesn't already have a path, add it
-        if "/api/asr-streaming" not in self.server_url:
-            base_url = self.server_url.rstrip("/")
-            return f"{base_url}/api/asr-streaming"
-        return self.server_url
-
     def _run_websocket(self):
         """Run WebSocket connection in separate thread."""
         try:
-            # Enable trace for debugging
-            # websocket.enableTrace(True)
-
             # Run forever with ping/pong keepalive
             # The server may close if it doesn't receive data for a while
             self.ws.run_forever(
@@ -129,10 +114,6 @@ class KyutaiStreamingTranscriber:
         """Handle WebSocket connection opened."""
         self.connected = True
         logger.info("🔌 Kyutai WebSocket connection opened")
-
-        # Log thread status
-        if self.receive_thread:
-            logger.info(f"   Receive thread alive: {self.receive_thread.is_alive()}")
 
     def _on_message(self, ws, message):
         """
@@ -155,15 +136,19 @@ class KyutaiStreamingTranscriber:
                 text = data.get("text", "")
                 start_time = data.get("start_time", 0.0)
 
+                # Check if there's a significant gap in audio timestamps
+                # If the new word starts >1s after the last word ended,
+                # emit the previous utterance first
+                if self.current_transcript and self.last_word_end_time > 0 and start_time - self.last_word_end_time > 1.0:
+                    logger.info(f"Kyutai: Detected {start_time - self.last_word_end_time:.2f}s " f"silence, emitting previous utterance")
+                    self._emit_current_utterance()
+
                 # Update last utterance time - we just received a word
                 self.last_utterance_time = time.time()
 
                 if text:
                     # Add to current transcript
                     self.current_transcript.append({"text": text, "timestamp": [start_time, start_time]})
-
-                    # DEBUG: Log each word as it arrives
-                    logger.info(f"🎤 Kyutai word received: '{text}' " f"at {start_time:.2f}s")
 
             elif msg_type == "EndWord":
                 # Update the end time of the last word
@@ -173,13 +158,11 @@ class KyutaiStreamingTranscriber:
 
                     # Log final word with timing
                     word_data = self.current_transcript[-1]
-                    logger.info(f"✅ Kyutai word finalized: '{word_data['text']}' " f"[{word_data['timestamp'][0]:.2f}s - " f"{word_data['timestamp'][1]:.2f}s]")
+                    logger.info(f"Kyutai word finalized: '{word_data['text']}' " f"[{word_data['timestamp'][0]:.2f}s - " f"{word_data['timestamp'][1]:.2f}s]")
 
-                    # DEBUG: Show accumulated transcript every 5 words
-                    if len(self.current_transcript) % 5 == 0:
-                        full_text = " ".join([w["text"] for w in self.current_transcript])
-                        word_count = len(self.current_transcript)
-                        logger.info(f"📝 Kyutai transcript so far " f"({word_count} words): {full_text}")
+                    # Check if there's a pause after this word that indicates
+                    # end of utterance (we'll detect on next Step)
+                    self.last_word_end_time = stop_time
 
             elif msg_type == "Step":
                 # Server processed a step
@@ -191,6 +174,9 @@ class KyutaiStreamingTranscriber:
                 logger.info("Kyutai: End of stream marker received")
                 # Emit any remaining transcript
                 self._emit_current_utterance()
+
+            elif msg_type == "Ready":
+                pass
 
             else:
                 logger.warning(f"Unknown Kyutai message type: {msg_type}")
@@ -229,21 +215,11 @@ class KyutaiStreamingTranscriber:
             return
 
         try:
-            # Convert to numpy array if needed
-            if isinstance(audio_data, bytes):
-                # Convert int16 bytes to numpy array
-                audio_samples = np.frombuffer(audio_data, dtype=np.int16)
-            elif isinstance(audio_data, np.ndarray):
-                audio_samples = audio_data
-            else:
-                logger.error(f"Unsupported audio data type: {type(audio_data)}")
-                return
+            # Convert int16 bytes to numpy array
+            audio_samples = np.frombuffer(audio_data, dtype=np.int16)
 
             # Convert int16 to float32 (normalize to [-1.0, 1.0])
-            if audio_samples.dtype == np.int16:
-                audio_float = audio_samples.astype(np.float32) / 32768.0
-            else:
-                audio_float = audio_samples.astype(np.float32)
+            audio_float = audio_samples.astype(np.float32) / 32768.0
 
             # Ensure we have valid audio data
             if len(audio_float) == 0:
@@ -287,11 +263,19 @@ class KyutaiStreamingTranscriber:
         return self.current_transcript.copy()
 
     def _check_and_emit_utterance(self):
-        """Check if enough time has passed to emit current utterance."""
+        """
+        Check if there's a natural pause in speech to emit utterance.
+
+        We emit when there's been > 0.5 seconds of audio silence
+        (detected by comparing current audio time vs last word end time).
+        """
+        if not self.current_transcript:
+            return
+
+        # For now, use wall-clock time as a proxy
+        # TODO: Track current audio timestamp from server
         current_time = time.time()
-        # If we have transcript and it's been > 1 second since last word
-        # emit as an utterance
-        if self.current_transcript and (current_time - self.last_utterance_time) > 1.0:
+        if (current_time - self.last_utterance_time) > 0.5:
             self._emit_current_utterance()
 
     def _emit_current_utterance(self):
@@ -299,8 +283,20 @@ class KyutaiStreamingTranscriber:
         if self.current_transcript and self.callback:
             # Convert list of word objects to text
             transcript_text = " ".join([w["text"] for w in self.current_transcript])
-            logger.info(f"Kyutai: Emitting utterance: {transcript_text}")
-            self.callback(transcript_text)
+
+            # Compute duration from word timestamps
+            # timestamp is [start_time, end_time] in seconds
+            start_time = self.current_transcript[0]["timestamp"][0]
+            end_time = self.current_transcript[-1]["timestamp"][1]
+            duration_seconds = end_time - start_time
+            duration_ms = int(duration_seconds * 1000)
+
+            logger.info(f"Kyutai: Emitting utterance ({duration_ms}ms): " f"{transcript_text}")
+
+            # Call callback with duration in metadata
+            metadata = {"duration_ms": duration_ms}
+            self.callback(transcript_text, metadata)
+
             # Clear transcript for next utterance
             self.current_transcript = []
             self.last_utterance_time = time.time()
@@ -313,21 +309,6 @@ class KyutaiStreamingTranscriber:
 
         # Emit any remaining transcript before closing
         self._emit_current_utterance()
-
-        # DEBUG: Show final complete transcript
-        if self.current_transcript:
-            full_text = " ".join([w["text"] for w in self.current_transcript])
-            word_count = len(self.current_transcript)
-            total_duration = self.current_transcript[-1]["timestamp"][1] if self.current_transcript else 0.0
-            logger.info("=" * 80)
-            logger.info("🎬 KYUTAI FINAL TRANSCRIPT")
-            logger.info(f"   Words: {word_count}")
-            logger.info(f"   Duration: {total_duration:.2f}s")
-            logger.info(f"   Text: {full_text}")
-            logger.info("=" * 80)
-        else:
-            logger.warning("⚠️  No transcript collected from Kyutai")
-
         self.should_stop = True
 
         try:
