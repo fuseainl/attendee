@@ -82,6 +82,11 @@ class PerParticipantStreamingAudioInputManager:
             server_url = kyutai_credentials.get("server_url", "ws://127.0.0.1:8012/api/asr-streaming")
             api_key = kyutai_credentials.get("api_key", None)
 
+        # Use "public_token" as default if no API key is provided
+        # This matches the default behavior of the reference implementation
+        if not api_key:
+            api_key = "public_token"
+
         return server_url, api_key
 
     def _create_utterance_callback(self, speaker_id, metadata):
@@ -196,22 +201,13 @@ class PerParticipantStreamingAudioInputManager:
 
     def find_or_create_streaming_transcriber_for_speaker(self, speaker_id):
         if speaker_id not in self.streaming_transcribers:
-            try:
-                metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
-                logger.info(f"Creating new transcriber for speaker {speaker_id}")
-                transcriber = self.create_streaming_transcriber(speaker_id, metadata)
-
-                # Only add if successfully created and connected
-                if transcriber:
-                    self.streaming_transcribers[speaker_id] = transcriber
-                    logger.info(f"✅ Transcriber created for speaker {speaker_id}")
-                else:
-                    logger.error(f"❌ Failed to create transcriber for " f"speaker {speaker_id}")
-                    return None
-            except Exception as e:
-                logger.error(f"❌ Exception creating transcriber for " f"speaker {speaker_id}: {e}")
-                return None
-        return self.streaming_transcribers.get(speaker_id)
+            metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
+            logger.info(f"Creating new transcriber for speaker {speaker_id}")
+            self.streaming_transcribers[speaker_id] = self.create_streaming_transcriber(speaker_id, metadata)
+            # Initialize the last audio time when creating transcriber
+            # This prevents KeyError and immediate shutdown for new speakers
+            self.last_nonsilent_audio_time[speaker_id] = time.time()
+        return self.streaming_transcribers[speaker_id]
 
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
         # Check if we have credentials for the transcription provider

@@ -102,7 +102,6 @@ class KyutaiStreamingTranscriber:
 
     def _build_connection_url(self):
         """Build WebSocket URL with query parameters."""
-        # MLX server expects /api/asr-streaming path
         # If URL doesn't already have a path, add it
         if "/api/asr-streaming" not in self.server_url:
             base_url = self.server_url.rstrip("/")
@@ -219,18 +218,14 @@ class KyutaiStreamingTranscriber:
 
     def send(self, audio_data):
         """
-        Send audio data to Kyutai server for transcription.
+        Send audio data to the Kyutai server.
 
         Args:
-            audio_data: Raw audio bytes (int16 PCM format) or numpy array
+            audio_data: Audio data as bytes (int16 PCM) or numpy array
         """
-        # Check thread status for logging only - don't reconnect!
-        if self.receive_thread and not self.receive_thread.is_alive():
-            logger.error("⚠️  Receive thread died!")
-
-        if not self.connected or self.should_stop:
-            thread_status = self.receive_thread.is_alive() if self.receive_thread else "None"
-            logger.warning(f"Cannot send audio: connected={self.connected}, " f"should_stop={self.should_stop}, " f"thread_alive={thread_status}")
+        if not self.connected or self.should_stop or not self.receive_thread.is_alive():
+            # Silently drop audio during shutdown - this is expected behavior
+            # Audio may still be queued from the meeting adapter while we're closing
             return
 
         try:
@@ -241,8 +236,7 @@ class KyutaiStreamingTranscriber:
             elif isinstance(audio_data, np.ndarray):
                 audio_samples = audio_data
             else:
-                audio_type = type(audio_data)
-                logger.error(f"Unsupported audio data type: {audio_type}")
+                logger.error(f"Unsupported audio data type: {type(audio_data)}")
                 return
 
             # Convert int16 to float32 (normalize to [-1.0, 1.0])
@@ -256,44 +250,15 @@ class KyutaiStreamingTranscriber:
                 logger.warning("Empty audio chunk, skipping")
                 return
 
-            # Pack audio message using MessagePack
-            # The MLX server expects: {"type": "Audio", "pcm": [f1, f2, ...]}
-            # Convert to Python list of native Python floats (not numpy types!)
-            # This matches the working microphone client pattern
+            # Convert to Python list of native Python floats
             pcm_list = [float(x) for x in audio_float]
 
-            if not isinstance(pcm_list, list) or len(pcm_list) == 0:
-                pcm_len = len(pcm_list) if isinstance(pcm_list, list) else "N/A"
-                logger.warning(f"Invalid PCM data: type={type(pcm_list)}, len={pcm_len}")
-                return
-
-            # Verify all elements are floats
-            if not all(isinstance(x, (float, int)) for x in pcm_list[:5]):
-                logger.error(f"PCM list contains non-numeric data: " f"{[type(x) for x in pcm_list[:5]]}")
-                return
-
-            # Log audio amplitude to detect speech vs silence (commented out)
-            # max_amplitude = max(abs(x) for x in pcm_list)
-            # if max_amplitude > 0.01:  # Speech detected (> 1% amplitude)
-            #     logger.info(
-            #         f"🎤 SPEECH detected: max_amplitude={max_amplitude:.4f}"
-            #     )
-            # elif max_amplitude > 0.001:  # Low volume
-            #     logger.debug(
-            #         f"Low audio: max_amplitude={max_amplitude:.6f}"
-            #     )
-            # Silent audio (< 0.001) is not logged to reduce noise
-
-            # Pack with MessagePack settings that match the working mic client
-            # MUST use: use_bin_type=True, use_single_float=True
+            # Pack with MessagePack
             message = msgpack.packb({"type": "Audio", "pcm": pcm_list}, use_bin_type=True, use_single_float=True)
 
-            # Send as BINARY WebSocket frame (CRITICAL!)
-            # The server expects binary frames for MessagePack data
+            # Send as BINARY WebSocket frame
             self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
             self.last_send_time = time.time()
-
-            logger.debug("Message sent successfully")
 
         except Exception as e:
             logger.error(f"Error sending audio to Kyutai: {e}")
@@ -324,9 +289,9 @@ class KyutaiStreamingTranscriber:
     def _check_and_emit_utterance(self):
         """Check if enough time has passed to emit current utterance."""
         current_time = time.time()
-        # If we have transcript and it's been > 2 seconds since last word
+        # If we have transcript and it's been > 1 second since last word
         # emit as an utterance
-        if self.current_transcript and (current_time - self.last_utterance_time) > 2.0:
+        if self.current_transcript and (current_time - self.last_utterance_time) > 1.0:
             self._emit_current_utterance()
 
     def _emit_current_utterance(self):
