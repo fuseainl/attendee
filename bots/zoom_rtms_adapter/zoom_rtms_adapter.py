@@ -532,8 +532,9 @@ class ZoomRTMSAdapter(BotAdapter):
                 os.close(self.video_wfd)
                 self.video_wfd = None
 
-            # Set up stdout monitoring
+            # Set up stdout and stderr monitoring
             self.setup_stdout_monitoring()
+            self.setup_stderr_monitoring()
 
             # Start pipe readers right away; they will block until Node opens pipes
             self._start_fd_readers()
@@ -601,6 +602,56 @@ class ZoomRTMSAdapter(BotAdapter):
         logger.info(f"RTMS stdout: {data}")
         if data.startswith("rtmsdata."):
             self.handle_rtms_json_message(data[9:])
+
+    def setup_stderr_monitoring(self):
+        """Set up GLib IO watch to monitor stderr from the RTMS process."""
+        if not self.rtms_process or not self.rtms_process.stderr:
+            logger.warning("No stderr available to monitor")
+            return
+
+        # Get the file descriptor for stderr
+        stderr_fd = self.rtms_process.stderr.fileno()
+
+        # Set up GLib IO watch
+        self.stderr_watch_id = GLib.io_add_watch(stderr_fd, GLib.IO_IN | GLib.IO_HUP, self._on_stderr_data_available)
+        logger.info("Set up stderr monitoring with GLib IO watch")
+
+    def _on_stderr_data_available(self, fd, condition):
+        """Callback called when stderr data is available."""
+        if condition & GLib.IO_HUP:
+            # Process has closed stderr
+            logger.info("RTMS process stderr closed")
+            return False  # Remove the watch
+
+        if condition & GLib.IO_IN:
+            try:
+                # Read a line from stderr
+                line = self.rtms_process.stderr.readline()
+                if line:
+                    # Remove trailing newline and call the callback
+                    data = line.rstrip("\n")
+                    logger.debug(f"Read from RTMS stderr: {data}")
+                    # Handle stderr data internally
+                    self.on_stderr_data_received(data)
+                else:
+                    # EOF reached
+                    logger.info("RTMS process stderr EOF")
+                    return False  # Remove the watch
+            except Exception as e:
+                logger.error(f"Error reading stderr: {e}")
+                return False  # Remove the watch
+
+        return True  # Continue watching
+
+    def on_stderr_data_received(self, data):
+        """
+        Handle stderr data received from the RTMS process.
+        Override this method or modify it to handle stderr data as needed.
+
+        Args:
+            data (str): The stderr line received from the RTMS process
+        """
+        logger.error(f"RTMS stderr: {data}")
 
     def get_participant(self, participant_id):
         return self._participant_cache.get(participant_id)
