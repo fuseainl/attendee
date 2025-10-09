@@ -391,6 +391,9 @@ class TranscriptionSettings:
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
 
+    def kyutai_model(self):
+        return self._settings.get("kyutai", {}).get("model", None)
+
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
 
@@ -1518,7 +1521,9 @@ class TranscriptionProviders(models.IntegerChoices):
     OPENAI = 4, "OpenAI"
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
+
     ELEVENLABS = 7, "ElevenLabs"
+    KYUTAI = 8, "Kyutai"
 
 
 from storages.backends.s3boto3 import S3Boto3Storage
@@ -1952,6 +1957,7 @@ class Credentials(models.Model):
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
+        KYUTAI = 11, "Kyutai"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
