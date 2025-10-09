@@ -3,7 +3,6 @@ import queue
 import sys
 import threading
 import time
-import traceback
 
 import msgpack
 import numpy as np
@@ -104,11 +103,10 @@ class KyutaiStreamingTranscriber:
             self.ws.run_forever(
                 ping_interval=20,  # Send ping every 20 seconds
                 ping_timeout=10,  # Timeout if no pong within 10 seconds
+                skip_utf8_validation=True,  # Binary frames only, skip validation
             )
         except Exception as e:
-            logger.error(f"WebSocket run error: {e}")
-
-            logger.error(traceback.format_exc())
+            logger.error(f"WebSocket run error: {e}", exc_info=True)
 
     def _on_open(self, ws):
         """Handle WebSocket connection opened."""
@@ -207,7 +205,7 @@ class KyutaiStreamingTranscriber:
         Send audio data to the Kyutai server.
 
         Args:
-            audio_data: Audio data as bytes (int16 PCM) or numpy array
+            audio_data: Audio data as bytes (int16 PCM)
         """
         if not self.connected or self.should_stop or not self.receive_thread.is_alive():
             # Silently drop audio during shutdown - this is expected behavior
@@ -215,19 +213,15 @@ class KyutaiStreamingTranscriber:
             return
 
         try:
-            # Convert int16 bytes to numpy array
+            # Convert int16 bytes to numpy array (zero-copy view)
             audio_samples = np.frombuffer(audio_data, dtype=np.int16)
 
             # Convert int16 to float32 (normalize to [-1.0, 1.0])
+            # Using astype creates a copy, but this is necessary for type conversion
             audio_float = audio_samples.astype(np.float32) / 32768.0
 
-            # Ensure we have valid audio data
-            if len(audio_float) == 0:
-                logger.warning("Empty audio chunk, skipping")
-                return
-
-            # Convert to Python list of native Python floats
-            pcm_list = [float(x) for x in audio_float]
+            # Convert to Python list (use .tolist() for performance)
+            pcm_list = audio_float.tolist()
 
             # Pack with MessagePack
             message = msgpack.packb({"type": "Audio", "pcm": pcm_list}, use_bin_type=True, use_single_float=True)
@@ -237,10 +231,7 @@ class KyutaiStreamingTranscriber:
             self.last_send_time = time.time()
 
         except Exception as e:
-            logger.error(f"Error sending audio to Kyutai: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
+            logger.error(f"Error sending audio to Kyutai: {e}", exc_info=True)
 
     def get_transcript_text(self):
         """
