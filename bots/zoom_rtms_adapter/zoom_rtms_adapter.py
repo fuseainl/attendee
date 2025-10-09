@@ -515,8 +515,8 @@ class ZoomRTMSAdapter(BotAdapter):
             process = subprocess.Popen(
                 cmd,
                 env=cmd_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                #stdout=subprocess.PIPE,
+                #stderr=subprocess.PIPE,
                 stdin=subprocess.PIPE,
                 text=True,
                 bufsize=1,  # Line buffered
@@ -536,8 +536,8 @@ class ZoomRTMSAdapter(BotAdapter):
                 self.video_wfd = None
 
             # Set up stdout and stderr monitoring
-            self.setup_stdout_monitoring()
-            self.setup_stderr_monitoring()
+            #self.setup_stdout_monitoring()
+            #self.setup_stderr_monitoring()
 
             # Start pipe readers right away; they will block until Node opens pipes
             self._start_fd_readers()

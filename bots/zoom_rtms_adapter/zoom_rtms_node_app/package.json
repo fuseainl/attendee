@@ -8,7 +8,8 @@
       "fetch": "npm --prefix node_modules/@zoom/rtms run fetch",
       "start": "node --env-file=.env rtms_attendee.js"
     },
-    "dependencies": {
-      "@zoom/rtms": "^0.0.2"
-    }
+  "dependencies": {
+    "@zoom/rtms": "^0.0.2",
+    "ws": "^8.18.0"
+  }
   }
