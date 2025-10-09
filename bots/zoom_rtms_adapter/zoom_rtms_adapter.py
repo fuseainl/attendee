@@ -503,7 +503,7 @@ class ZoomRTMSAdapter(BotAdapter):
             cmd_env["VIDEO_FD"] = str(self.video_wfd)
             pass_fds.append(self.video_wfd)
 
-        cmd = ["/usr/local/bin/node", "bots/zoom_rtms_adapter/zoom_rtms_node_app/rtms_attendee.js", "--", f"--recording_file_path={recording_file_path}", f"--join_payload={json.dumps(self.zoom_rtms)}"]
+        cmd = ["/usr/local/bin/node", "bots/zoom_rtms_adapter/zoom_rtms_node_app/rtms_attendee.js", "--", f"--recording_file_path={recording_file_path}", f"--join_payload='{json.dumps(self.zoom_rtms)}'"]
 
         logger.info(f"Executing RTMS client with command: {' '.join(cmd)}")
 
