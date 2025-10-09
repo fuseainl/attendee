@@ -146,12 +146,12 @@ class BotPodCreator:
                             # environment variables for the bot, pull from the same secrets the webserver can access
                             client.V1EnvFromSource(
                                 config_map_ref=client.V1ConfigMapEnvSource(
-                                    name="env"
+                                    name=os.getenv("BOT_POD_CONFIG_MAP_NAME", "env")
                                 )
                             ),
                             client.V1EnvFromSource(
                                 secret_ref=client.V1SecretEnvSource(
-                                    name="app-secrets"
+                                    name=os.getenv("BOT_POD_SECRETS_NAME", "app-secrets")
                                 )
                             )
                         ],
@@ -181,7 +181,7 @@ class BotPodCreator:
         
         return [
             client.V1LocalObjectReference(
-                name="regcred"
+                name=os.getenv("BOT_POD_IMAGE_PULL_SECRET_NAME", "regcred")
             )
         ]
 
