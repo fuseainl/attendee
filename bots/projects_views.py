@@ -249,6 +249,17 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.KYUTAI:
+                credentials_data = {
+                    "server_url": request.POST.get("server_url"),
+                }
+                # Only include api_key if it's provided
+                api_key = request.POST.get("api_key")
+                if api_key:
+                    credentials_data["api_key"] = api_key
+
+                if not credentials_data.get("server_url"):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
@@ -288,6 +299,8 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return render(request, "projects/partials/sarvam_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.ELEVENLABS:
                 return render(request, "projects/partials/elevenlabs_credentials.html", context)
+            elif credential.credential_type == Credentials.CredentialTypes.KYUTAI:
+                return render(request, "projects/partials/kyutai_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 return render(request, "projects/partials/google_tts_credentials.html", context)
             elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
@@ -322,6 +335,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         elevenlabs_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
 
+        kyutai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.KYUTAI).first()
+
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
@@ -345,6 +360,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
                 "elevenlabs_credentials": elevenlabs_credentials.get_credentials() if elevenlabs_credentials else None,
                 "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
+                "kyutai_credentials": kyutai_credentials.get_credentials() if kyutai_credentials else None,
+                "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
