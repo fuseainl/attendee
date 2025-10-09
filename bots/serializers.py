@@ -363,6 +363,21 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": ["model_id"],
             "additionalProperties": False,
         },
+        "kyutai": {
+            "type": "object",
+            "properties": {
+                "server_url": {
+                    "type": "string",
+                    "description": ("The WebSocket URL of the Kyutai STT server " "(e.g., 'wss://your-domain.com/api/asr-streaming')." "Must start with ws:// or wss://"),
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": ("Optional API key for authenticating with the " "Kyutai server. If not provided, no authentication " "will be used."),
+                },
+            },
+            "required": ["server_url"],
+            "additionalProperties": False,
+        },
     },
     "required": [],
     "additionalProperties": False,
