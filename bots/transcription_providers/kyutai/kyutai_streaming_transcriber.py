@@ -50,6 +50,7 @@ class KyutaiStreamingTranscriber:
         # Track current transcript
         self.current_transcript = []
         # Track last utterance emission time (wall clock)
+        # Used to compute duration between utterances
         self.last_utterance_time = time.time()
         # Track last word end time (audio timestamp in seconds)
         self.last_word_end_time = 0.0
@@ -217,15 +218,14 @@ class KyutaiStreamingTranscriber:
             audio_samples = np.frombuffer(audio_data, dtype=np.int16)
 
             # Convert int16 to float32 (normalize to [-1.0, 1.0])
-            # This creates a copy, which is necessary for type conversion
+            # Using astype creates a copy, but this is necessary for type conversion
             audio_float = audio_samples.astype(np.float32) / 32768.0
 
-            # Pack with MessagePack (matching Kyutai reference implementation)
-            message = msgpack.packb(
-                {"type": "Audio", "pcm": audio_float.tolist()},
-                use_bin_type=True,
-                use_single_float=True,
-            )
+            # Convert to Python list (use .tolist() for performance)
+            pcm_list = audio_float.tolist()
+
+            # Pack with MessagePack
+            message = msgpack.packb({"type": "Audio", "pcm": pcm_list}, use_bin_type=True, use_single_float=True)
 
             # Send as BINARY WebSocket frame
             self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
@@ -265,7 +265,6 @@ class KyutaiStreamingTranscriber:
             return
 
         # For now, use wall-clock time as a proxy
-        # TODO: Track current audio timestamp from server
         current_time = time.time()
         if (current_time - self.last_utterance_time) > 0.5:
             self._emit_current_utterance()
@@ -276,11 +275,11 @@ class KyutaiStreamingTranscriber:
             # Convert list of word objects to text
             transcript_text = " ".join([w["text"] for w in self.current_transcript])
 
-            # Compute duration from word timestamps
-            # timestamp is [start_time, end_time] in seconds
-            start_time = self.current_transcript[0]["timestamp"][0]
-            end_time = self.current_transcript[-1]["timestamp"][1]
-            duration_seconds = end_time - start_time
+            # Compute duration as time since last utterance emission
+            # This represents the time between utterances, which includes
+            # speaking time, processing latency, and network delays
+            current_time = time.time()
+            duration_seconds = current_time - self.last_utterance_time
             duration_ms = int(duration_seconds * 1000)
 
             logger.info(f"Kyutai: Emitting utterance ({duration_ms}ms): " f"{transcript_text}")
@@ -291,7 +290,8 @@ class KyutaiStreamingTranscriber:
 
             # Clear transcript for next utterance
             self.current_transcript = []
-            self.last_utterance_time = time.time()
+            # Update last utterance time to now for next duration calculation
+            self.last_utterance_time = current_time
 
     def finish(self):
         """

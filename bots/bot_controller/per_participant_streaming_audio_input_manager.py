@@ -100,14 +100,11 @@ class PerParticipantStreamingAudioInputManager:
             )
         elif self.transcription_provider == TranscriptionProviders.KYUTAI:
             # Create callback that delegates to the utterance handler
-            # Kyutai callback receives transcript_text and optional metadata
             def kyutai_callback(transcript_text, transcriber_metadata=None):
-                # Merge transcriber metadata (e.g., duration_ms) with participant metadata
-                combined_metadata = {**metadata}
-                if transcriber_metadata:
-                    combined_metadata.update(transcriber_metadata)
+                # Extract duration_ms from transcriber metadata
+                duration_ms = transcriber_metadata.get("duration_ms", 0) if transcriber_metadata else 0
 
-                self.utterance_handler.handle_utterance(speaker_id=speaker_id, transcript_text=transcript_text, metadata=combined_metadata)
+                self.utterance_handler.handle_utterance(speaker_id=speaker_id, transcript_text=transcript_text, metadata=metadata, duration_ms=duration_ms)
 
             return KyutaiStreamingTranscriber(
                 server_url=self.kyutai_server_url,

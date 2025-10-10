@@ -33,7 +33,7 @@ class UtteranceHandler(ABC):
     """
 
     @abstractmethod
-    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None):
+    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None, duration_ms: int = 0):
         """
         Handle a completed utterance.
 
@@ -41,7 +41,8 @@ class UtteranceHandler(ABC):
             speaker_id: Unique identifier for the speaker
             transcript_text: The transcribed text
             metadata: Optional metadata about the utterance
-                     (timestamps, confidence, etc.)
+                     (participant info, timestamps, confidence, etc.)
+            duration_ms: Duration of the utterance in milliseconds
         """
         pass
 
@@ -67,7 +68,7 @@ class DefaultUtteranceHandler(UtteranceHandler):
         self.get_participant_callback = get_participant_callback
         self.sample_rate = sample_rate
 
-    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None):
+    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None, duration_ms: int = 0):
         """Save utterance to database and trigger webhook."""
         try:
             # Get participant info
@@ -109,7 +110,7 @@ class DefaultUtteranceHandler(UtteranceHandler):
                     "participant": participant,
                     "transcription": {"transcript": transcript_text},
                     "timestamp_ms": int(time.time() * 1000),
-                    "duration_ms": metadata["duration_ms"],
+                    "duration_ms": duration_ms,
                     "sample_rate": self.sample_rate,
                 },
             )
@@ -135,11 +136,13 @@ class LoggingUtteranceHandler(UtteranceHandler):
     Useful for debugging, testing, or read-only transcription scenarios.
     """
 
-    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None):
+    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None, duration_ms: int = 0):
         """Log the utterance."""
         logger.info(f"📝 Utterance from speaker {speaker_id}: {transcript_text}")
         if metadata:
             logger.debug(f"   Metadata: {metadata}")
+        if duration_ms:
+            logger.debug(f"   Duration: {duration_ms}ms")
 
 
 class CompositeUtteranceHandler(UtteranceHandler):
@@ -166,11 +169,11 @@ class CompositeUtteranceHandler(UtteranceHandler):
         """
         self.handlers = handlers
 
-    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None):
+    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None, duration_ms: int = 0):
         """Call all handlers in sequence."""
         for handler in self.handlers:
             try:
-                handler.handle_utterance(speaker_id, transcript_text, metadata)
+                handler.handle_utterance(speaker_id, transcript_text, metadata, duration_ms)
             except Exception as e:
                 # Log but continue to next handler
                 logger.error(f"Error in {handler.__class__.__name__}: {e}", exc_info=True)
@@ -184,6 +187,6 @@ class NoOpUtteranceHandler(UtteranceHandler):
     utterances should not be saved.
     """
 
-    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None):
+    def handle_utterance(self, speaker_id: int, transcript_text: str, metadata: Optional[Dict[str, Any]] = None, duration_ms: int = 0):
         """Do nothing."""
         pass
