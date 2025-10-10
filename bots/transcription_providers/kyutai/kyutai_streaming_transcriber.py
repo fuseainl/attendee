@@ -1,5 +1,5 @@
 import logging
-import queue
+import socket
 import sys
 import threading
 import time
@@ -59,9 +59,6 @@ class KyutaiStreamingTranscriber:
         self.connected = False
         self.should_stop = False
 
-        # Audio buffer for chunking
-        self.audio_buffer = queue.Queue()
-
         # Threading for async operations
         self.receive_thread = None
         self.send_thread = None
@@ -77,7 +74,7 @@ class KyutaiStreamingTranscriber:
             if self.api_key:
                 headers["kyutai-api-key"] = self.api_key
 
-            # Create WebSocket connection
+            # Create WebSocket connection with low-latency options
             self.ws = websocket.WebSocketApp(self.server_url, header=headers, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close, on_open=self._on_open)
 
             # Start WebSocket in a separate thread
@@ -103,7 +100,10 @@ class KyutaiStreamingTranscriber:
             self.ws.run_forever(
                 ping_interval=20,  # Send ping every 20 seconds
                 ping_timeout=10,  # Timeout if no pong within 10 seconds
-                skip_utf8_validation=True,  # Binary frames only, skip validation
+                skip_utf8_validation=True,  # Binary frames, skip validation
+                sockopt=(
+                    (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),  # Disable Nagle
+                ),
             )
         except Exception as e:
             logger.error(f"WebSocket run error: {e}", exc_info=True)
@@ -217,14 +217,15 @@ class KyutaiStreamingTranscriber:
             audio_samples = np.frombuffer(audio_data, dtype=np.int16)
 
             # Convert int16 to float32 (normalize to [-1.0, 1.0])
-            # Using astype creates a copy, but this is necessary for type conversion
+            # This creates a copy, which is necessary for type conversion
             audio_float = audio_samples.astype(np.float32) / 32768.0
 
-            # Convert to Python list (use .tolist() for performance)
-            pcm_list = audio_float.tolist()
-
-            # Pack with MessagePack
-            message = msgpack.packb({"type": "Audio", "pcm": pcm_list}, use_bin_type=True, use_single_float=True)
+            # Pack with MessagePack (matching Kyutai reference implementation)
+            message = msgpack.packb(
+                {"type": "Audio", "pcm": audio_float.tolist()},
+                use_bin_type=True,
+                use_single_float=True,
+            )
 
             # Send as BINARY WebSocket frame
             self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
