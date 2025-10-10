@@ -142,9 +142,6 @@ class KyutaiStreamingTranscriber:
                     logger.info(f"Kyutai: Detected {start_time - self.last_word_end_time:.2f}s " f"silence, emitting previous utterance")
                     self._emit_current_utterance()
 
-                # Update last utterance time - we just received a word
-                self.last_utterance_time = time.time()
-
                 if text:
                     # Add to current transcript
                     self.current_transcript.append({"text": text, "timestamp": [start_time, start_time]})
