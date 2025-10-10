@@ -101,6 +101,13 @@ class DefaultUtteranceHandler(UtteranceHandler):
             # Create unique source UUID for this utterance
             source_uuid = f"{recording.object_id}-{uuid.uuid4()}"
 
+            # Get timestamp from metadata if provided, otherwise use current time
+            # For proper video sync, timestamp should be when speech started
+            if metadata and "timestamp_ms" in metadata:
+                timestamp_ms = metadata["timestamp_ms"]
+            else:
+                timestamp_ms = int(time.time() * 1000)
+
             # Create utterance
             utterance, _ = Utterance.objects.update_or_create(
                 recording=recording,
@@ -109,7 +116,7 @@ class DefaultUtteranceHandler(UtteranceHandler):
                     "source": Utterance.Sources.PER_PARTICIPANT_AUDIO,
                     "participant": participant,
                     "transcription": {"transcript": transcript_text},
-                    "timestamp_ms": int(time.time() * 1000),
+                    "timestamp_ms": timestamp_ms,
                     "duration_ms": duration_ms,
                     "sample_rate": self.sample_rate,
                 },

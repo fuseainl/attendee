@@ -101,10 +101,11 @@ class PerParticipantStreamingAudioInputManager:
         elif self.transcription_provider == TranscriptionProviders.KYUTAI:
             # Create callback that delegates to the utterance handler
             def kyutai_callback(transcript_text, transcriber_metadata=None):
-                # Extract duration_ms from transcriber metadata
+                # Extract duration_ms and timestamp_ms from transcriber metadata
                 duration_ms = transcriber_metadata.get("duration_ms", 0) if transcriber_metadata else 0
 
-                self.utterance_handler.handle_utterance(speaker_id=speaker_id, transcript_text=transcript_text, metadata=metadata, duration_ms=duration_ms)
+                # Pass the full transcriber metadata which includes timestamp_ms
+                self.utterance_handler.handle_utterance(speaker_id=speaker_id, transcript_text=transcript_text, metadata=transcriber_metadata, duration_ms=duration_ms)
 
             return KyutaiStreamingTranscriber(
                 server_url=self.kyutai_server_url,
