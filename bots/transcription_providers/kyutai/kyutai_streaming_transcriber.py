@@ -52,6 +52,8 @@ class KyutaiStreamingTranscriber:
         # Track when current utterance started (first word received)
         # Similar to closed captions' created_at
         self.current_utterance_start_time = None
+        # Track when last word was received (wall clock, for silence detection)
+        self.last_word_received_time = None
         # Track last word end time (audio timestamp in seconds)
         self.last_word_end_time = 0.0
 
@@ -145,6 +147,9 @@ class KyutaiStreamingTranscriber:
                 # Track start time when first word arrives
                 if not self.current_transcript:
                     self.current_utterance_start_time = time.time()
+
+                # Track when this word was received (for silence detection)
+                self.last_word_received_time = time.time()
 
                 if text:
                     # Add to current transcript
@@ -259,19 +264,20 @@ class KyutaiStreamingTranscriber:
         """
         Check if there's a natural pause in speech to emit utterance.
 
-        We emit when there's been > 0.5 seconds since the utterance started
-        (detected by comparing current time vs utterance start time).
+        We emit when there's been > 0.5 seconds since the last word
+        (silence detection - no new words for 0.5s).
         """
         if not self.current_transcript:
             return
 
-        # Check if we haven't started timing yet
-        if self.current_utterance_start_time is None:
+        # Check if we've received any words yet
+        if self.last_word_received_time is None:
             return
 
-        # Emit if utterance has been going for > 0.5 seconds
+        # Emit if there's been 0.5s silence (no new words)
         current_time = time.time()
-        if (current_time - self.current_utterance_start_time) > 0.5:
+        silence_duration = current_time - self.last_word_received_time
+        if silence_duration > 0.5:
             self._emit_current_utterance()
 
     def _emit_current_utterance(self):
@@ -305,8 +311,9 @@ class KyutaiStreamingTranscriber:
 
             # Clear transcript for next utterance
             self.current_transcript = []
-            # Reset start time for next utterance
+            # Reset timing for next utterance
             self.current_utterance_start_time = None
+            self.last_word_received_time = None
 
     def finish(self):
         """
