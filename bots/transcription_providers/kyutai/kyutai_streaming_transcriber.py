@@ -287,14 +287,20 @@ class KyutaiStreamingTranscriber:
             if self.current_utterance_start_time is not None:
                 duration_seconds = current_time - self.current_utterance_start_time
                 duration_ms = int(duration_seconds * 1000)
+                # Timestamp when utterance started (for video sync)
+                timestamp_ms = int(self.current_utterance_start_time * 1000)
             else:
                 # Fallback if start time wasn't tracked
                 duration_ms = 0
+                timestamp_ms = int(current_time * 1000)
 
             logger.info(f"Kyutai: Emitting utterance ({duration_ms}ms): " f"{transcript_text}")
 
-            # Call callback with duration in metadata
-            metadata = {"duration_ms": duration_ms}
+            # Call callback with duration and timestamp in metadata
+            metadata = {
+                "duration_ms": duration_ms,
+                "timestamp_ms": timestamp_ms,
+            }
             self.callback(transcript_text, metadata)
 
             # Clear transcript for next utterance
