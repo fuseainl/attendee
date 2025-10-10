@@ -1,3 +1,4 @@
+import audioop
 import logging
 import socket
 import sys
@@ -9,6 +10,17 @@ import numpy as np
 import websocket
 
 logger = logging.getLogger(__name__)
+
+# Kyutai server expects audio at exactly 24000 Hz
+KYUTAI_SAMPLE_RATE = 24000
+SAMPLE_WIDTH = 2  # 16-bit PCM
+CHANNELS = 1  # mono
+
+# Kyutai's semantic VAD has multiple prediction heads for different pause lengths
+# Index 0: 0.5s, Index 1: 1.0s, Index 2: 2.0s, Index 3: 3.0s
+# We use 0.5 seconds as a good balance for natural speech segmentation
+PAUSE_PREDICTION_HEAD_INDEX = 0
+PAUSE_THRESHOLD = 0.5  # Confidence threshold for detecting pauses
 
 
 class KyutaiStreamingTranscriber:
@@ -49,18 +61,24 @@ class KyutaiStreamingTranscriber:
 
         # Track current transcript
         self.current_transcript = []
-        # Track when current utterance started (first word received)
-        # Similar to closed captions' created_at
-        self.current_utterance_start_time = None
+        # Audio stream anchor: wall-clock time when server sent "Ready"
+        # This is the stable reference point for all timestamp calculations
+        self.audio_stream_anchor_time = None
         # Track when last word was received (wall clock, for silence detection)
         self.last_word_received_time = None
-        # Track last word end time (audio timestamp in seconds)
-        self.last_word_end_time = 0.0
+        # Track audio stream positions for current utterance
+        self.current_utterance_first_word_start_time = None  # From "Word"
+        self.current_utterance_last_word_stop_time = None  # From "EndWord"
+
+        # Semantic VAD tracking (from Step messages)
+        self.semantic_vad_detected_pause = False
+        self.speech_started = False  # Track if we've received any words
 
         # WebSocket connection
         self.ws = None
         self.connected = False
         self.should_stop = False
+        self.finished = False  # Track if finish() has been called
 
         # Threading for async operations
         self.receive_thread = None
@@ -136,22 +154,37 @@ class KyutaiStreamingTranscriber:
                 # Received a new word
                 text = data.get("text", "")
                 start_time = data.get("start_time", 0.0)
+                stop_time = data.get("stop_time", None)  # May be None until EndWord
 
-                # Check if there's a significant gap in audio timestamps
-                # If the new word starts >1s after the last word ended,
-                # emit the previous utterance first
-                if self.current_transcript and self.last_word_end_time > 0 and start_time - self.last_word_end_time > 1.0:
-                    logger.info(f"Kyutai: Detected {start_time - self.last_word_end_time:.2f}s " f"silence, emitting previous utterance")
-                    self._emit_current_utterance()
+                # Log detailed timing information for analysis
+                wall_clock_now = time.time()
+                audio_offset_from_anchor = None
+                if self.audio_stream_anchor_time is not None:
+                    audio_offset_from_anchor = wall_clock_now - self.audio_stream_anchor_time
 
-                # Track start time when first word arrives
-                if not self.current_transcript:
-                    self.current_utterance_start_time = time.time()
-
-                # Track when this word was received (for silence detection)
-                self.last_word_received_time = time.time()
+                logger.info(f"Kyutai Word RECEIVED: text='{text}', " f"start_time={start_time:.4f}s, " f"stop_time={stop_time}, " f"wall_clock={wall_clock_now:.4f}, " f"anchor_offset={audio_offset_from_anchor:.4f}s, " f"transcript_len={len(self.current_transcript)}, " f"has_pending_stop={self.current_utterance_last_word_stop_time is not None}")
 
                 if text:
+                    # Check if there's a significant gap in audio timestamps
+                    # If the new word starts >1s after the last word ended,
+                    # emit the previous utterance first
+                    if self.current_transcript and self.current_utterance_last_word_stop_time is not None and start_time - self.current_utterance_last_word_stop_time > 1.0:
+                        logger.info(f"Kyutai: Detected {start_time - self.current_utterance_last_word_stop_time:.4f}s " f"silence, emitting previous utterance")
+                        self._emit_current_utterance()
+
+                    # Track first word's start_time for this utterance
+                    if not self.current_transcript:
+                        self.current_utterance_first_word_start_time = start_time
+                        logger.info(f"Kyutai Word: Starting new utterance - " f"text='{text}', start_time={start_time:.4f}s, " f"anchor_time={self.audio_stream_anchor_time:.4f}")
+                    else:
+                        logger.info(f"Kyutai Word: Adding to utterance - " f"text='{text}', start_time={start_time:.4f}s, " f"has_stop_time={self.current_utterance_last_word_stop_time is not None}, " f"current_utterance_start={self.current_utterance_first_word_start_time:.4f}s")
+
+                    # Track when this word was received (wall clock, for silence detection)
+                    self.last_word_received_time = time.time()
+
+                    # Mark that speech has started (for semantic VAD)
+                    self.speech_started = True
+
                     # Add to current transcript
                     self.current_transcript.append({"text": text, "timestamp": [start_time, start_time]})
 
@@ -159,19 +192,37 @@ class KyutaiStreamingTranscriber:
                 # Update the end time of the last word
                 stop_time = data.get("stop_time", 0.0)
                 if self.current_transcript:
+                    # Calculate timing analysis
+                    wall_clock_now = time.time()
+                    word_start_time = self.current_transcript[-1]["timestamp"][0]
+                    time_since_word_received = wall_clock_now - self.last_word_received_time if self.last_word_received_time else 0
+                    audio_duration = stop_time - word_start_time
+
+                    logger.info(f"Kyutai EndWord RECEIVED: stop_time={stop_time:.4f}s, " f"word_start={word_start_time:.4f}s, " f"audio_duration={audio_duration:.4f}s, " f"time_since_word={time_since_word_received:.4f}s, " f"wall_clock={wall_clock_now:.4f}, " f"transcript_len={len(self.current_transcript)}")
+
                     self.current_transcript[-1]["timestamp"][1] = stop_time
+
+                    # Track the last word's stop time for utterance
+                    self.current_utterance_last_word_stop_time = stop_time
 
                     # Log final word with timing
                     word_data = self.current_transcript[-1]
-                    logger.info(f"Kyutai word finalized: '{word_data['text']}' " f"[{word_data['timestamp'][0]:.2f}s - " f"{word_data['timestamp'][1]:.2f}s]")
-
-                    # Check if there's a pause after this word that indicates
-                    # end of utterance (we'll detect on next Step)
-                    self.last_word_end_time = stop_time
+                    logger.info(f"Kyutai word finalized: '{word_data['text']}' " f"[{word_data['timestamp'][0]:.4f}s - " f"{word_data['timestamp'][1]:.2f}s]")
 
             elif msg_type == "Step":
-                # Server processed a step
-                # Check for silence-based utterance boundary
+                # Step messages contain semantic VAD predictions
+                # The "prs" field contains pause predictions for different lengths
+                if "prs" in data and len(data["prs"]) > PAUSE_PREDICTION_HEAD_INDEX:
+                    pause_prediction = data["prs"][PAUSE_PREDICTION_HEAD_INDEX]
+
+                    # Detect pause: high confidence prediction + speech has started
+                    if pause_prediction > PAUSE_THRESHOLD and self.speech_started:
+                        logger.info(f"Kyutai: Semantic VAD detected pause " f"(confidence={pause_prediction:.2f})")
+                        self.semantic_vad_detected_pause = True
+                        # Emit utterance on natural pause
+                        self._check_and_emit_utterance()
+
+                # Also check for time-based silence detection as fallback
                 self._check_and_emit_utterance()
 
             elif msg_type == "Marker":
@@ -181,7 +232,10 @@ class KyutaiStreamingTranscriber:
                 self._emit_current_utterance()
 
             elif msg_type == "Ready":
-                pass
+                # Server is ready - set our time anchor for timestamp calculations
+                # All audio timestamps will be relative to this moment
+                self.audio_stream_anchor_time = time.time()
+                logger.info("🎯 Kyutai: Audio stream anchor set (Ready signal)")
 
             else:
                 logger.warning(f"Unknown Kyutai message type: {msg_type}")
@@ -215,57 +269,53 @@ class KyutaiStreamingTranscriber:
             audio_data: Audio data as bytes (int16 PCM)
         """
         if not self.connected or self.should_stop or not self.receive_thread.is_alive():
-            # Silently drop audio during shutdown - this is expected behavior
-            # Audio may still be queued from the meeting adapter while we're closing
+            # Silently drop audio during shutdown - expected behavior
+            # Audio may still be queued from meeting adapter
             return
 
         try:
+            # Resample from input sample rate to Kyutai's expected 24000 Hz
+            if self.sample_rate != KYUTAI_SAMPLE_RATE:
+                audio_data, _ = audioop.ratecv(
+                    audio_data,
+                    SAMPLE_WIDTH,
+                    CHANNELS,
+                    self.sample_rate,
+                    KYUTAI_SAMPLE_RATE,
+                    None,
+                )
+
             # Convert int16 bytes to numpy array (zero-copy view)
             audio_samples = np.frombuffer(audio_data, dtype=np.int16)
 
             # Convert int16 to float32 (normalize to [-1.0, 1.0])
-            # Using astype creates a copy, but this is necessary for type conversion
             audio_float = audio_samples.astype(np.float32) / 32768.0
 
             # Convert to Python list (use .tolist() for performance)
             pcm_list = audio_float.tolist()
 
             # Pack with MessagePack
-            message = msgpack.packb({"type": "Audio", "pcm": pcm_list}, use_bin_type=True, use_single_float=True)
+            message = msgpack.packb(
+                {"type": "Audio", "pcm": pcm_list},
+                use_bin_type=True,
+                use_single_float=True,
+            )
 
             # Send as BINARY WebSocket frame
             self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
             self.last_send_time = time.time()
 
+            # Log occasionally to confirm audio is flowing
+            if int(time.time() * 10) % 50 == 0:  # Log every ~5 seconds
+                logger.info(f"Kyutai: Sent audio chunk " f"({len(audio_samples)} samples at " f"{KYUTAI_SAMPLE_RATE}Hz, {len(message)} bytes)")
+
         except Exception as e:
             logger.error(f"Error sending audio to Kyutai: {e}", exc_info=True)
-
-    def get_transcript_text(self):
-        """
-        Get the current transcript as a single string.
-
-        Returns:
-            str: Complete transcript text
-        """
-        if not self.current_transcript:
-            return ""
-        return " ".join([word["text"] for word in self.current_transcript])
-
-    def get_transcript_with_timestamps(self):
-        """
-        Get the transcript with word-level timestamps.
-
-        Returns:
-            list: List of dicts with 'text' and 'timestamp' keys
-        """
-        return self.current_transcript.copy()
 
     def _check_and_emit_utterance(self):
         """
         Check if there's a natural pause in speech to emit utterance.
-
-        We emit when there's been > 0.5 seconds since the last word
-        (silence detection - no new words for 0.5s).
+        Uses semantic VAD from Kyutai when available, falls back to timing.
         """
         if not self.current_transcript:
             return
@@ -274,11 +324,32 @@ class KyutaiStreamingTranscriber:
         if self.last_word_received_time is None:
             return
 
-        # Emit if there's been 0.5s silence (no new words)
+        # Priority 1: Semantic VAD detected a natural pause
+        if self.semantic_vad_detected_pause:
+            logger.info("Kyutai: Emitting utterance on semantic VAD pause")
+            self._emit_current_utterance()
+            self.semantic_vad_detected_pause = False  # Reset flag
+            return
+
+        # Priority 2: Time-based silence detection (fallback)
         current_time = time.time()
         silence_duration = current_time - self.last_word_received_time
-        if silence_duration > 0.5:
-            self._emit_current_utterance()
+
+        # For single-word utterances, be more patient waiting for EndWord
+        if len(self.current_transcript) == 1:
+            # Wait up to 1.0s for EndWord on single-word utterances
+            if self.current_utterance_last_word_stop_time is None:
+                if silence_duration > 1.0:
+                    logger.warning(f"Kyutai: Single-word utterance, no EndWord after " f"{silence_duration:.2f}s - emitting anyway")
+                    self._emit_current_utterance()
+            else:
+                # Have EndWord, can emit after normal 0.25s silence
+                if silence_duration > 0.25:
+                    self._emit_current_utterance()
+        else:
+            # Multi-word utterance: emit after 0.5s silence
+            if silence_duration > 0.5:
+                self._emit_current_utterance()
 
     def _emit_current_utterance(self):
         """Emit the current transcript as an utterance and clear it."""
@@ -286,21 +357,48 @@ class KyutaiStreamingTranscriber:
             # Convert list of word objects to text
             transcript_text = " ".join([w["text"] for w in self.current_transcript])
 
-            # Compute duration like closed captions:
-            # Time from first word received to emission
-            # This represents the speaking duration of this utterance
-            current_time = time.time()
-            if self.current_utterance_start_time is not None:
-                duration_seconds = current_time - self.current_utterance_start_time
-                duration_ms = int(duration_seconds * 1000)
-                # Timestamp when utterance started (for video sync)
-                timestamp_ms = int(self.current_utterance_start_time * 1000)
-            else:
-                # Fallback if start time wasn't tracked
-                duration_ms = 0
-                timestamp_ms = int(current_time * 1000)
+            # Log emission analysis
+            wall_clock_now = time.time()
+            time_since_first_word = wall_clock_now - self.last_word_received_time if self.last_word_received_time else 0
 
-            logger.info(f"Kyutai: Emitting utterance ({duration_ms}ms): " f"{transcript_text}")
+            logger.info(f"Kyutai EMIT ANALYSIS: transcript='{transcript_text}', " f"word_count={len(self.current_transcript)}, " f"time_since_last_word={time_since_first_word:.4f}s, " f"has_endword={self.current_utterance_last_word_stop_time is not None}, " f"first_word_audio={self.current_utterance_first_word_start_time:.4f}s, " f"last_word_audio={self.current_utterance_last_word_stop_time}")
+
+            # Calculate timestamp and duration using audio stream positions
+            # timestamp_ms: anchor_time + first_word_start_time
+            # duration_ms: (last_word_stop_time - first_word_start_time)
+
+            if self.audio_stream_anchor_time is not None and self.current_utterance_first_word_start_time is not None:
+                # Timestamp: When utterance started in wall-clock time
+                # anchor + audio position of first word
+                timestamp_ms = int((self.audio_stream_anchor_time + self.current_utterance_first_word_start_time) * 1000)
+
+                # Duration: Speaking duration from first to last word
+                if self.current_utterance_last_word_stop_time is not None:
+                    # Have EndWord timing - use it
+                    duration_seconds = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
+                    duration_ms = int(duration_seconds * 1000)
+                    logger.info(f"Kyutai: Using EndWord timing - " f"first={self.current_utterance_first_word_start_time:.2f}s, " f"last={self.current_utterance_last_word_stop_time:.2f}s, " f"duration={duration_ms}ms")
+                else:
+                    # EndWord not received yet (emitting due to silence timeout)
+                    # This should be rare now that we know EndWord timing is reliable
+                    # Removed word-length estimation - always use actual timing when available
+                    if self.current_transcript:
+                        last_word_start = self.current_transcript[-1]["timestamp"][0]
+                        duration_seconds = last_word_start - self.current_utterance_first_word_start_time
+
+                        duration_ms = int(duration_seconds * 1000)
+                        logger.warning(f"Kyutai: EndWord not received yet - " f"using last word start time as approximation. " f"first={self.current_utterance_first_word_start_time:.2f}s, " f"last_word_start={last_word_start:.2f}s, " f"duration_estimate={duration_ms}ms, " f"transcript_len={len(self.current_transcript)}")
+                    else:
+                        duration_ms = 0
+                        logger.warning("Kyutai: No words in transcript!")
+
+            else:
+                # Fallback if we don't have proper anchoring
+                logger.warning("Kyutai: Missing timing data - " f"anchor={self.audio_stream_anchor_time is not None}, " f"first_word={self.current_utterance_first_word_start_time}, " f"last_word={self.current_utterance_last_word_stop_time}")
+                timestamp_ms = int(time.time() * 1000)
+                duration_ms = 0
+
+            logger.info(f"Kyutai: Emitting utterance " f"(timestamp={timestamp_ms}, duration={duration_ms}ms): " f"{transcript_text}")
 
             # Call callback with duration and timestamp in metadata
             metadata = {
@@ -312,13 +410,21 @@ class KyutaiStreamingTranscriber:
             # Clear transcript for next utterance
             self.current_transcript = []
             # Reset timing for next utterance
-            self.current_utterance_start_time = None
+            self.current_utterance_first_word_start_time = None
+            self.current_utterance_last_word_stop_time = None
             self.last_word_received_time = None
+            # Reset semantic VAD state
+            self.semantic_vad_detected_pause = False
+            self.speech_started = False
 
     def finish(self):
         """
         Close the connection and clean up resources.
         """
+        if self.finished:
+            return  # Already finished
+
+        self.finished = True
         logger.info("Finishing Kyutai streaming transcriber")
 
         # Emit any remaining transcript before closing

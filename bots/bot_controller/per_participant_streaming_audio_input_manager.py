@@ -20,10 +20,36 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_normalized_rms(audio_bytes):
-    samples = np.frombuffer(audio_bytes, dtype=np.int16)
-    rms = np.sqrt(np.mean(np.square(samples)))
-    # Normalize by max possible value for 16-bit audio (32768)
-    return rms / 32768
+    if not audio_bytes or len(audio_bytes) < 2:
+        return 0.0
+
+    try:
+        samples = np.frombuffer(audio_bytes, dtype=np.int16)
+        if len(samples) == 0:
+            return 0.0
+
+        # Check for any NaN or infinite values in samples
+        if not np.isfinite(samples).all():
+            return 0.0
+
+        # Calculate mean of squares first
+        mean_square = np.mean(np.square(samples.astype(np.float64)))
+
+        # Check if mean_square is valid before sqrt
+        if not np.isfinite(mean_square) or mean_square < 0:
+            return 0.0
+
+        rms = np.sqrt(mean_square)
+
+        # Handle NaN case (shouldn't happen with valid data, but be safe)
+        if not np.isfinite(rms):
+            return 0.0
+
+        # Normalize by max possible value for 16-bit audio (32768)
+        return rms / 32768
+    except (ValueError, TypeError, BufferError, FloatingPointError):
+        # If there's any issue with the audio data, treat as silence
+        return 0.0
 
 
 class PerParticipantStreamingAudioInputManager:
@@ -35,7 +61,8 @@ class PerParticipantStreamingAudioInputManager:
 
         self.last_nonsilent_audio_time = {}
 
-        self.SILENCE_DURATION_LIMIT = 10  # seconds
+        self.SILENCE_DURATION_LIMIT = 300  # 5 minutes of inactivity
+        # before finishing transcriber
 
         self.vad = webrtcvad.Vad()
         self.transcription_provider = transcription_provider
@@ -51,9 +78,26 @@ class PerParticipantStreamingAudioInputManager:
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
 
     def silence_detected(self, chunk_bytes):
-        if calculate_normalized_rms(chunk_bytes) < 0.0025:
+        rms = calculate_normalized_rms(chunk_bytes)
+
+        # Very low RMS is definitely silence
+        if rms < 0.0001:
             return True
-        return not self.vad.is_speech(chunk_bytes, self.sample_rate)
+
+        # For Google Meet, we need to be more lenient with VAD
+        # Try VAD but don't rely on it solely if RMS shows some energy
+        try:
+            is_speech = self.vad.is_speech(chunk_bytes, self.sample_rate)
+            # If RMS shows reasonable energy but VAD says no speech,
+            # trust the RMS (Google Meet audio may not match VAD expectations)
+            if rms > 0.001:
+                # logger.info(f"Audio chunk: RMS={rms:.6f}, VAD={is_speech}")
+                return False  # Has energy, send it
+            return not is_speech
+        except Exception as e:
+            logger.warning(f"VAD error: {e}, using RMS only")
+            # If VAD fails, use RMS threshold
+            return rms < 0.001
 
     def get_deepgram_api_key(self):
         deepgram_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.DEEPGRAM).first()
