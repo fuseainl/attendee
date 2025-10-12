@@ -78,26 +78,9 @@ class PerParticipantStreamingAudioInputManager:
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
 
     def silence_detected(self, chunk_bytes):
-        rms = calculate_normalized_rms(chunk_bytes)
-
-        # Very low RMS is definitely silence
-        if rms < 0.0001:
+        if calculate_normalized_rms(chunk_bytes) < 0.0025:
             return True
-
-        # For Google Meet, we need to be more lenient with VAD
-        # Try VAD but don't rely on it solely if RMS shows some energy
-        try:
-            is_speech = self.vad.is_speech(chunk_bytes, self.sample_rate)
-            # If RMS shows reasonable energy but VAD says no speech,
-            # trust the RMS (Google Meet audio may not match VAD expectations)
-            if rms > 0.001:
-                # logger.info(f"Audio chunk: RMS={rms:.6f}, VAD={is_speech}")
-                return False  # Has energy, send it
-            return not is_speech
-        except Exception as e:
-            logger.warning(f"VAD error: {e}, using RMS only")
-            # If VAD fails, use RMS threshold
-            return rms < 0.001
+        return not self.vad.is_speech(chunk_bytes, self.sample_rate)
 
     def get_deepgram_api_key(self):
         deepgram_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.DEEPGRAM).first()
@@ -184,19 +167,31 @@ class PerParticipantStreamingAudioInputManager:
                 logger.warning("No Kyutai server URL available")
                 return
 
-        audio_is_silent = self.silence_detected(chunk_bytes)
-
-        if not audio_is_silent:
+        # For Kyutai: Send all audio continuously, let semantic VAD handle it
+        # For Deepgram: Use pre-filtering to reduce API costs
+        if self.transcription_provider == TranscriptionProviders.KYUTAI:
+            # Always update last audio time for monitoring
             self.last_nonsilent_audio_time[speaker_id] = time.time()
 
-        if audio_is_silent and speaker_id not in self.streaming_transcribers:
-            return
+            # Create transcriber if needed and send all audio
+            streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
+            if streaming_transcriber:
+                streaming_transcriber.send(chunk_bytes)
+        else:
+            # Deepgram and other providers: use VAD pre-filtering
+            audio_is_silent = self.silence_detected(chunk_bytes)
 
-        streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
+            if not audio_is_silent:
+                self.last_nonsilent_audio_time[speaker_id] = time.time()
 
-        # Only send audio if transcriber was successfully created
-        if streaming_transcriber:
-            streaming_transcriber.send(chunk_bytes)
+            if audio_is_silent and speaker_id not in self.streaming_transcribers:
+                return
+
+            streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
+
+            # Only send audio if transcriber was successfully created
+            if streaming_transcriber:
+                streaming_transcriber.send(chunk_bytes)
 
     def monitor_transcription(self):
         speakers_to_remove = []
