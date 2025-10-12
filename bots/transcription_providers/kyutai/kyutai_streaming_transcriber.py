@@ -1,13 +1,12 @@
+import asyncio
 import audioop
 import logging
-import socket
-import sys
 import threading
 import time
 
 import msgpack
 import numpy as np
-import websocket
+import websockets
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +82,18 @@ class KyutaiStreamingTranscriber:
         self._audio_chunks_sent = 0
         self._last_log_chunk_count = 0
 
+        # Async audio queue to decouple audio processing from network I/O
+        # This prevents blocking the audio callback thread on network latency
+        self._audio_queue = asyncio.Queue(maxsize=100)  # Buffer up to 100 chunks
+        self._audio_sender_task = None
+        self._receiver_task = None
+        self._ws_connection = None
+
+        # Event loop management - run asyncio in background thread
+        self._loop = None
+        self._loop_thread = None
+        self._connect_future = None
+
         # Track current transcript
         self.current_transcript = []
         # Audio stream anchor: wall-clock time when server sent "Ready"
@@ -108,10 +119,30 @@ class KyutaiStreamingTranscriber:
         self.receive_thread = None
         self.send_thread = None
 
-        # Initialize connection
-        self._connect()
+        # Start event loop in background thread and initialize connection
+        self._start_event_loop()
 
-    def _connect(self):
+    def _start_event_loop(self):
+        """Start asyncio event loop in background thread."""
+        self._loop = asyncio.new_event_loop()
+        self._loop_thread = threading.Thread(target=self._run_event_loop, daemon=True, name="kyutai-event-loop")
+        self._loop_thread.start()
+
+        # Wait for loop to start
+        time.sleep(0.1)
+
+        # Schedule connection in the loop
+        self._connect_future = asyncio.run_coroutine_threadsafe(self._connect(), self._loop)
+
+    def _run_event_loop(self):
+        """Run the event loop in background thread."""
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.close()
+
+    async def _connect(self):
         """
         Establish WebSocket connection to Kyutai server with retry logic.
 
@@ -127,7 +158,7 @@ class KyutaiStreamingTranscriber:
         attempt = 0
         start_time = time.time()
 
-        while True:
+        while not self.should_stop:
             elapsed_time = time.time() - start_time
 
             # Check if we've exceeded max retry time
@@ -139,132 +170,105 @@ class KyutaiStreamingTranscriber:
                 attempt += 1
                 logger.info(f"Attempting to connect to Kyutai server " f"(attempt {attempt}, elapsed: {elapsed_time:.1f}s)")
 
-                # Clean up any previous failed connection attempt
-                if self.ws is not None:
-                    try:
-                        self.ws.close()
-                    except Exception:
-                        pass  # Ignore errors closing old connection
-                    self.ws = None
-
-                # Reset connection state
-                self.connected = False
-
                 # Add authentication header if API key is provided
-                headers = {}
+                additional_headers = {}
                 if self.api_key:
-                    headers["kyutai-api-key"] = self.api_key
+                    additional_headers["kyutai-api-key"] = self.api_key
 
-                # Create WebSocket connection with low-latency options
-                self.ws = websocket.WebSocketApp(
+                # Connect with websockets library (async!)
+                async with websockets.connect(
                     self.server_url,
-                    header=headers,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open,
-                )
+                    additional_headers=additional_headers,
+                    ping_interval=20,  # Send ping every 20 seconds
+                    ping_timeout=10,  # Timeout if no pong within 10 seconds
+                ) as ws:
+                    self._ws_connection = ws
+                    self.connected = True
+                    logger.info(f"✅ Successfully connected to Kyutai server " f"after {attempt} attempt(s)")
 
-                # Start WebSocket in a separate thread
-                self.receive_thread = threading.Thread(target=self._run_websocket, daemon=True)
-                self.receive_thread.start()
+                    # Start sender and receiver tasks
+                    self._audio_sender_task = asyncio.create_task(self._audio_sender_loop())
+                    self._receiver_task = asyncio.create_task(self._receiver_loop())
 
-                # Wait for connection to be established (with timeout)
-                connection_timeout = 5
-                connection_start = time.time()
-                while not self.connected and time.time() - connection_start < connection_timeout:
-                    time.sleep(0.1)
+                    # Wait for both tasks (will run until disconnect)
+                    await asyncio.gather(self._audio_sender_task, self._receiver_task, return_exceptions=True)
 
-                if self.connected:
-                    logger.info(f"Successfully connected to Kyutai server " f"after {attempt} attempt(s)")
+                # Connection closed - check if intentional
+                if self.should_stop:
+                    logger.info("Kyutai connection closed (shutdown)")
                     return
 
-                # Connection failed, clean up before retrying
-                if self.ws is not None:
-                    try:
-                        self.ws.close()
-                    except Exception:
-                        pass
-                    self.ws = None
+                logger.warning("Kyutai connection closed unexpectedly, will retry...")
 
-                # Determine retry delay
-                if attempt <= len(exponential_delays):
-                    # Use exponential backoff
-                    delay = exponential_delays[attempt - 1]
-                    logger.warning(f"Failed to connect to Kyutai server " f"(attempt {attempt}). Retrying in {delay}s " f"(exponential backoff)...")
-                else:
-                    # Use fixed delay
-                    delay = fixed_delay
-                    logger.warning(f"Failed to connect to Kyutai server " f"(attempt {attempt}). Retrying in {delay}s...")
-
-                # Check if delay would exceed max retry time
-                if elapsed_time + delay > self.max_retry_time:
-                    remaining_time = self.max_retry_time - elapsed_time
-                    if remaining_time > 0:
-                        logger.info(f"Only {remaining_time:.1f}s remaining before " f"timeout, waiting that long...")
-                        time.sleep(remaining_time)
-                    break
-                else:
-                    time.sleep(delay)
-
+            except asyncio.CancelledError:
+                logger.info("Kyutai connection cancelled")
+                return
             except Exception as e:
-                logger.error(f"Error connecting to Kyutai server " f"(attempt {attempt}): {e}")
+                logger.error(f"Error connecting to Kyutai server (attempt {attempt}): {e}")
 
-                # Clean up on exception
-                if self.ws is not None:
-                    try:
-                        self.ws.close()
-                    except Exception:
-                        pass
-                    self.ws = None
+            # Connection failed, determine retry delay
+            if attempt <= len(exponential_delays):
+                # Use exponential backoff
+                delay = exponential_delays[attempt - 1]
+                logger.warning(f"Retrying in {delay}s (exponential backoff)...")
+            else:
+                # Use fixed delay
+                delay = fixed_delay
+                logger.warning(f"Retrying in {delay}s...")
 
-                # Determine retry delay same way as above
-                if attempt <= len(exponential_delays):
-                    delay = exponential_delays[attempt - 1]
-                else:
-                    delay = fixed_delay
+            # Check if delay would exceed max retry time
+            if elapsed_time + delay > self.max_retry_time:
+                remaining_time = self.max_retry_time - elapsed_time
+                if remaining_time > 0:
+                    logger.info(f"Only {remaining_time:.1f}s remaining before timeout")
+                    await asyncio.sleep(remaining_time)
+                break
+            else:
+                await asyncio.sleep(delay)
 
-                # Check if delay would exceed max retry time
-                if elapsed_time + delay > self.max_retry_time:
-                    remaining_time = self.max_retry_time - elapsed_time
-                    if remaining_time > 0:
-                        time.sleep(remaining_time)
-                    break
-                else:
-                    time.sleep(delay)
+            # Reset connection state for retry
+            self.connected = False
+            self._ws_connection = None
 
-    def _run_websocket(self):
-        """Run WebSocket connection in separate thread."""
+    async def _receiver_loop(self):
+        """
+        Async receiver loop - processes messages from WebSocket.
+        """
         try:
-            # Run forever with ping/pong keepalive
-            # The server may close if it doesn't receive data for a while
-            self.ws.run_forever(
-                ping_interval=20,  # Send ping every 20 seconds
-                ping_timeout=10,  # Timeout if no pong within 10 seconds
-                skip_utf8_validation=True,  # Binary frames, skip validation
-                sockopt=(
-                    (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),  # Disable Nagle
-                ),
-            )
+            async for message in self._ws_connection:
+                await self._process_message(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.warning("Kyutai WebSocket connection closed")
         except Exception as e:
-            logger.error(f"WebSocket run error: {e}", exc_info=True)
+            logger.error(f"Error in receiver loop: {e}", exc_info=True)
+        finally:
+            self.connected = False
 
-    def _on_open(self, ws):
-        """Handle WebSocket connection opened."""
-        # Only mark as connected if this is the current websocket instance
-        # This prevents race conditions with multiple retry attempts
-        if ws == self.ws:
-            self.connected = True
-            logger.info("🔌 Kyutai WebSocket connection opened")
-        else:
-            # This is an old connection attempt that succeeded late
-            logger.warning("🔌 Kyutai: Closing stale WebSocket connection " "(newer attempt succeeded)")
+    async def _audio_sender_loop(self):
+        """
+        Async audio sender loop - sends audio from queue to WebSocket.
+        This decouples audio processing from network I/O.
+        """
+        while not self.should_stop and self.connected:
             try:
-                ws.close()
-            except Exception:
-                pass
+                # Wait for audio with timeout for clean shutdown
+                message = await asyncio.wait_for(self._audio_queue.get(), timeout=0.5)
 
-    def _on_message(self, ws, message):
+                if message is None:
+                    # Sentinel value for shutdown
+                    break
+
+                # Send to WebSocket (non-blocking async!)
+                if self.connected and self._ws_connection:
+                    await self._ws_connection.send(message)
+
+            except asyncio.TimeoutError:
+                # No audio available, continue loop
+                continue
+            except Exception as e:
+                logger.error(f"Error in audio sender loop: {e}", exc_info=True)
+
+    async def _process_message(self, message):
         """
         Handle incoming transcription messages from Kyutai server.
 
@@ -274,10 +278,6 @@ class KyutaiStreamingTranscriber:
         - {"type": "Step", ...}
         - {"type": "Marker"}
         """
-        # Ignore messages from stale connections
-        if ws != self.ws:
-            return
-
         try:
             # Decode MessagePack message
             data = msgpack.unpackb(message, raw=False)
@@ -369,23 +369,6 @@ class KyutaiStreamingTranscriber:
             logger.error(f"Error processing Kyutai message: {e}")
             logger.debug(f"Raw message: {message}")
 
-    def _on_error(self, ws, error):
-        """Handle WebSocket errors."""
-        try:
-            # Avoid recursion in error logging
-            error_msg = str(error)
-            logger.error(f"❌ Kyutai WebSocket error: {error_msg}")
-        except Exception:
-            # If logging fails, just print to avoid recursion
-            print(f"Kyutai WebSocket error: {error}", file=sys.stderr)
-
-    def _on_close(self, ws, close_status_code, close_msg):
-        """Handle WebSocket connection closed."""
-        self.connected = False
-        logger.warning(f"🔌 Kyutai WebSocket closed: code={close_status_code}, " f"msg={close_msg}, should_stop={self.should_stop}")
-        if not self.should_stop:
-            logger.error("⚠️  WebSocket closed unexpectedly! " "This may indicate a server issue or protocol mismatch.")
-
     def send(self, audio_data):
         """
         Send audio data to the Kyutai server.
@@ -393,11 +376,14 @@ class KyutaiStreamingTranscriber:
         Args:
             audio_data: Audio data as bytes (int16 PCM)
         """
-        if not self.connected or self.should_stop or not self.receive_thread.is_alive():
+        if not self.connected or self.should_stop:
             # Silently drop audio during shutdown - expected behavior
             return
 
         try:
+            # Performance profiling: Track timing for each operation
+            t0 = time.perf_counter()
+
             # Resample if needed (cache resampler state for performance)
             if self.sample_rate != KYUTAI_SAMPLE_RATE:
                 audio_data, self._resampler_state = audioop.ratecv(
@@ -408,28 +394,56 @@ class KyutaiStreamingTranscriber:
                     KYUTAI_SAMPLE_RATE,
                     self._resampler_state,
                 )
+            t1 = time.perf_counter()
 
             # Convert int16 bytes to float32 in one operation
             # np.frombuffer is zero-copy, astype creates new array
             audio_samples = np.frombuffer(audio_data, dtype=np.int16)
+            t2 = time.perf_counter()
 
             # Optimize: Use numpy's in-place division for better performance
             audio_float = audio_samples.astype(np.float32)
             audio_float /= 32768.0
+            t3 = time.perf_counter()
 
             # Pack with MessagePack (tolist() is required for msgpack)
+            # NOTE: This is a known bottleneck for multi-speaker scenarios
+            audio_list = audio_float.tolist()
+            t4 = time.perf_counter()
+
             message = msgpack.packb(
-                {"type": "Audio", "pcm": audio_float.tolist()},
+                {"type": "Audio", "pcm": audio_list},
                 use_bin_type=True,
                 use_single_float=True,
             )
+            t5 = time.perf_counter()
 
-            # Send as BINARY WebSocket frame
-            self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
+            # Put message in queue for async sending (non-blocking!)
+            # This decouples audio processing from network I/O
+            try:
+                # Use asyncio.run_coroutine_threadsafe to bridge sync->async
+                asyncio.run_coroutine_threadsafe(self._audio_queue.put(message), self._loop)
+                t6 = time.perf_counter()
+            except RuntimeError:
+                # Queue is full or loop is closed - drop this audio chunk
+                logger.warning("Audio queue full or closed, dropping audio chunk")
+                t6 = time.perf_counter()
+                return
 
             # Performance: Log every ~100 chunks instead of time-based
             self._audio_chunks_sent += 1
-            if self.debug_logging and self._audio_chunks_sent - self._last_log_chunk_count >= 100:
+            if self._audio_chunks_sent % 100 == 0:
+                # Calculate timing for each operation
+                resample_ms = 1000 * (t1 - t0)
+                frombuffer_ms = 1000 * (t2 - t1)
+                convert_ms = 1000 * (t3 - t2)
+                tolist_ms = 1000 * (t4 - t3)
+                msgpack_ms = 1000 * (t5 - t4)
+                queue_ms = 1000 * (t6 - t5)
+                total_ms = 1000 * (t6 - t0)
+
+                logger.info(f"Kyutai Audio Pipeline Timing (chunk #{self._audio_chunks_sent}): " f"total={total_ms:.2f}ms | " f"resample={resample_ms:.2f}ms | " f"frombuffer={frombuffer_ms:.3f}ms | " f"convert={convert_ms:.2f}ms | " f"tolist={tolist_ms:.2f}ms | " f"msgpack={msgpack_ms:.2f}ms | " f"queue={queue_ms:.2f}ms | " f"samples={len(audio_samples)}")
+            elif self.debug_logging and self._audio_chunks_sent - self._last_log_chunk_count >= 100:
                 logger.debug(f"Kyutai: Sent {self._audio_chunks_sent} audio chunks " f"({len(audio_samples)} samples/chunk, " f"{KYUTAI_SAMPLE_RATE}Hz)")
                 self._last_log_chunk_count = self._audio_chunks_sent
 
@@ -518,7 +532,17 @@ class KyutaiStreamingTranscriber:
                 "duration_ms": duration_ms,
                 "timestamp_ms": timestamp_ms,
             }
-            self.callback(transcript_text, metadata)
+
+            # Run callback in separate thread to avoid Django async context issues
+            # The callback does Django ORM operations which must run in sync context
+            def run_callback():
+                try:
+                    self.callback(transcript_text, metadata)
+                except Exception as e:
+                    logger.error(f"Error in callback: {e}", exc_info=True)
+
+            callback_thread = threading.Thread(target=run_callback, daemon=True, name="kyutai-callback")
+            callback_thread.start()
 
             # Clear transcript for next utterance
             self.current_transcript = []
@@ -545,22 +569,34 @@ class KyutaiStreamingTranscriber:
         self.should_stop = True
 
         try:
-            # Send Marker message to indicate end of stream
-            if self.connected and self.ws:
-                # Include an ID in the marker (server echoes it back)
-                marker_msg = msgpack.packb({"type": "Marker", "id": 0}, use_bin_type=True)
-                self.ws.send(marker_msg, opcode=websocket.ABNF.OPCODE_BINARY)
+            # Signal stop to async tasks
+            if self._loop and self._loop.is_running():
+                # Put sentinel value in queue to stop sender
+                asyncio.run_coroutine_threadsafe(self._audio_queue.put(None), self._loop)
 
-                # Wait for server to finish processing and send final words
-                # before closing the connection
-                time.sleep(0.5)  # Increased from 0.5s to give server more time
+                # Send Marker message to indicate end of stream
+                if self.connected and self._ws_connection:
 
-                # Close WebSocket
-                self.ws.close()
+                    async def send_marker():
+                        try:
+                            marker_msg = msgpack.packb({"type": "Marker", "id": 0}, use_bin_type=True)
+                            await self._ws_connection.send(marker_msg)
+                            # Wait for server to process
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            logger.error(f"Error sending marker: {e}")
 
-            # Wait for threads to finish
-            if self.receive_thread and self.receive_thread.is_alive():
-                self.receive_thread.join(timeout=2)
+                    asyncio.run_coroutine_threadsafe(send_marker(), self._loop)
+
+                # Give tasks time to finish
+                time.sleep(1.0)
+
+                # Stop the event loop
+                self._loop.call_soon_threadsafe(self._loop.stop)
+
+            # Wait for loop thread to finish
+            if self._loop_thread and self._loop_thread.is_alive():
+                self._loop_thread.join(timeout=2)
 
         except Exception as e:
             logger.error(f"Error finishing Kyutai transcriber: {e}")
