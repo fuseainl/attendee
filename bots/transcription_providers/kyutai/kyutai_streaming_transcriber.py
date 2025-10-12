@@ -35,7 +35,18 @@ class KyutaiStreamingTranscriber:
     https://github.com/kyutai-labs/delayed-streams-modeling/
     """
 
-    def __init__(self, *, server_url, sample_rate, metadata=None, interim_results=True, model=None, api_key=None, callback=None):
+    def __init__(
+        self,
+        *,
+        server_url,
+        sample_rate,
+        metadata=None,
+        interim_results=True,
+        model=None,
+        api_key=None,
+        callback=None,
+        max_retry_time=300,
+    ):
         """
         Initialize the Kyutai streaming transcriber.
 
@@ -49,6 +60,8 @@ class KyutaiStreamingTranscriber:
             api_key: API key for authentication (optional)
             callback: Callback function for utterances
                       (receives transcript text)
+            max_retry_time: Maximum time in seconds to keep retrying
+                connection (default: 300s / 5 minutes)
         """
         self.server_url = server_url
         self.sample_rate = sample_rate
@@ -58,6 +71,7 @@ class KyutaiStreamingTranscriber:
         self.api_key = api_key
         self.callback = callback
         self.last_send_time = time.time()
+        self.max_retry_time = max_retry_time
 
         # Track current transcript
         self.current_transcript = []
@@ -88,30 +102,126 @@ class KyutaiStreamingTranscriber:
         self._connect()
 
     def _connect(self):
-        """Establish WebSocket connection to Kyutai server."""
-        try:
-            # Add authentication header if API key is provided
-            headers = {}
-            if self.api_key:
-                headers["kyutai-api-key"] = self.api_key
+        """
+        Establish WebSocket connection to Kyutai server with retry logic.
 
-            # Create WebSocket connection with low-latency options
-            self.ws = websocket.WebSocketApp(self.server_url, header=headers, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close, on_open=self._on_open)
+        Uses exponential backoff (1s, 2s, 4s, 8s, 16s) followed by
+        fixed 10-second intervals until connection succeeds or max_retry_time
+        is reached.
+        """
+        # Exponential backoff delays (in seconds)
+        exponential_delays = [1, 2, 4, 8, 16]
+        # Fixed delay after exponential backoff exhausted
+        fixed_delay = 10
 
-            # Start WebSocket in a separate thread
-            self.receive_thread = threading.Thread(target=self._run_websocket, daemon=True)
-            self.receive_thread.start()
+        attempt = 0
+        start_time = time.time()
 
-            # Wait for connection to be established (with timeout)
-            start_time = time.time()
-            while not self.connected and time.time() - start_time < 5:
-                time.sleep(0.1)
+        while True:
+            elapsed_time = time.time() - start_time
 
-            if not self.connected:
-                logger.error("Failed to connect to Kyutai server within timeout")
+            # Check if we've exceeded max retry time
+            if elapsed_time >= self.max_retry_time:
+                logger.error(f"Failed to connect to Kyutai server after " f"{self.max_retry_time}s. Giving up.")
+                return
 
-        except Exception as e:
-            logger.error(f"Error connecting to Kyutai server: {e}")
+            try:
+                attempt += 1
+                logger.info(f"Attempting to connect to Kyutai server " f"(attempt {attempt}, elapsed: {elapsed_time:.1f}s)")
+
+                # Clean up any previous failed connection attempt
+                if self.ws is not None:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass  # Ignore errors closing old connection
+                    self.ws = None
+
+                # Reset connection state
+                self.connected = False
+
+                # Add authentication header if API key is provided
+                headers = {}
+                if self.api_key:
+                    headers["kyutai-api-key"] = self.api_key
+
+                # Create WebSocket connection with low-latency options
+                self.ws = websocket.WebSocketApp(
+                    self.server_url,
+                    header=headers,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
+                    on_open=self._on_open,
+                )
+
+                # Start WebSocket in a separate thread
+                self.receive_thread = threading.Thread(target=self._run_websocket, daemon=True)
+                self.receive_thread.start()
+
+                # Wait for connection to be established (with timeout)
+                connection_timeout = 5
+                connection_start = time.time()
+                while not self.connected and time.time() - connection_start < connection_timeout:
+                    time.sleep(0.1)
+
+                if self.connected:
+                    logger.info(f"Successfully connected to Kyutai server " f"after {attempt} attempt(s)")
+                    return
+
+                # Connection failed, clean up before retrying
+                if self.ws is not None:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
+
+                # Determine retry delay
+                if attempt <= len(exponential_delays):
+                    # Use exponential backoff
+                    delay = exponential_delays[attempt - 1]
+                    logger.warning(f"Failed to connect to Kyutai server " f"(attempt {attempt}). Retrying in {delay}s " f"(exponential backoff)...")
+                else:
+                    # Use fixed delay
+                    delay = fixed_delay
+                    logger.warning(f"Failed to connect to Kyutai server " f"(attempt {attempt}). Retrying in {delay}s...")
+
+                # Check if delay would exceed max retry time
+                if elapsed_time + delay > self.max_retry_time:
+                    remaining_time = self.max_retry_time - elapsed_time
+                    if remaining_time > 0:
+                        logger.info(f"Only {remaining_time:.1f}s remaining before " f"timeout, waiting that long...")
+                        time.sleep(remaining_time)
+                    break
+                else:
+                    time.sleep(delay)
+
+            except Exception as e:
+                logger.error(f"Error connecting to Kyutai server " f"(attempt {attempt}): {e}")
+
+                # Clean up on exception
+                if self.ws is not None:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
+
+                # Determine retry delay same way as above
+                if attempt <= len(exponential_delays):
+                    delay = exponential_delays[attempt - 1]
+                else:
+                    delay = fixed_delay
+
+                # Check if delay would exceed max retry time
+                if elapsed_time + delay > self.max_retry_time:
+                    remaining_time = self.max_retry_time - elapsed_time
+                    if remaining_time > 0:
+                        time.sleep(remaining_time)
+                    break
+                else:
+                    time.sleep(delay)
 
     def _run_websocket(self):
         """Run WebSocket connection in separate thread."""
@@ -131,8 +241,18 @@ class KyutaiStreamingTranscriber:
 
     def _on_open(self, ws):
         """Handle WebSocket connection opened."""
-        self.connected = True
-        logger.info("🔌 Kyutai WebSocket connection opened")
+        # Only mark as connected if this is the current websocket instance
+        # This prevents race conditions with multiple retry attempts
+        if ws == self.ws:
+            self.connected = True
+            logger.info("🔌 Kyutai WebSocket connection opened")
+        else:
+            # This is an old connection attempt that succeeded late
+            logger.warning("🔌 Kyutai: Closing stale WebSocket connection " "(newer attempt succeeded)")
+            try:
+                ws.close()
+            except Exception:
+                pass
 
     def _on_message(self, ws, message):
         """
@@ -144,6 +264,10 @@ class KyutaiStreamingTranscriber:
         - {"type": "Step", ...}
         - {"type": "Marker"}
         """
+        # Ignore messages from stale connections
+        if ws != self.ws:
+            return
+
         try:
             # Decode MessagePack message
             data = msgpack.unpackb(message, raw=False)
@@ -440,7 +564,7 @@ class KyutaiStreamingTranscriber:
 
                 # Wait for server to finish processing and send final words
                 # before closing the connection
-                time.sleep(1.0)  # Increased from 0.5s to give server more time
+                time.sleep(0.5)  # Increased from 0.5s to give server more time
 
                 # Close WebSocket
                 self.ws.close()
