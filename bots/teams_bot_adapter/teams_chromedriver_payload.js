@@ -1603,7 +1603,7 @@ class ParticipantSpeakingStateMachine {
 
 class ReceiverManager {
     constructor() {
-        this.receiverMap = new Set();
+        this.receiverMap = new Map();
         this.participantSpeakingStateMachineMap = new Map();
         setInterval(() => {
             this.pollReceivers();
@@ -1611,14 +1611,23 @@ class ReceiverManager {
     }
 
     pollReceivers() {
-        for (const receiver of this.receiverMap) {
+        for (const [receiver, isActive] of this.receiverMap) {
             const contributingSources = receiver.getContributingSources();
+
+            if (contributingSources.length > 0 && !isActive) {
+                this.receiverMap.set(receiver, true);
+            }
+
+            if (!isActive)
+                continue;
 
             const currentTime = Date.now();
             const speakingParticipantIds = [];
             for (const contributingSource of contributingSources) {
                 if (currentTime - contributingSource.timestamp <= 50) {
                     const speakingParticipant = virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(contributingSource.source.toString());
+                    if (!speakingParticipant)
+                        continue;
                     speakingParticipantIds.push(speakingParticipant.id);
                 }
             }
@@ -1650,7 +1659,7 @@ class ReceiverManager {
     addReceiver(receiver) {
         if (!receiver || this.receiverMap.has(receiver)) return;
         realConsole?.log('ReceiverManager is adding receiver', receiver);
-        this.receiverMap.add(receiver);
+        this.receiverMap.set(receiver, false);
     }
 }
 
