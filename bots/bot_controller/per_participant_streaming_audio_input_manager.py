@@ -118,15 +118,13 @@ class PerParticipantStreamingAudioInputManager:
             return DeepgramStreamingTranscriber(
                 deepgram_api_key=self.deepgram_api_key,
                 interim_results=True,
-                language=self.bot.transcription_settings.deepgram_language(),
-                model=self.bot.transcription_settings.deepgram_model(),
-                callback=self.bot.transcription_settings.deepgram_callback(),
                 sample_rate=self.sample_rate,
+                callback=self.utterance_handler.handle_utterance,
                 metadata=metadata_list,
                 redaction_settings=(self.bot.transcription_settings.deepgram_redaction_settings()),
             )
         elif self.transcription_provider == TranscriptionProviders.KYUTAI:
-            # Create callback that delegates to the utterance handler
+
             def kyutai_callback(transcript_text, transcriber_metadata=None):
                 # Extract duration_ms and timestamp_ms from transcriber metadata
                 duration_ms = transcriber_metadata.get("duration_ms", 0) if transcriber_metadata else 0
@@ -149,11 +147,7 @@ class PerParticipantStreamingAudioInputManager:
     def find_or_create_streaming_transcriber_for_speaker(self, speaker_id):
         if speaker_id not in self.streaming_transcribers:
             metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
-            logger.info(f"Creating new transcriber for speaker {speaker_id}")
             self.streaming_transcribers[speaker_id] = self.create_streaming_transcriber(speaker_id, metadata)
-            # Initialize the last audio time when creating transcriber
-            # This prevents KeyError and immediate shutdown for new speakers
-            self.last_nonsilent_audio_time[speaker_id] = time.time()
         return self.streaming_transcribers[speaker_id]
 
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
@@ -176,7 +170,22 @@ class PerParticipantStreamingAudioInputManager:
             # Create transcriber if needed and send all audio
             streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
             if streaming_transcriber:
+                # Log audio routing every 5 seconds per speaker
+                if not hasattr(self, "_last_audio_log_time"):
+                    self._last_audio_log_time = {}
+
+                current_time = time.time()
+                last_log = self._last_audio_log_time.get(speaker_id, 0)
+
+                if current_time - last_log > 5.0:
+                    participant_data = self.get_participant_callback(speaker_id)
+                    participant_name = participant_data.get("participant_full_name", "Unknown") if participant_data else "Unknown"
+                    logger.info(f"Audio routing: Speaker {speaker_id} ({participant_name}) " f"→ Kyutai transcriber #{streaming_transcriber._instance_id}")
+                    self._last_audio_log_time[speaker_id] = current_time
+
                 streaming_transcriber.send(chunk_bytes)
+            else:
+                logger.warning(f"Failed to create transcriber for speaker {speaker_id}")
         else:
             # Deepgram and other providers: use VAD pre-filtering
             audio_is_silent = self.silence_detected(chunk_bytes)
