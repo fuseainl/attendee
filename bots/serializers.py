@@ -4,6 +4,8 @@ import logging
 import os
 from dataclasses import asdict
 
+from django.conf import settings
+
 logger = logging.getLogger(__name__)
 
 import jsonschema
@@ -459,6 +461,29 @@ class BotImageSerializer(serializers.Serializer):
 
 @extend_schema_field(TRANSCRIPTION_SETTINGS_SCHEMA)
 class TranscriptionSettingsJSONField(serializers.JSONField):
+    pass
+
+
+# Define a subset schema for updating transcription settings (currently only Teams closed captions language)
+PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "meeting_closed_captions": {
+            "type": "object",
+            "properties": {
+                "teams_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["teams_language"],
+            },
+            "required": ["teams_language"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["meeting_closed_captions"],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA)
+class PatchBotTranscriptionSettingsJSONField(serializers.JSONField):
     pass
 
 
@@ -1038,10 +1063,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         initial_data_with_value = {**self.initial_data, "transcription_settings": value}
 
-        if meeting_type == MeetingTypes.ZOOM and use_zoom_web_adapter:
-            if transcription_provider_from_bot_creation_data(initial_data_with_value) != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
-                raise serializers.ValidationError({"transcription_settings": "API-based transcription is not supported for Zoom when using the web SDK. Please set 'zoom_settings.sdk' to 'native' in the bot creation request."})
-
         if meeting_type == MeetingTypes.ZOOM and not use_zoom_web_adapter:
             if transcription_provider_from_bot_creation_data(initial_data_with_value) == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
                 raise serializers.ValidationError({"transcription_settings": "Closed caption based transcription is not supported for Zoom when using the native SDK. Please set 'zoom_settings.sdk' to 'web' in the bot creation request."})
@@ -1314,9 +1335,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if not isinstance(key, str):
                 raise serializers.ValidationError("All keys in metadata must be strings")
 
-        # Make sure the total length of the stringified metadata is less than 1000 characters
-        if len(json.dumps(value)) > 1000:
-            raise serializers.ValidationError("Metadata must be less than 1000 characters")
+        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
+        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
+            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
 
         return value
 
@@ -1599,6 +1620,25 @@ class ParticipantEventSerializer(serializers.Serializer):
         return ParticipantEventTypes.type_to_api_code(obj.event_type)
 
 
+class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
+    """Serializer for updating transcription settings. Currently supports only updating Teams closed captions language."""
+
+    transcription_settings = PatchBotTranscriptionSettingsJSONField(help_text="Transcription settings to update. Currently supports only updating Teams closed captions language, e.g. {'meeting_closed_captions': {'teams_language': 'en-us'}}", required=True)
+
+    def validate_transcription_settings(self, value):
+        """Validate the transcription settings against the schema."""
+        try:
+            jsonschema.validate(instance=value, schema=PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # Ensure at least one field is provided
+        if not value or not value.get("meeting_closed_captions"):
+            raise serializers.ValidationError("At least one transcription setting must be provided")
+
+        return value
+
+
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
@@ -1655,9 +1695,9 @@ class CreateCalendarSerializer(serializers.Serializer):
             if not isinstance(key, str):
                 raise serializers.ValidationError("All keys in metadata must be strings")
 
-        # Make sure the total length of the stringified metadata is less than 1000 characters
-        if len(json.dumps(value)) > 1000:
-            raise serializers.ValidationError("Metadata must be less than 1000 characters")
+        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
+        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
+            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
 
         return value
 
@@ -1800,9 +1840,9 @@ class PatchCalendarSerializer(serializers.Serializer):
             if not isinstance(key, str):
                 raise serializers.ValidationError("All keys in metadata must be strings")
 
-        # Make sure the total length of the stringified metadata is less than 1000 characters
-        if len(json.dumps(value)) > 1000:
-            raise serializers.ValidationError("Metadata must be less than 1000 characters")
+        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
+        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
+            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
 
         return value
 

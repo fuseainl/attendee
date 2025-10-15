@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 
+import copy
 import os
 from pathlib import Path
 
@@ -56,7 +57,7 @@ AUTHENTICATION_BACKENDS = [
 
 # Django allauth config
 SITE_ID = 1
-if os.getenv("DISABLE_SIGNUP"):
+if os.getenv("DISABLE_SIGNUP") and os.getenv("DISABLE_SIGNUP") != "false":
     ACCOUNT_ADAPTER = "accounts.adapters.NoNewUsersAccountAdapter"
 else:
     ACCOUNT_ADAPTER = "accounts.adapters.StandardAccountAdapter"
@@ -142,7 +143,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = os.getenv("TIME_ZONE", "UTC")
 
 USE_I18N = True
 
@@ -193,17 +194,45 @@ SPECTACULAR_SETTINGS = {
         {"url": "https://app.attendee.dev", "description": "Production server"},
     ],
 }
+
 # publish with python manage.py spectacular --color --file docs/openapi.yml
 
-STORAGES = {
-    "default": {
+# Set up django storage backend
+# Use s3 by default, but if the STORAGE_PROTOCOL env var is set to "azure", use azure storage
+STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
+AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
+AZURE_RECORDING_STORAGE_CONTAINER_NAME = os.getenv("AZURE_RECORDING_STORAGE_CONTAINER_NAME")
+
+if STORAGE_PROTOCOL == "azure":
+    DEFAULT_STORAGE_BACKEND = {
+        "BACKEND": "storages.backends.azure_storage.AzureStorage",
+        "OPTIONS": {
+            "connection_string": os.getenv("AZURE_CONNECTION_STRING"),
+            "account_key": os.getenv("AZURE_ACCOUNT_KEY"),
+            "account_name": os.getenv("AZURE_ACCOUNT_NAME"),
+            "expiration_secs": None if os.getenv("AZURE_STORAGE_USE_PERMANENT_LINKS", "false") == "true" else int(os.getenv("AZURE_STORAGE_LINK_EXPIRATION_SECONDS", 1800)),
+        },
+    }
+    RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    RECORDING_STORAGE_BACKEND["OPTIONS"]["azure_container"] = AZURE_RECORDING_STORAGE_CONTAINER_NAME
+else:
+    DEFAULT_STORAGE_BACKEND = {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
             "endpoint_url": os.getenv("AWS_ENDPOINT_URL"),
             "access_key": os.getenv("AWS_ACCESS_KEY_ID"),
             "secret_key": os.getenv("AWS_SECRET_ACCESS_KEY"),
         },
-    },
+    }
+    # Deep copy the DEFAULT_STORAGE_BACKEND
+    RECORDING_STORAGE_BACKEND = copy.deepcopy(DEFAULT_STORAGE_BACKEND)
+    RECORDING_STORAGE_BACKEND["OPTIONS"]["bucket_name"] = AWS_RECORDING_STORAGE_BUCKET_NAME
+
+
+STORAGES = {
+    "default": DEFAULT_STORAGE_BACKEND,
+    "recordings": RECORDING_STORAGE_BACKEND,
+    "bot_debug_screenshots": RECORDING_STORAGE_BACKEND,
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
@@ -211,8 +240,11 @@ STORAGES = {
 AWS_S3_SIGNATURE_VERSION = "s3v4"
 if os.getenv("USE_IRSA_FOR_S3_STORAGE", "false") == "true":
     AWS_S3_ADDRESSING_STYLE = "virtual"
-AWS_RECORDING_STORAGE_BUCKET_NAME = os.getenv("AWS_RECORDING_STORAGE_BUCKET_NAME")
+
 CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true"
 
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
 WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
+REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
+MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
+SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")

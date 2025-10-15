@@ -23,7 +23,7 @@ class TranscriptMessageFinalizationManager {
 
     sendMessage(message) {
         const messageConverted = {
-            deviceId: message.userId,
+            deviceId: message.userId.toString(),
             captionId: message.msgId,
             text: message.text ? message.text.replace(/\x00/g, '') : '',
             isFinal: !!message.done
@@ -142,7 +142,17 @@ function startMeeting(signature) {
     })
 
     ZoomMtg.inMeetingServiceListener('onActiveSpeaker', function (data) {
-        console.log('onActiveSpeaker', data);
+        /*
+        [
+            {
+                "userId": 16778240,
+                "userName": "Noah Duncan"
+            }
+        ]
+        */
+        for (const activeSpeaker of data) {
+            window.dominantSpeakerManager.addCaptionAudioTime(Date.now(), activeSpeaker.userId);
+        }
         // Use active speaker events to determine if we are silent or not
         window.ws.sendJson({
             type: 'SilenceStatus',
@@ -194,6 +204,9 @@ function startMeeting(signature) {
             return;
         }
 
+        if (!window.initialData.collectCaptions)
+            return;
+
         transcriptMessageFinalizationManager.addMessage(item);
     });
 
@@ -204,7 +217,7 @@ function startMeeting(signature) {
             window.ws.sendJson({
                 type: 'ChatMessage',
                 message_uuid: chatMessage.content.messageId,
-                participant_uuid: chatMessage.senderId,
+                participant_uuid: chatMessage.senderId.toString(),
                 timestamp: Math.floor(parseInt(chatMessage.content.t) / 1000),
                 text: chatMessage.content.text,
             });
@@ -342,6 +355,39 @@ function sendChatMessage(text) {
     });
 }
 
+function closeRequestPermissionModal() {
+    try {
+        // Find modal with class zm-modal or zm-modal-legacy
+        const modals = document.querySelectorAll('div.zm-modal, div.zm-modal-legacy');
+        
+        for (const modal of modals) {
+            // Check if this modal has a descendant with class zm-modal-body-title
+            const titleDiv = modal.querySelector('div.zm-modal-body-title');
+            
+            if (titleDiv && titleDiv.innerText.includes('Permission needed from Meeting Host')) {
+                // Found the correct modal, now look for close button within it
+                const buttons = modal.querySelectorAll('button');
+                
+                for (const button of buttons) {
+                    if (button.innerText.toLowerCase() === 'close') {
+                        console.log('Clicking close button on permission modal');
+                        button.click();
+                        return;
+                    }
+                }
+                
+                console.log('Found permission modal but could not find close button');
+                return;
+            }
+        }
+        
+        console.log('Permission modal not found');
+    }
+    catch (error) {
+        console.log('closeRequestPermissionModal error', error);
+    }
+}
+
 window.sendChatMessage = sendChatMessage;
 
 function askForMediaCapturePermission() {
@@ -363,6 +409,11 @@ function askForMediaCapturePermission() {
             }, error: (error) => {
                 console.log('mediaCapturePermission error', error);
             }});
+
+            // Also try to close the you need to ask for permission modal
+            setTimeout(() => {
+                closeRequestPermissionModal();
+            }, 500);
         }});
     }, 1000);
 }

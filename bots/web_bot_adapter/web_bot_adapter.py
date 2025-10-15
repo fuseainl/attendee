@@ -48,6 +48,7 @@ class WebBotAdapter(BotAdapter):
         voice_agent_url: str,
         webpage_streamer_service_hostname: str,
         record_chat_messages_when_paused: bool,
+        disable_incoming_video: bool,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -63,6 +64,7 @@ class WebBotAdapter(BotAdapter):
         self.stop_recording_screen_callback = stop_recording_screen_callback
         self.recording_view = recording_view
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
+        self.disable_incoming_video = disable_incoming_video
         self.meeting_url = meeting_url
 
         self.video_frame_size = video_frame_size
