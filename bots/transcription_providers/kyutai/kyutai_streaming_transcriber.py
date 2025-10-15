@@ -610,13 +610,22 @@ class KyutaiStreamingTranscriber:
                     duration_seconds = self.current_utterance_last_word_stop_time - self.current_utterance_first_word_start_time
                     duration_ms = int(duration_seconds * 1000)
                 else:
-                    # EndWord not received (rare - silence timeout)
-                    if self.current_transcript:
+                    # EndWord not received - estimate minimum duration
+                    # Use elapsed time since word started as a minimum estimate
+                    current_time = time.time()
+                    elapsed_since_utterance_start = current_time - (self.audio_stream_anchor_time + self.current_utterance_first_word_start_time)
+
+                    # For multi-word utterances, use last word's start time if available
+                    if len(self.current_transcript) > 1 and self.current_transcript:
                         last_word_start = self.current_transcript[-1]["timestamp"][0]
-                        duration_seconds = last_word_start - self.current_utterance_first_word_start_time
-                        duration_ms = int(duration_seconds * 1000)
+                        duration_from_timestamps = last_word_start - self.current_utterance_first_word_start_time
+                        # Use the larger of: timestamp-based duration or elapsed time estimate
+                        duration_seconds = max(duration_from_timestamps, elapsed_since_utterance_start)
                     else:
-                        duration_ms = 0
+                        # Single word - use elapsed time since word started
+                        duration_seconds = elapsed_since_utterance_start
+
+                    duration_ms = max(int(duration_seconds * 1000), 1)  # Ensure at least 1ms
             else:
                 # Fallback if we don't have proper anchoring
                 if self.debug_logging:
