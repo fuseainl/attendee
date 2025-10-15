@@ -148,6 +148,8 @@ class PerParticipantStreamingAudioInputManager:
         if speaker_id not in self.streaming_transcribers:
             metadata = {"bot_id": self.bot.object_id, **(self.bot.metadata or {}), **self.get_participant_callback(speaker_id)}
             self.streaming_transcribers[speaker_id] = self.create_streaming_transcriber(speaker_id, metadata)
+            # Initialize last audio time for this speaker
+            self.last_nonsilent_audio_time[speaker_id] = time.time()
         return self.streaming_transcribers[speaker_id]
 
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
@@ -164,25 +166,15 @@ class PerParticipantStreamingAudioInputManager:
         # For Kyutai: Send all audio continuously, let semantic VAD handle it
         # For Deepgram: Use pre-filtering to reduce API costs
         if self.transcription_provider == TranscriptionProviders.KYUTAI:
-            # Always update last audio time for monitoring
-            self.last_nonsilent_audio_time[speaker_id] = time.time()
+            # Still detect silence for monitoring purposes, but send all audio
+            audio_is_silent = self.silence_detected(chunk_bytes)
+
+            if not audio_is_silent:
+                self.last_nonsilent_audio_time[speaker_id] = time.time()
 
             # Create transcriber if needed and send all audio
             streaming_transcriber = self.find_or_create_streaming_transcriber_for_speaker(speaker_id)
             if streaming_transcriber:
-                # Log audio routing every 5 seconds per speaker
-                if not hasattr(self, "_last_audio_log_time"):
-                    self._last_audio_log_time = {}
-
-                current_time = time.time()
-                last_log = self._last_audio_log_time.get(speaker_id, 0)
-
-                if current_time - last_log > 5.0:
-                    participant_data = self.get_participant_callback(speaker_id)
-                    participant_name = participant_data.get("participant_full_name", "Unknown") if participant_data else "Unknown"
-                    logger.info(f"Audio routing: Speaker {speaker_id} ({participant_name}) " f"→ Kyutai transcriber #{streaming_transcriber._instance_id}")
-                    self._last_audio_log_time[speaker_id] = current_time
-
                 streaming_transcriber.send(chunk_bytes)
             else:
                 logger.warning(f"Failed to create transcriber for speaker {speaker_id}")
@@ -208,6 +200,14 @@ class PerParticipantStreamingAudioInputManager:
         for speaker_id in streaming_transcriber_keys:
             streaming_transcriber = self.streaming_transcribers[speaker_id]
             silence_limit = self.SILENCE_DURATION_LIMIT
+
+            # Defensive: ensure we have timing data for this speaker
+            if speaker_id not in self.last_nonsilent_audio_time:
+                # Initialize with current time if missing (shouldn't happen)
+                self.last_nonsilent_audio_time[speaker_id] = time.time()
+                logger.warning(f"Missing last_nonsilent_audio_time for speaker {speaker_id}, initializing")
+                continue
+
             time_since_audio = time.time() - self.last_nonsilent_audio_time[speaker_id]
             if time_since_audio > silence_limit:
                 streaming_transcriber.finish()
@@ -216,6 +216,9 @@ class PerParticipantStreamingAudioInputManager:
 
         for speaker_id in speakers_to_remove:
             del self.streaming_transcribers[speaker_id]
+            # Also clean up timing data
+            if speaker_id in self.last_nonsilent_audio_time:
+                del self.last_nonsilent_audio_time[speaker_id]
 
         # If Number of streaming transcribers is greater than 4,
         # stop the oldest one
