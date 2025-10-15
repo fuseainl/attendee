@@ -41,7 +41,7 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
         # Streaming-only providers that don't support post-processing in this task (could be done though)
         elif utterance.transcription_provider == TranscriptionProviders.KYUTAI:
-            return None, {"reason": TranscriptionFailureReasons.STREAMING_ONLY_PROVIDER, "error": ("Kyutai is a streaming-only transcription provider. " "Transcriptions are generated in real-time during the " "bot session")}
+            return None, {"reason": TranscriptionFailureReasons.STREAMING_ONLY_PROVIDER, "error": ("Kyutai is a streaming-only transcription provider. Transcriptions are generated in real-time during the bot session")}
         else:
             raise Exception(f"Unknown transcription provider: {utterance.transcription_provider}")
 

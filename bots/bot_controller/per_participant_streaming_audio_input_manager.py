@@ -142,7 +142,7 @@ class PerParticipantStreamingAudioInputManager:
                 callback=kyutai_callback,
             )
         else:
-            raise Exception(f"Unsupported transcription provider: " f"{self.transcription_provider}")
+            raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")
 
     def find_or_create_streaming_transcriber_for_speaker(self, speaker_id):
         if speaker_id not in self.streaming_transcribers:
@@ -212,7 +212,7 @@ class PerParticipantStreamingAudioInputManager:
             if time_since_audio > silence_limit:
                 streaming_transcriber.finish()
                 speakers_to_remove.append(speaker_id)
-                logger.info(f"Speaker {speaker_id} has been silent for too long, " f"stopping streaming transcriber")
+                logger.info(f"Speaker {speaker_id} has been silent for too long, stopping streaming transcriber")
 
         for speaker_id in speakers_to_remove:
             del self.streaming_transcribers[speaker_id]
@@ -226,4 +226,4 @@ class PerParticipantStreamingAudioInputManager:
             oldest_transcriber = min(self.streaming_transcribers.values(), key=lambda x: x.last_send_time)
             oldest_transcriber.finish()
             del self.streaming_transcribers[oldest_transcriber.speaker_id]
-            logger.info(f"Stopped oldest streaming transcriber for speaker " f"{oldest_transcriber.speaker_id}")
+            logger.info(f"Stopped oldest streaming transcriber for speaker {oldest_transcriber.speaker_id}")

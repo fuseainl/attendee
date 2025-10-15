@@ -222,12 +222,12 @@ class KyutaiStreamingTranscriber:
 
             # Check if we've exceeded max retry time
             if elapsed_time >= self.max_retry_time:
-                logger.error(f"Failed to connect to Kyutai server after " f"{self.max_retry_time}s. Giving up.")
+                logger.error(f"Failed to connect to Kyutai server after {self.max_retry_time}s. Giving up.")
                 return
 
             try:
                 attempt += 1
-                logger.info(f"[{self._participant_name}] Attempting to connect " f"to Kyutai server (attempt {attempt}, " f"elapsed: {elapsed_time:.1f}s)")
+                logger.info(f"[{self._participant_name}] Attempting to connect to Kyutai server (attempt {attempt}, elapsed: {elapsed_time:.1f}s)")
 
                 # Add authentication header if API key is provided
                 additional_headers = {}
@@ -247,7 +247,7 @@ class KyutaiStreamingTranscriber:
                     # Create send queue in the event loop
                     self._send_queue = asyncio.Queue()
 
-                    logger.info(f"✅ [{self._participant_name}] Successfully connected " f"to Kyutai server after {attempt} attempt(s)")
+                    logger.info(f"✅ [{self._participant_name}] Successfully connected to Kyutai server after {attempt} attempt(s)")
 
                     # Start both receiver and sender tasks
                     self._receiver_task = asyncio.create_task(self._receiver_loop())
@@ -258,22 +258,22 @@ class KyutaiStreamingTranscriber:
 
                 # Connection closed - check if intentional
                 if self.should_stop:
-                    logger.info(f"[{self._participant_name}] " f"Kyutai connection closed (shutdown)")
+                    logger.info(f"[{self._participant_name}] Kyutai connection closed (shutdown)")
                     return
 
-                logger.warning(f"[{self._participant_name}] " f"Kyutai connection closed unexpectedly, will retry...")
+                logger.warning(f"[{self._participant_name}] Kyutai connection closed unexpectedly, will retry...")
 
             except asyncio.CancelledError:
                 logger.info(f"[{self._participant_name}] Kyutai connection cancelled")
                 return
             except Exception as e:
-                logger.error(f"[{self._participant_name}] Error connecting to Kyutai " f"server (attempt {attempt}): {e}")
+                logger.error(f"[{self._participant_name}] Error connecting to Kyutai server (attempt {attempt}): {e}")
 
             # Connection failed, determine retry delay
             if attempt <= len(exponential_delays):
                 # Use exponential backoff
                 delay = exponential_delays[attempt - 1]
-                logger.warning(f"[{self._participant_name}] Retrying in {delay}s " f"(exponential backoff)...")
+                logger.warning(f"[{self._participant_name}] Retrying in {delay}s (exponential backoff)...")
             else:
                 # Use fixed delay
                 delay = fixed_delay
@@ -283,7 +283,7 @@ class KyutaiStreamingTranscriber:
             if elapsed_time + delay > self.max_retry_time:
                 remaining_time = self.max_retry_time - elapsed_time
                 if remaining_time > 0:
-                    logger.info(f"[{self._participant_name}] Only " f"{remaining_time:.1f}s remaining before timeout")
+                    logger.info(f"[{self._participant_name}] Only {remaining_time:.1f}s remaining before timeout")
                     await asyncio.sleep(remaining_time)
                 break
             else:
@@ -302,7 +302,7 @@ class KyutaiStreamingTranscriber:
             async for message in self._ws_connection:
                 await self._process_message(message)
         except websockets.exceptions.ConnectionClosed:
-            logger.warning(f"[{self._participant_name}] " f"Kyutai WebSocket connection closed")
+            logger.warning(f"[{self._participant_name}] Kyutai WebSocket connection closed")
         except Exception as e:
             logger.error(f"[{self._participant_name}] Error in receiver loop: {e}", exc_info=True)
         finally:
@@ -371,14 +371,14 @@ class KyutaiStreamingTranscriber:
                     audio_offset = None
                     if self.audio_stream_anchor_time is not None:
                         audio_offset = wall_clock_now - self.audio_stream_anchor_time
-                    logger.debug(f"[{self._participant_name}] Kyutai Word: '{text}' " f"start={start_time:.4f}s offset={audio_offset:.4f}s " f"transcript_len={len(self.current_transcript)}")
+                    logger.debug(f"[{self._participant_name}] Kyutai Word: '{text}' start={start_time:.4f}s offset={audio_offset:.4f}s transcript_len={len(self.current_transcript)}")
 
                 if text:
                     # Check for significant gap - emit previous utterance
                     if self.current_transcript and self.current_utterance_last_word_stop_time is not None and start_time - self.current_utterance_last_word_stop_time > 1.0:
                         if self.debug_logging:
                             gap = start_time - self.current_utterance_last_word_stop_time
-                            logger.debug(f"[{self._participant_name}] Kyutai: " f"{gap:.2f}s silence, emitting utterance")
+                            logger.debug(f"[{self._participant_name}] Kyutai: {gap:.2f}s silence, emitting utterance")
                         self._emit_current_utterance()
 
                     # Track first word's start_time for this utterance
@@ -407,7 +407,7 @@ class KyutaiStreamingTranscriber:
                     # Debug logging only
                     if self.debug_logging:
                         word_data = self.current_transcript[-1]
-                        logger.debug(f"[{self._participant_name}] Kyutai EndWord: " f"'{word_data['text']}' " f"[{word_data['timestamp'][0]:.2f}s - " f"{word_data['timestamp'][1]:.2f}s]")
+                        logger.debug(f"[{self._participant_name}] Kyutai EndWord: '{word_data['text']}' [{word_data['timestamp'][0]:.2f}s - {word_data['timestamp'][1]:.2f}s]")
 
             elif msg_type == "Step":
                 # Step messages contain semantic VAD predictions
@@ -425,7 +425,7 @@ class KyutaiStreamingTranscriber:
 
             elif msg_type == "Marker":
                 # End of stream marker received
-                logger.info(f"[{self._participant_name}] " f"Kyutai: End of stream marker received")
+                logger.info(f"[{self._participant_name}] Kyutai: End of stream marker received")
                 # Emit any remaining transcript
                 self._emit_current_utterance()
 
@@ -434,13 +434,13 @@ class KyutaiStreamingTranscriber:
                 # calculations
                 # All audio timestamps will be relative to this moment
                 self.audio_stream_anchor_time = time.time()
-                logger.info(f"🎯 [{self._participant_name}] " f"Kyutai: Audio stream anchor set (Ready signal)")
+                logger.info(f"🎯 [{self._participant_name}] Kyutai: Audio stream anchor set (Ready signal)")
 
             else:
-                logger.warning(f"[{self._participant_name}] " f"Unknown Kyutai message type: {msg_type}")
+                logger.warning(f"[{self._participant_name}] Unknown Kyutai message type: {msg_type}")
 
         except Exception as e:
-            logger.error(f"[{self._participant_name}] " f"Error processing Kyutai message: {e}")
+            logger.error(f"[{self._participant_name}] Error processing Kyutai message: {e}")
             logger.debug(f"Raw message: {message}")
 
     def send(self, audio_data):
@@ -497,12 +497,12 @@ class KyutaiStreamingTranscriber:
                     self._loop.call_soon_threadsafe(self._send_queue.put_nowait, message)
 
         except Exception as e:
-            logger.error(f"[{self._participant_name}] " f"Error sending audio to Kyutai: {e}", exc_info=True)
+            logger.error(f"[{self._participant_name}] Error sending audio to Kyutai: {e}", exc_info=True)
 
     async def _flush_buffer(self):
         """Flush remaining audio in buffer (may be smaller than FRAME_SIZE)."""
         if len(self._audio_buffer) > 0 and self._send_queue:
-            logger.debug(f"[{self._participant_name}] " f"Flushing {len(self._audio_buffer)} buffered samples")
+            logger.debug(f"[{self._participant_name}] Flushing {len(self._audio_buffer)} buffered samples")
 
             # Send remaining samples (convert numpy array to list)
             message = msgpack.packb(
@@ -542,7 +542,7 @@ class KyutaiStreamingTranscriber:
             # - At least 3 words (catches short complete phrases)
             # - OR more than 1.5 seconds of speech
             if word_count >= 3 or utterance_duration > 1.5:
-                logger.info(f"Kyutai [{self._participant_name}]: " f"Emitting utterance on semantic VAD pause " f"({word_count} words, {utterance_duration:.1f}s)")
+                logger.info(f"Kyutai [{self._participant_name}]: Emitting utterance on semantic VAD pause ({word_count} words, {utterance_duration:.1f}s)")
                 self._emit_current_utterance()
                 self.semantic_vad_detected_pause = False  # Reset flag
                 return
@@ -553,13 +553,13 @@ class KyutaiStreamingTranscriber:
             if self.last_word_received_time is not None:
                 time_since_last_word = current_time - self.last_word_received_time
                 if time_since_last_word > 0.5:
-                    logger.info(f"Kyutai [{self._participant_name}]: " f"Emitting short utterance after pause+delay " f"({word_count} words, delay={time_since_last_word:.2f}s)")
+                    logger.info(f"Kyutai [{self._participant_name}]: Emitting short utterance after pause+delay ({word_count} words, delay={time_since_last_word:.2f}s)")
                     self._emit_current_utterance()
                     self.semantic_vad_detected_pause = False
                     return
 
             # Still very fresh - wait a bit longer
-            logger.debug(f"Kyutai [{self._participant_name}]: " f"Delaying emission - very short utterance " f"({word_count} words, {utterance_duration:.1f}s)")
+            logger.debug(f"Kyutai [{self._participant_name}]: Delaying emission - very short utterance ({word_count} words, {utterance_duration:.1f}s)")
             # Keep flag set, will check again soon
             return
 
@@ -582,7 +582,7 @@ class KyutaiStreamingTranscriber:
             # Wait up to 1.5s for EndWord on single-word utterances
             if self.current_utterance_last_word_stop_time is None:
                 if silence_duration > 1.5:
-                    logger.info(f"Kyutai [{self._participant_name}]: " f"Single-word utterance, no EndWord after " f"{silence_duration:.2f}s - emitting anyway")
+                    logger.info(f"Kyutai [{self._participant_name}]: Single-word utterance, no EndWord after {silence_duration:.2f}s - emitting anyway")
                     self._emit_current_utterance()
             else:
                 # Have EndWord, can emit after minimum silence
@@ -620,13 +620,13 @@ class KyutaiStreamingTranscriber:
             else:
                 # Fallback if we don't have proper anchoring
                 if self.debug_logging:
-                    logger.warning(f"[{self._participant_name}] " f"Kyutai: Missing timing anchors")
+                    logger.warning(f"[{self._participant_name}] Kyutai: Missing timing anchors")
                 timestamp_ms = int(time.time() * 1000)
                 duration_ms = 0
 
             # Always log emitted utterances (important for monitoring)
             logger.debug(
-                f"Kyutai [{self._participant_name}]: " f"Emitting utterance [{duration_ms}ms, " f"{len(self.current_transcript)} words]: " f"{transcript_text[:100]}"  # Truncate long utterances
+                f"Kyutai [{self._participant_name}]: Emitting utterance [{duration_ms}ms, {len(self.current_transcript)} words]: {transcript_text[:100]}"  # Truncate long utterances
             )
 
             # Call callback with duration and timestamp in metadata
@@ -694,7 +694,7 @@ class KyutaiStreamingTranscriber:
                             # Close WebSocket immediately
                             await self._ws_connection.close()
                         except Exception as e:
-                            logger.error(f"[{self._participant_name}] " f"Error closing WebSocket: {e}")
+                            logger.error(f"[{self._participant_name}] Error closing WebSocket: {e}")
 
                     # Schedule close but don't wait for it
                     asyncio.run_coroutine_threadsafe(flush_and_close(), self._loop)
@@ -704,9 +704,9 @@ class KyutaiStreamingTranscriber:
 
             # Don't wait for thread - let it finish in background
             # This releases the connection immediately for other speakers
-            logger.info(f"Released connection [{self._participant_name}] " f"(background cleanup)")
+            logger.info(f"Released connection [{self._participant_name}] (background cleanup)")
 
         except Exception as e:
-            logger.error(f"Error finishing Kyutai transcriber " f"[{self._participant_name}]: {e}")
+            logger.error(f"Error finishing Kyutai transcriber [{self._participant_name}]: {e}")
         finally:
             self.connected = False
