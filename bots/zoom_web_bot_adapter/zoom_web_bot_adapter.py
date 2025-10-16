@@ -1,12 +1,11 @@
 import json
 import logging
 import os
-import re
 from datetime import datetime
-from urllib.parse import parse_qs, urlparse
 
 import jwt
 
+from bots.meeting_url_utils import parse_zoom_join_url
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import ZoomWebUIMethods
 
@@ -63,21 +62,6 @@ def zoom_meeting_sdk_signature(
     return {"signature": token, "sdkKey": sdk_key}
 
 
-def parse_join_url(join_url):
-    # Parse the URL into components
-    parsed = urlparse(join_url)
-
-    # Extract meeting ID using regex to match only numeric characters
-    meeting_id_match = re.search(r"(\d+)", parsed.path)
-    meeting_id = meeting_id_match.group(1) if meeting_id_match else None
-
-    # Extract password from query parameters
-    query_params = parse_qs(parsed.query)
-    password = query_params.get("pwd", [None])[0]
-
-    return (meeting_id, password)
-
-
 class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def __init__(
         self,
@@ -90,7 +74,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.meeting_id, self.meeting_password = parse_join_url(self.meeting_url)
+        self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, sdk_key=zoom_client_id, sdk_secret=zoom_client_secret)
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission

@@ -6,6 +6,8 @@ from .process_utterance_task import process_utterance
 from .restart_bot_pod_task import restart_bot_pod
 from .run_bot_task import run_bot
 from .sync_calendar_task import sync_calendar
+from .sync_zoom_oauth_connection_task import sync_zoom_oauth_connection
+from .validate_zoom_oauth_connections_task import validate_zoom_oauth_connections
 
 # Expose the tasks and any necessary utilities at the module level
 __all__ = [
@@ -17,4 +19,6 @@ __all__ = [
     "sync_calendar",
     "autopay_charge",
     "process_async_transcription",
+    "sync_zoom_oauth_connection",
+    "validate_zoom_oauth_connections",
 ]

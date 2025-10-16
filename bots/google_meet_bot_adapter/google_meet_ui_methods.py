@@ -461,7 +461,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
             step="join_button",
-            condition=EC.presence_of_element_located((By.XPATH, '//button[.//span[text()="Ask to join" or text()="Join now"]]')),
+            condition=EC.presence_of_element_located((By.XPATH, '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]')),
             wait_time_seconds=60,
         )
         logger.info("Clicking the join button...")

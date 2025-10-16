@@ -1,7 +1,5 @@
-import re
 import time
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlparse
 
 import cv2
 import gi
@@ -10,6 +8,7 @@ import numpy as np
 import zoom_meeting_sdk as zoom
 
 from bots.bot_adapter import BotAdapter
+from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
@@ -53,21 +52,6 @@ def create_black_yuv420_frame(width=640, height=360):
     return yuv_frame.tobytes()
 
 
-def parse_join_url(join_url):
-    # Parse the URL into components
-    parsed = urlparse(join_url)
-
-    # Extract meeting ID using regex to match only numeric characters
-    meeting_id_match = re.search(r"(\d+)", parsed.path)
-    meeting_id = meeting_id_match.group(1) if meeting_id_match else None
-
-    # Extract password from query parameters
-    query_params = parse_qs(parsed.query)
-    password = query_params.get("pwd", [None])[0]
-
-    return (meeting_id, password)
-
-
 class ZoomBotAdapter(BotAdapter):
     def __init__(
         self,
@@ -108,7 +92,7 @@ class ZoomBotAdapter(BotAdapter):
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
-        self.meeting_id, self.meeting_password = parse_join_url(meeting_url)
+        self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)
 
         self.meeting_service = None
         self.setting_service = None

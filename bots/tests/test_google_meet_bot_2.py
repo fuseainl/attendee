@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, call, patch
 
 import kubernetes
 from django.db import connection
-from django.test.testcases import TransactionTestCase
+from django.test.testcases import TransactionTestCase, override_settings
 from django.utils import timezone
 
 from bots.bot_adapter import BotAdapter
@@ -38,13 +38,51 @@ from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_m
 from bots.web_bot_adapter.ui_methods import UiRetryableException
 
 
+@override_settings(
+    STORAGE_PROTOCOL="azure",
+    AZURE_RECORDING_STORAGE_CONTAINER_NAME="test-container",
+    CHARGE_CREDITS_FOR_BOTS=False,
+    STORAGES={  # build the exact structure your code expects
+        "default": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "connection_string": "fake",
+                "account_key": "fake",
+                "account_name": "fake",
+                "expiration_secs": None,
+            },
+        },
+        "recordings": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "connection_string": "fake",
+                "account_key": "fake",
+                "account_name": "fake",
+                "azure_container": "test-container",
+                "expiration_secs": None,
+            },
+        },
+        "bot_debug_screenshots": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "connection_string": "fake",
+                "account_key": "fake",
+                "account_name": "fake",
+                "azure_container": "test-container",
+                "expiration_secs": None,
+            },
+        },
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
+)
 class TestGoogleMeetBot2(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
 
         # Set required environment variables
-        os.environ["AWS_RECORDING_STORAGE_BUCKET_NAME"] = "test-bucket"
+        os.environ["STORAGE_PROTOCOL"] = "azure"
+        os.environ["AZURE_RECORDING_STORAGE_CONTAINER_NAME"] = "test-container"
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):
@@ -157,7 +195,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     def test_join_retry_on_failure(
         self,
         MockFileUploader,
@@ -371,7 +409,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -666,7 +704,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.bot_controller.bot_controller.ScreenAndAudioRecorder.start_recording", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
@@ -753,7 +791,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.screen_and_audio_recorder.ScreenAndAudioRecorder.pause_recording", return_value=True)
@@ -948,7 +986,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -1250,14 +1288,16 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     def test_bot_uploads_to_external_storage_when_credentials_available(
         self,
         mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
-        MockFileUploader,
+        MockS3FileUploader,
+        MockAzureFileUploader,
         MockChromeDriver,
         MockDisplay,
         mock_create_debug_recording,
@@ -1276,8 +1316,10 @@ class TestGoogleMeetBot2(TransactionTestCase):
         external_credentials.set_credentials({"access_key_id": "test_access_key", "access_key_secret": "test_secret_key", "endpoint_url": "https://s3.amazonaws.com", "region_name": "us-east-1"})
 
         # Configure the mock uploader for both regular and external storage
-        mock_uploader = create_mock_file_uploader()
-        MockFileUploader.return_value = mock_uploader
+        mock_azure_uploader = create_mock_file_uploader()
+        MockAzureFileUploader.return_value = mock_azure_uploader
+        mock_s3_uploader = create_mock_file_uploader()
+        MockS3FileUploader.return_value = mock_s3_uploader
 
         # Mock the Chrome driver
         mock_driver = create_mock_google_meet_driver()
@@ -1330,30 +1372,34 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
         # Verify file uploader was called multiple times - once for external storage and once for regular storage
         # The external storage upload happens first, then the regular upload
-        self.assertEqual(mock_uploader.upload_file.call_count, 2, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
-        self.assertEqual(mock_uploader.wait_for_upload.call_count, 2, "FileUploader.wait_for_upload should be called twice")
+        self.assertEqual(mock_azure_uploader.upload_file.call_count, 1, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
+        self.assertEqual(mock_s3_uploader.upload_file.call_count, 1, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
+
+        self.assertEqual(mock_azure_uploader.wait_for_upload.call_count, 1, "FileUploader.wait_for_upload should be called twice")
+        self.assertEqual(mock_s3_uploader.wait_for_upload.call_count, 1, "FileUploader.wait_for_upload should be called twice")
 
         # Verify FileUploader was instantiated twice with different parameters
-        self.assertEqual(MockFileUploader.call_count, 2, "FileUploader should be instantiated twice")
+        self.assertEqual(MockAzureFileUploader.call_count, 1, "FileUploader should be instantiated twice")
+        self.assertEqual(MockS3FileUploader.call_count, 1, "FileUploader should be instantiated twice")
 
         # Check the first call (external storage)
-        external_call_args = MockFileUploader.call_args_list[0]
+        external_call_args = MockS3FileUploader.call_args_list[0]
         external_call_kwargs = external_call_args.kwargs
         self.assertEqual(external_call_kwargs["bucket"], "my-external-bucket")
-        self.assertEqual(external_call_kwargs["key"], "custom-recording-name.mp4")
+        self.assertEqual(external_call_kwargs["filename"], "custom-recording-name.mp4")
         self.assertEqual(external_call_kwargs["endpoint_url"], "https://s3.amazonaws.com")
         self.assertEqual(external_call_kwargs["region_name"], "us-east-1")
         self.assertEqual(external_call_kwargs["access_key_id"], "test_access_key")
         self.assertEqual(external_call_kwargs["access_key_secret"], "test_secret_key")
 
         # Check the second call (regular storage) - should use environment variables
-        regular_call_args = MockFileUploader.call_args_list[1]
+        regular_call_args = MockAzureFileUploader.call_args_list[0]
         regular_call_kwargs = regular_call_args.kwargs
-        self.assertEqual(regular_call_kwargs["bucket"], "test-bucket")  # From environment variable set in setUpClass
-        self.assertIsNotNone(regular_call_kwargs["key"])  # Should have some recording filename
+        self.assertEqual(regular_call_kwargs["container"], "test-container")  # From environment variable set in setUpClass
+        self.assertIsNotNone(regular_call_kwargs["filename"])  # Should have some recording filename
 
         # Verify only one delete_file call (for the regular storage uploader)
-        mock_uploader.delete_file.assert_called_once()
+        mock_azure_uploader.delete_file.assert_called_once()
 
         # Cleanup
         controller.cleanup()

@@ -230,3 +230,19 @@ def normalize_meeting_url_raw(url):
                 return MeetingTypes.TEAMS, canonical_url
 
     return None, None
+
+
+# Returns (meeting_id, password) from a Zoom join URL
+def parse_zoom_join_url(join_url):
+    # Parse the URL into components
+    parsed = urlparse(join_url)
+
+    # Extract meeting ID using regex to match only numeric characters
+    meeting_id_match = re.search(r"(\d+)", parsed.path)
+    meeting_id = meeting_id_match.group(1) if meeting_id_match else None
+
+    # Extract password from query parameters
+    query_params = parse_qs(parsed.query)
+    password = query_params.get("pwd", [None])[0]
+
+    return (meeting_id, password)

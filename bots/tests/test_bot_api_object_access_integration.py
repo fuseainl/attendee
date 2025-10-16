@@ -33,7 +33,7 @@ from bots.models import (
 )
 
 
-class ApiObjectAccessIntegrationTest(TransactionTestCase):
+class BotApiObjectAccessIntegrationTest(TransactionTestCase):
     """Integration tests for API object access control in bots_api_views.py"""
 
     def setUp(self):

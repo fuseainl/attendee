@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.core.exceptions import PermissionDenied
 from django.http import Http404
 from django.test import Client, TransactionTestCase
@@ -14,6 +16,7 @@ from bots.models import (
     ProjectAccess,
     WebhookSubscription,
     WebhookTriggerTypes,
+    ZoomOAuthApp,
 )
 from bots.projects_views import (
     get_api_key_for_user,
@@ -105,6 +108,16 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         self.webhook_a2 = WebhookSubscription.objects.create(project=self.project_a2, url="https://example.com/webhook/a2", triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE])
 
         self.webhook_b1 = WebhookSubscription.objects.create(project=self.project_b1, url="https://example.com/webhook/b1", triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE])
+
+        # Create Zoom OAuth apps
+        self.zoom_oauth_app_a1 = ZoomOAuthApp.objects.create(project=self.project_a1, client_id="test_client_id_a1")
+        self.zoom_oauth_app_a1.set_credentials({"client_secret": "test_secret_a1", "webhook_secret": "test_webhook_secret_a1"})
+
+        self.zoom_oauth_app_a2 = ZoomOAuthApp.objects.create(project=self.project_a2, client_id="test_client_id_a2")
+        self.zoom_oauth_app_a2.set_credentials({"client_secret": "test_secret_a2", "webhook_secret": "test_webhook_secret_a2"})
+
+        self.zoom_oauth_app_b1 = ZoomOAuthApp.objects.create(project=self.project_b1, client_id="test_client_id_b1")
+        self.zoom_oauth_app_b1.set_credentials({"client_secret": "test_secret_b1", "webhook_secret": "test_webhook_secret_b1"})
 
     # Tests for get_project_for_user()
     def test_get_project_for_user_admin_access_same_org(self):
@@ -439,6 +452,81 @@ class ObjectAccessIntegrationTest(TransactionTestCase):
         )
         # This should redirect since the event doesn't belong to the specified calendar
         self.assertEqual(response.status_code, 302)
+
+    @patch("bots.zoom_oauth_apps_api_utils.client_id_and_secret_is_valid")
+    def test_zoom_oauth_app_creation_access_control(self, mock_client_id_validation):
+        """Test that ZoomOAuthApp creation is properly controlled"""
+        # Mock the validation to always return True
+        mock_client_id_validation.return_value = True
+
+        # Admin can create/update Zoom OAuth apps in any project in their org
+        self.client.force_login(self.admin_user_a)
+        response = self.client.post(
+            reverse("bots:create-zoom-oauth-app", kwargs={"object_id": self.project_a1.object_id}),
+            data={"client_id": "new_client_id_a1", "client_secret": "new_secret_a1", "webhook_secret": "new_webhook_secret_a1"},
+        )
+        # Should succeed (200) or redirect (302)
+        self.assertIn(response.status_code, [200, 302])
+
+        response = self.client.post(
+            reverse("bots:create-zoom-oauth-app", kwargs={"object_id": self.project_a2.object_id}),
+            data={"client_id": "new_client_id_a2", "client_secret": "new_secret_a2", "webhook_secret": "new_webhook_secret_a2"},
+        )
+        self.assertIn(response.status_code, [200, 302])
+
+        # Regular user can create/update Zoom OAuth apps in projects they have access to
+        self.client.force_login(self.regular_user_a)
+        response = self.client.post(
+            reverse("bots:create-zoom-oauth-app", kwargs={"object_id": self.project_a1.object_id}),
+            data={"client_secret": "updated_secret_a1"},  # Updating existing app
+        )
+        self.assertIn(response.status_code, [200, 302])
+
+        # Regular user cannot create/update Zoom OAuth apps in projects they don't have access to
+        response = self.client.post(
+            reverse("bots:create-zoom-oauth-app", kwargs={"object_id": self.project_a2.object_id}),
+            data={"client_id": "unauthorized_client_id", "client_secret": "unauthorized_secret"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+        # Users cannot create/update Zoom OAuth apps in different organizations
+        response = self.client.post(
+            reverse("bots:create-zoom-oauth-app", kwargs={"object_id": self.project_b1.object_id}),
+            data={"client_id": "cross_org_client_id", "client_secret": "cross_org_secret"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_zoom_oauth_app_deletion_access_control(self):
+        """Test that ZoomOAuthApp deletion is properly controlled"""
+        # Admin can delete Zoom OAuth apps in any project in their org
+        self.client.force_login(self.admin_user_a)
+        response = self.client.post(reverse("bots:delete-zoom-oauth-app", kwargs={"object_id": self.project_a1.object_id}))
+        self.assertEqual(response.status_code, 200)
+        # Verify the app was deleted
+        self.assertFalse(ZoomOAuthApp.objects.filter(project=self.project_a1).exists())
+
+        # Recreate the app for further testing
+        self.zoom_oauth_app_a1 = ZoomOAuthApp.objects.create(project=self.project_a1, client_id="test_client_id_a1")
+        self.zoom_oauth_app_a1.set_credentials({"client_secret": "test_secret_a1", "webhook_secret": "test_webhook_secret_a1"})
+
+        # Regular user can delete Zoom OAuth apps in projects they have access to
+        self.client.force_login(self.regular_user_a)
+        response = self.client.post(reverse("bots:delete-zoom-oauth-app", kwargs={"object_id": self.project_a1.object_id}))
+        self.assertEqual(response.status_code, 200)
+        # Verify the app was deleted
+        self.assertFalse(ZoomOAuthApp.objects.filter(project=self.project_a1).exists())
+
+        # Regular user cannot delete Zoom OAuth apps in projects they don't have access to
+        response = self.client.post(reverse("bots:delete-zoom-oauth-app", kwargs={"object_id": self.project_a2.object_id}))
+        self.assertEqual(response.status_code, 403)
+        # Verify the app still exists
+        self.assertTrue(ZoomOAuthApp.objects.filter(project=self.project_a2).exists())
+
+        # Users cannot delete Zoom OAuth apps in different organizations
+        response = self.client.post(reverse("bots:delete-zoom-oauth-app", kwargs={"object_id": self.project_b1.object_id}))
+        self.assertEqual(response.status_code, 404)
+        # Verify the app still exists
+        self.assertTrue(ZoomOAuthApp.objects.filter(project=self.project_b1).exists())
 
     def test_unauthenticated_access_redirects_to_login(self):
         """Test that unauthenticated users are redirected to login"""

@@ -8,10 +8,11 @@ from django.db.models import Q
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.models import Bot, BotStates, Calendar, CalendarStates
+from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
 from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
+from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_connection_task
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class Command(BaseCommand):
             try:
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
+                self._run_periodic_zoom_oauth_connection_syncs()
                 self._run_autopay_tasks()
             except Exception:
                 log.exception("Scheduler cycle failed")
@@ -90,6 +92,26 @@ class Command(BaseCommand):
             enqueue_sync_calendar_task(calendar)
 
         log.info("Launched %d calendar sync tasks", len(calendars))
+
+    def _run_periodic_zoom_oauth_connection_syncs(self):
+        """
+        Run periodic zoom oauth connection syncs.
+        Launch sync tasks for zoom oauth connections that haven't had a sync task enqueued in the last 7 days.
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(days=7)
+
+        # Find connected zoom oauth connections that haven't had a sync task enqueued in the last 7 days
+        zoom_oauth_connections = ZoomOAuthConnection.objects.filter(
+            state=ZoomOAuthConnectionStates.CONNECTED,
+        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))
+
+        for zoom_oauth_connection in zoom_oauth_connections:
+            last_enqueued = zoom_oauth_connection.sync_task_enqueued_at.isoformat() if zoom_oauth_connection.sync_task_enqueued_at else "never"
+            log.info("Launching zoom oauth connection sync for zoom oauth connection %s (last enqueued: %s)", zoom_oauth_connection.object_id, last_enqueued)
+            enqueue_sync_zoom_oauth_connection_task(zoom_oauth_connection)
+
+        log.info("Launched %d zoom oauth connection sync tasks", len(zoom_oauth_connections))
 
     # -----------------------------------------------------------
     def _run_scheduled_bots(self):

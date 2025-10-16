@@ -8,7 +8,7 @@ from django.utils import timezone
 from accounts.models import Organization
 from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
-from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
+from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
@@ -27,7 +27,7 @@ class TestValidateMeetingUrlAndCredentials(TestCase):
         """Test Zoom URL and credentials validation"""
         # Test Zoom URL without credentials
         error = validate_meeting_url_and_credentials("https://zoom.us/j/123456789", self.project)
-        self.assertEqual(error, {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at https://app.attendee.dev/projects/{self.project.object_id}/credentials"})
+        self.assertEqual(error, {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at http://localhost:8000/projects/{self.project.object_id}/credentials"})
 
     def test_validate_teams_url(self):
         """Test Teams URL validation"""
@@ -48,7 +48,7 @@ class TestCreateBot(TestCase):
         self.assertIsNone(error)
 
     def test_create_zoom_bot_with_default_settings(self):
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
         print("error", error)
         self.assertIsNotNone(bot)
@@ -58,7 +58,7 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.use_zoom_web_adapter(), False)
 
     def test_create_zoom_bot_with_default_settings_and_web_adapter(self):
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot", "zoom_settings": {"sdk": "web"}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNotNone(bot.recordings.first())
@@ -85,7 +85,7 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
 
         # Test Zoom bot with explicit closed captions (requires credentials and web SDK)
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot2, error2 = create_bot(data={"meeting_url": "https://zoom.us/j/987654321", "bot_name": "Zoom CC Test Bot", "zoom_settings": {"sdk": "web"}, "transcription_settings": {"meeting_closed_captions": {"zoom_language": "Spanish"}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot2)
         self.assertIsNotNone(bot2.recordings.first())
