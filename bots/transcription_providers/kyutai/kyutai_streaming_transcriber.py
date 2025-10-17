@@ -394,7 +394,7 @@ class KyutaiStreamingTranscriber:
                 data = msgpack.unpackb(message, raw=False, strict_map_key=False)
             except (UnicodeDecodeError, ValueError) as decode_err:
                 # Handle encoding errors gracefully
-                logger.error(f"[{self._participant_name}] Kyutai: Failed to decode " f"message: {decode_err}. Attempting recovery with " f"error handling...")
+                logger.error(f"[{self._participant_name}] Kyutai: Failed to decode message: {decode_err}. Attempting recovery with error handling...")
                 # Try again with raw=True, manually decode with error handling
                 try:
                     data = msgpack.unpackb(message, raw=True)
@@ -406,7 +406,7 @@ class KyutaiStreamingTranscriber:
                     # Convert byte keys to strings
                     data = {k.decode("utf-8") if isinstance(k, bytes) else k: v for k, v in data.items()}
                 except Exception as recovery_err:
-                    logger.error(f"[{self._participant_name}] Kyutai: Recovery " f"failed: {recovery_err}. Skipping message.")
+                    logger.error(f"[{self._participant_name}] Kyutai: Recovery failed: {recovery_err}. Skipping message.")
                     return
 
             msg_type = data.get("type")
@@ -422,10 +422,10 @@ class KyutaiStreamingTranscriber:
                 # Log if we received problematic characters
                 if raw_text and not text:
                     self.invalid_text_count += 1
-                    logger.warning(f"[{self._participant_name}] Kyutai: Filtered out " f"invalid text at {start_time:.2f}s " f"(raw bytes: {raw_text.encode('utf-8', errors='replace')}) " f"[{self.invalid_text_count} invalid texts so far]")
+                    logger.warning(f"[{self._participant_name}] Kyutai: Filtered out invalid text at {start_time:.2f}s (raw bytes: {raw_text.encode('utf-8', errors='replace')}) [{self.invalid_text_count} invalid texts so far]")
                 elif raw_text != text:
                     self.invalid_text_count += 1
-                    logger.warning(f"[{self._participant_name}] Kyutai: Sanitized text " f"from '{raw_text}' to '{text}' at {start_time:.2f}s " f"[{self.invalid_text_count} invalid texts so far]")
+                    logger.warning(f"[{self._participant_name}] Kyutai: Sanitized text from '{raw_text}' to '{text}' at {start_time:.2f}s [{self.invalid_text_count} invalid texts so far]")
 
                 # Debug logging only (verbose)
                 if self.debug_logging and text:
