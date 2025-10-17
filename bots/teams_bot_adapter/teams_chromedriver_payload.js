@@ -1596,7 +1596,7 @@ class ParticipantSpeakingStateMachine {
             dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
-            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp, this.participantId);
+            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
         }
     }
 }
