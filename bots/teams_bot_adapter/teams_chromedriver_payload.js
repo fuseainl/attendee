@@ -1145,9 +1145,9 @@ class WebSocketClient {
   
     enableMediaSending() {
         this.mediaSendingEnabled = true;
+        window.receiverManager.startPollingReceivers();
         window.styleManager.start();
         window.callManager.syncParticipants();
-
         // No longer need this because we're not using MediaStreamTrackProcessor's
         //this.startBlackFrameTimer();
     }
@@ -1605,6 +1605,13 @@ class ReceiverManager {
     constructor() {
         this.receiverMap = new Map();
         this.participantSpeakingStateMachineMap = new Map();
+    }
+
+    startPollingReceivers() {
+        window.ws.sendJson({
+            type: 'ReceiverManagerUpdate',
+            update: "startPollingReceivers"
+        });
         setInterval(() => {
             this.pollReceivers();
         }, 100);
