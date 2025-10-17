@@ -2,6 +2,7 @@ import asyncio
 import audioop
 import logging
 import queue
+import re
 import threading
 import time
 
@@ -70,6 +71,34 @@ FRAME_SIZE = 1920  # Fixed frame size for sending (80ms at 24kHz)
 # We use 0.5 seconds as a good balance for natural speech segmentation
 PAUSE_PREDICTION_HEAD_INDEX = 0
 PAUSE_THRESHOLD = 0.25  # Confidence threshold for detecting pauses
+
+
+def _sanitize_text(text):
+    """
+    Sanitize text by removing invalid/problematic characters.
+
+    Handles cases where Kyutai server sends:
+    - Invalid UTF-8 sequences (� replacement characters)
+    - Control characters
+    - Other problematic Unicode characters
+
+    Returns cleaned text or None if text becomes empty.
+    """
+    if not text:
+        return None
+
+    # Remove replacement character (�) and other problematic characters
+    # U+FFFD is the replacement character
+    text = text.replace("\ufffd", "")
+
+    # Remove control characters except newline, tab, carriage return
+    text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+
+    # Strip whitespace
+    text = text.strip()
+
+    # Return None if empty after cleaning
+    return text if text else None
 
 
 class KyutaiStreamingTranscriber:
@@ -160,6 +189,9 @@ class KyutaiStreamingTranscriber:
         self.audio_stream_anchor_time = None
         # Track when last word was received (wall clock, for silence detection)
         self.last_word_received_time = None
+        # Track problematic character occurrences for health monitoring
+        self.invalid_text_count = 0
+        self.last_valid_word_time = None
         # Track audio stream positions for current utterance
         self.current_utterance_first_word_start_time = None  # From "Word"
         self.current_utterance_last_word_stop_time = None  # From "EndWord"
@@ -356,17 +388,47 @@ class KyutaiStreamingTranscriber:
         """
         try:
             # Decode MessagePack message
-            data = msgpack.unpackb(message, raw=False)
+            # Use strict_map_key=False to handle diverse key types
+            # raw=False decodes bytes to str (UTF-8)
+            try:
+                data = msgpack.unpackb(message, raw=False, strict_map_key=False)
+            except (UnicodeDecodeError, ValueError) as decode_err:
+                # Handle encoding errors gracefully
+                logger.error(f"[{self._participant_name}] Kyutai: Failed to decode " f"message: {decode_err}. Attempting recovery with " f"error handling...")
+                # Try again with raw=True, manually decode with error handling
+                try:
+                    data = msgpack.unpackb(message, raw=True)
+                    # Manually decode text fields with error handling
+                    if isinstance(data.get(b"text"), bytes):
+                        data[b"text"] = data[b"text"].decode("utf-8", errors="replace")
+                    if isinstance(data.get(b"type"), bytes):
+                        data[b"type"] = data[b"type"].decode("utf-8")
+                    # Convert byte keys to strings
+                    data = {k.decode("utf-8") if isinstance(k, bytes) else k: v for k, v in data.items()}
+                except Exception as recovery_err:
+                    logger.error(f"[{self._participant_name}] Kyutai: Recovery " f"failed: {recovery_err}. Skipping message.")
+                    return
 
             msg_type = data.get("type")
 
             if msg_type == "Word":
                 # Received a new word
-                text = data.get("text", "")
+                raw_text = data.get("text", "")
                 start_time = data.get("start_time", 0.0)
 
+                # Sanitize text to handle encoding issues
+                text = _sanitize_text(raw_text)
+
+                # Log if we received problematic characters
+                if raw_text and not text:
+                    self.invalid_text_count += 1
+                    logger.warning(f"[{self._participant_name}] Kyutai: Filtered out " f"invalid text at {start_time:.2f}s " f"(raw bytes: {raw_text.encode('utf-8', errors='replace')}) " f"[{self.invalid_text_count} invalid texts so far]")
+                elif raw_text != text:
+                    self.invalid_text_count += 1
+                    logger.warning(f"[{self._participant_name}] Kyutai: Sanitized text " f"from '{raw_text}' to '{text}' at {start_time:.2f}s " f"[{self.invalid_text_count} invalid texts so far]")
+
                 # Debug logging only (verbose)
-                if self.debug_logging:
+                if self.debug_logging and text:
                     wall_clock_now = time.time()
                     audio_offset = None
                     if self.audio_stream_anchor_time is not None:
@@ -374,6 +436,9 @@ class KyutaiStreamingTranscriber:
                     logger.debug(f"[{self._participant_name}] Kyutai Word: '{text}' start={start_time:.4f}s offset={audio_offset:.4f}s transcript_len={len(self.current_transcript)}")
 
                 if text:
+                    # Track valid word reception
+                    self.last_valid_word_time = time.time()
+
                     # Check for significant gap - emit previous utterance
                     if self.current_transcript and self.current_utterance_last_word_stop_time is not None and start_time - self.current_utterance_last_word_stop_time > 1.0:
                         if self.debug_logging:
