@@ -29,6 +29,9 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Snyk Scanner
+.snyk
+.dccache
 
 bots/zoom_rtms_adapter/zoom_rtms_node_app/node_modules/
 

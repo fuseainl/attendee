@@ -54,6 +54,11 @@ def deliver_webhook(self, delivery_id):
         related_object_specific_webhook_data["calendar_id"] = delivery.calendar.object_id
         related_object_specific_webhook_data["calendar_deduplication_key"] = delivery.calendar.deduplication_key
         related_object_specific_webhook_data["calendar_metadata"] = delivery.calendar.metadata
+    elif delivery.zoom_oauth_connection:
+        related_object_specific_webhook_data["zoom_oauth_connection_id"] = delivery.zoom_oauth_connection.object_id
+        related_object_specific_webhook_data["zoom_oauth_connection_metadata"] = delivery.zoom_oauth_connection.metadata
+        related_object_specific_webhook_data["user_id"] = delivery.zoom_oauth_connection.user_id
+        related_object_specific_webhook_data["account_id"] = delivery.zoom_oauth_connection.account_id
 
     # Prepare the webhook payload
     webhook_data = {

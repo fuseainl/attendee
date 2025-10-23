@@ -8,7 +8,7 @@ import uuid
 logger = logging.getLogger(__name__)
 
 
-def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, payload=None):
+def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_connection=None, payload=None):
     """
     Trigger a webhook for a given event.
     Prioritizes bot-level webhook subscriptions over project-level ones.
@@ -19,8 +19,10 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, payload=None)
         project = bot.project
     elif calendar:
         project = calendar.project
+    elif zoom_oauth_connection:
+        project = zoom_oauth_connection.zoom_oauth_app.project
     else:
-        raise ValueError("Either bot or calendar must be provided")
+        raise ValueError("Either bot or calendar or zoom_oauth_connection must be provided")
 
     if not payload:
         raise ValueError("Payload must be provided")
@@ -45,6 +47,7 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, payload=None)
             idempotency_key=uuid.uuid4(),
             bot=bot,
             calendar=calendar,
+            zoom_oauth_connection=zoom_oauth_connection,
             payload=payload,
         )
         delivery_attempts.append(delivery_attempt)

@@ -10,6 +10,7 @@ from datetime import timedelta
 
 import gi
 import redis
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
@@ -50,11 +51,12 @@ from bots.models import (
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
+from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 
 from .audio_output_manager import AudioOutputManager
+from .azure_file_uploader import AzureFileUploader
 from .bot_resource_snapshot_taker import BotResourceSnapshotTaker
 from .closed_caption_manager import ClosedCaptionManager
-from .file_uploader import FileUploader
 from .grouped_closed_caption_manager import GroupedClosedCaptionManager
 from .gstreamer_pipeline import GstreamerPipeline
 from .per_participant_non_streaming_audio_input_manager import PerParticipantNonStreamingAudioInputManager
@@ -62,6 +64,7 @@ from .per_participant_streaming_audio_input_manager import PerParticipantStreami
 from .pipeline_configuration import PipelineConfiguration
 from .realtime_audio_output_manager import RealtimeAudioOutputManager
 from .rtmp_client import RTMPClient
+from .s3_file_uploader import S3FileUploader
 from .screen_and_audio_recorder import ScreenAndAudioRecorder
 from .video_output_manager import VideoOutputManager
 
@@ -162,7 +165,7 @@ class BotController:
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
         )
 
-    def get_zoom_oauth_credentials(self):
+    def get_zoom_oauth_credentials_via_credentials_record(self):
         zoom_oauth_credentials_record = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
         if not zoom_oauth_credentials_record:
             raise Exception("Zoom OAuth credentials not found")
@@ -173,6 +176,24 @@ class BotController:
 
         return zoom_oauth_credentials
 
+    def get_zoom_oauth_credentials_via_zoom_oauth_app(self):
+        zoom_oauth_app = self.bot_in_db.project.zoom_oauth_apps.first()
+        if not zoom_oauth_app:
+            return
+
+        return {"client_id": zoom_oauth_app.client_id, "client_secret": zoom_oauth_app.client_secret}
+
+    def get_zoom_oauth_credentials_and_tokens(self):
+        zoom_oauth_credentials = self.get_zoom_oauth_credentials_via_zoom_oauth_app() or self.get_zoom_oauth_credentials_via_credentials_record()
+
+        zoom_tokens = {}
+        if self.bot_in_db.zoom_tokens_callback_url():
+            zoom_tokens = get_zoom_tokens(self.bot_in_db)
+        else:
+            zoom_tokens = get_zoom_tokens_via_zoom_oauth_app(self.bot_in_db)
+
+        return zoom_oauth_credentials, zoom_tokens
+
     def get_zoom_web_bot_adapter(self):
         from bots.zoom_web_bot_adapter import ZoomWebBotAdapter
 
@@ -181,11 +202,7 @@ class BotController:
         else:
             add_audio_chunk_callback = None
 
-        zoom_oauth_credentials = self.get_zoom_oauth_credentials()
-
-        zoom_tokens = {}
-        if self.bot_in_db.zoom_tokens_callback_url():
-            zoom_tokens = get_zoom_tokens(self.bot_in_db)
+        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomWebBotAdapter(
             display_name=self.bot_in_db.name,
@@ -219,13 +236,9 @@ class BotController:
     def get_zoom_bot_adapter(self):
         from bots.zoom_bot_adapter import ZoomBotAdapter
 
-        zoom_oauth_credentials = self.get_zoom_oauth_credentials()
-
         add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
 
-        zoom_tokens = {}
-        if self.bot_in_db.zoom_tokens_callback_url():
-            zoom_tokens = get_zoom_tokens(self.bot_in_db)
+        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomBotAdapter(
             use_one_way_audio=self.pipeline_configuration.transcribe_audio,
@@ -447,9 +460,9 @@ class BotController:
 
         try:
             logger.info(f"Uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
-            file_uploader = FileUploader(
+            file_uploader = S3FileUploader(
                 bucket=self.bot_in_db.external_media_storage_bucket_name(),
-                key=self.bot_in_db.external_media_storage_recording_file_name() or self.get_recording_filename(),
+                filename=self.bot_in_db.external_media_storage_recording_file_name() or self.get_recording_filename(),
                 endpoint_url=external_media_storage_credentials.get("endpoint_url") or None,
                 region_name=external_media_storage_credentials.get("region_name"),
                 access_key_id=external_media_storage_credentials.get("access_key_id"),
@@ -460,6 +473,22 @@ class BotController:
             logger.info(f"File uploader finished uploading file to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}")
         except Exception as e:
             logger.exception(f"Error uploading recording to external media storage bucket {self.bot_in_db.external_media_storage_bucket_name()}: {e}")
+
+    def get_file_uploader(self):
+        if settings.STORAGE_PROTOCOL == "azure":
+            return AzureFileUploader(
+                container=settings.AZURE_RECORDING_STORAGE_CONTAINER_NAME,
+                filename=self.get_recording_filename(),
+                connection_string=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("connection_string"),
+                account_key=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("account_key"),
+                account_name=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("account_name"),
+            )
+
+        return S3FileUploader(
+            bucket=settings.AWS_RECORDING_STORAGE_BUCKET_NAME,
+            filename=self.get_recording_filename(),
+            endpoint_url=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("endpoint_url"),
+        )
 
     def cleanup(self):
         if self.cleanup_called:
@@ -516,17 +545,13 @@ class BotController:
             self.upload_recording_to_external_media_storage_if_enabled()
 
             logger.info("Telling file uploader to upload recording file...")
-            file_uploader = FileUploader(
-                bucket=os.environ.get("AWS_RECORDING_STORAGE_BUCKET_NAME"),
-                key=self.get_recording_filename(),
-                endpoint_url=os.environ.get("AWS_ENDPOINT_URL"),
-            )
+            file_uploader = self.get_file_uploader()
             file_uploader.upload_file(self.get_recording_file_location())
             file_uploader.wait_for_upload()
             logger.info("File uploader finished uploading file")
             file_uploader.delete_file(self.get_recording_file_location())
             logger.info("File uploader deleted file from local filesystem")
-            self.recording_file_saved(file_uploader.key)
+            self.recording_file_saved(file_uploader.filename)
 
         if self.bot_in_db.create_debug_recording():
             self.save_debug_recording()

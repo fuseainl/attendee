@@ -51,9 +51,11 @@ from .models import (
     WebhookSecret,
     WebhookSubscription,
     WebhookTriggerTypes,
+    ZoomOAuthApp,
 )
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
 from .utils import generate_recordings_json_for_bot_detail_view
+from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,40 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=calendar_event.calendar.project, user=user).exists():
         raise PermissionDenied
     return calendar_event
+
+
+def get_webhook_options_for_project(project):
+    trigger_types = [trigger_type for trigger_type in WebhookTriggerTypes]
+    if not project.organization.is_managed_zoom_oauth_enabled:
+        trigger_types.remove(WebhookTriggerTypes.ZOOM_OAUTH_CONNECTION_STATE_CHANGE)
+    if not project.organization.is_async_transcription_enabled:
+        trigger_types.remove(WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE)
+    return trigger_types
+
+
+def get_partial_for_credential_type(credential_type, request, context):
+    if credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
+        return render(request, "projects/partials/zoom_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.DEEPGRAM:
+        return render(request, "projects/partials/deepgram_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.GLADIA:
+        return render(request, "projects/partials/gladia_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.OPENAI:
+        return render(request, "projects/partials/openai_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
+        return render(request, "projects/partials/google_tts_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
+        return render(request, "projects/partials/assembly_ai_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.SARVAM:
+        return render(request, "projects/partials/sarvam_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
+        return render(request, "projects/partials/elevenlabs_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+        return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+        return render(request, "projects/partials/external_media_storage_credentials.html", context)
+    else:
+        return HttpResponse("Cannot render the partial for this credential type", status=400)
 
 
 class AdminRequiredMixin(LoginRequiredMixin):
@@ -153,7 +189,7 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     "has_api_keys": has_api_keys,
                     "has_ended_bots": has_ended_bots,
                     "has_created_bots_via_api": has_created_bots_via_api,
-                }
+                },
             }
         )
 
@@ -198,6 +234,35 @@ class DeleteApiKeyView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class RedirectToDashboardView(LoginRequiredMixin, View):
     def get(self, request, object_id, extra=None):
         return redirect("bots:project-dashboard", object_id=object_id)
+
+
+class DeleteZoomOAuthAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
+        if not zoom_oauth_app:
+            return HttpResponse("Zoom OAuth app not found", status=404)
+        zoom_oauth_app.delete()
+        context = self.get_project_context(object_id, project)
+        return render(request, "projects/partials/zoom_oauth_app.html", context)
+
+
+class CreateZoomOAuthAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        zoom_oauth_app, error = create_or_update_zoom_oauth_app(
+            project=project,
+            client_id=request.POST.get("client_id"),
+            client_secret=request.POST.get("client_secret"),
+            webhook_secret=request.POST.get("webhook_secret"),
+        )
+
+        if error:
+            return HttpResponse(error, status=400)
+
+        context = self.get_project_context(object_id, project)
+        context["zoom_oauth_app"] = zoom_oauth_app
+        return render(request, "projects/partials/zoom_oauth_app.html", context)
 
 
 class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
@@ -277,36 +342,49 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             context = self.get_project_context(object_id, project)
             context["credentials"] = credential.get_credentials()
             context["credential_type"] = credential.credential_type
-            if credential.credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
-                return render(request, "projects/partials/zoom_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.DEEPGRAM:
-                return render(request, "projects/partials/deepgram_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.GLADIA:
-                return render(request, "projects/partials/gladia_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.OPENAI:
-                return render(request, "projects/partials/openai_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
-                return render(request, "projects/partials/assembly_ai_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.SARVAM:
-                return render(request, "projects/partials/sarvam_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.ELEVENLABS:
-                return render(request, "projects/partials/elevenlabs_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
-                return render(request, "projects/partials/google_tts_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
-                return render(request, "projects/partials/teams_bot_login_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
-                return render(request, "projects/partials/external_media_storage_credentials.html", context)
-            else:
-                return HttpResponse("Cannot render the partial for this credential type", status=400)
+
+            # Render the appropriate partial based on credential type
+            return get_partial_for_credential_type(credential.credential_type, request, context)
 
         except Exception as e:
             return HttpResponse(str(e), status=400)
 
 
+class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            credential_type = int(request.POST.get("credential_type"))
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
+                return HttpResponse("Invalid credential type", status=400)
+
+            # Find and delete the credential
+            credential = Credentials.objects.filter(project=project, credential_type=credential_type).first()
+
+            if credential:
+                credential.delete()
+
+            # Return the updated partial for the specific credential type
+            context = self.get_project_context(object_id, project)
+            context["credentials"] = None
+            context["credential_type"] = credential_type
+
+            # Render the appropriate partial based on credential type
+            return get_partial_for_credential_type(credential_type, request, context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error deleting credentials (error_id={error_id}): {e}")
+            return HttpResponse(f"Error deleting credentials. Error ID: {error_id}", status=400)
+
+
 class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Try to get existing zoom oauth app
+        zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
 
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
@@ -332,6 +410,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context = self.get_project_context(object_id, project)
         context.update(
             {
+                "zoom_oauth_app": zoom_oauth_app,
                 "zoom_credentials": zoom_credentials.get_credentials() if zoom_credentials else None,
                 "zoom_credential_type": Credentials.CredentialTypes.ZOOM_OAUTH,
                 "deepgram_credentials": deepgram_credentials.get_credentials() if deepgram_credentials else None,
@@ -721,7 +800,7 @@ class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context = self.get_project_context(object_id, project)
         # Only show project-level webhooks, not bot-level ones
         context["webhooks"] = project.webhook_subscriptions.filter(bot__isnull=True).order_by("-created_at")
-        context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["webhook_options"] = get_webhook_options_for_project(project)
         context["webhook_secret"] = base64.b64encode(webhook_secret.get_secret()).decode("utf-8")
         context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
@@ -902,7 +981,7 @@ class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         webhook.delete()
         context = self.get_project_context(object_id, webhook.project)
         context["webhooks"] = WebhookSubscription.objects.filter(project=webhook.project, bot__isnull=True).order_by("-created_at")
-        context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["webhook_options"] = get_webhook_options_for_project(webhook.project)
         context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
 

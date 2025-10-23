@@ -42,6 +42,8 @@ from .models import (
     RecordingTranscriptionStates,
     RecordingViews,
     TranscriptionProviders,
+    ZoomOAuthConnection,
+    ZoomOAuthConnectionStates,
 )
 
 
@@ -2006,3 +2008,97 @@ class AsyncTranscriptionSerializer(serializers.ModelSerializer):
     def get_state(self, obj):
         """Return the state as an API code"""
         return AsyncTranscriptionStates.state_to_api_code(obj.state)
+
+
+class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
+    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for")
+    authorization_code = serializers.CharField(help_text="The authorization code received from Zoom during the OAuth flow")
+    redirect_uri = serializers.CharField(help_text="The redirect URI used to obtain the authorization code")
+
+    metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the Zoom OAuth Connection", required=False, default=None)
+
+    def validate_metadata(self, value):
+        if value is None:
+            return value
+
+        # Check if it's a dict
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Metadata must be an object not an array or other type")
+
+        # Make sure there is at least one key
+        if not value:
+            raise serializers.ValidationError("Metadata must have at least one key")
+
+        # Check if all values are strings
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+
+        # Check if all keys are strings
+        for key in value.keys():
+            if not isinstance(key, str):
+                raise serializers.ValidationError("All keys in metadata must be strings")
+
+        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
+        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
+            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
+
+        return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        return data
+
+
+class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(source="object_id")
+    state = serializers.SerializerMethodField()
+    metadata = serializers.SerializerMethodField()
+    zoom_oauth_app_id = serializers.CharField(source="zoom_oauth_app.object_id")
+
+    @extend_schema_field(
+        {
+            "type": "string",
+            "enum": ["connected", "disconnected"],
+        }
+    )
+    def get_state(self, obj):
+        """Convert zoom oauth connection state to API code"""
+        mapping = {
+            ZoomOAuthConnectionStates.CONNECTED: "connected",
+            ZoomOAuthConnectionStates.DISCONNECTED: "disconnected",
+        }
+        return mapping.get(obj.state)
+
+    @extend_schema_field({"type": "object", "description": "Metadata associated with the zoom oauth connection"})
+    def get_metadata(self, obj):
+        return obj.metadata
+
+    class Meta:
+        model = ZoomOAuthConnection
+        fields = [
+            "id",
+            "zoom_oauth_app_id",
+            "user_id",
+            "account_id",
+            "state",
+            "metadata",
+            "connection_failure_data",
+            "created_at",
+            "updated_at",
+            "last_successful_sync_at",
+            "last_attempted_sync_at",
+        ]
+        read_only_fields = fields

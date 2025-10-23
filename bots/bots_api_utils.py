@@ -46,6 +46,15 @@ from .utils import transcription_provider_from_bot_creation_data
 logger = logging.getLogger(__name__)
 
 
+def build_site_url(path=""):
+    """
+    Build a full URL using SITE_DOMAIN setting.
+    Automatically uses http:// for localhost, https:// for everything else.
+    """
+    protocol = "http" if settings.SITE_DOMAIN.startswith("localhost") else "https"
+    return f"{protocol}://{settings.SITE_DOMAIN}{path}"
+
+
 def send_sync_command(bot, command="sync"):
     redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
     redis_client = redis.from_url(redis_url)
@@ -106,10 +115,10 @@ def validate_meeting_url_and_credentials(meeting_url, project):
     """
 
     if meeting_type_from_url(meeting_url) == MeetingTypes.ZOOM:
-        zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
+        zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first() or project.zoom_oauth_apps.first()
         if not zoom_credentials:
             relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-            settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+            settings_url = build_site_url(relative_url)
             return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {settings_url}"}
 
     return None
@@ -152,7 +161,7 @@ def validate_external_media_storage_settings(external_media_storage_settings, pr
 
     if not project.credentials.filter(credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).exists():
         relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-        settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+        settings_url = build_site_url(relative_url)
         return {"error": f"External media storage credentials are required to upload recordings to an external storage bucket. Please add external media storage credentials at {settings_url}."}
 
     return None
