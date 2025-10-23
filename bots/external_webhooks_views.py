@@ -10,11 +10,38 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import ZoomOAuthApp, ZoomOAuthConnection
+from .models import ZoomOAuthApp, ZoomOAuthConnection, CalendarNotificationChannel
 from .stripe_utils import process_checkout_session_completed, process_customer_updated, process_payment_intent_succeeded
 from .zoom_oauth_connections_utils import _upsert_zoom_meeting_to_zoom_oauth_connection_mapping, _verify_zoom_webhook_signature, compute_zoom_webhook_validation_response
 
 logger = logging.getLogger(__name__)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class ExternalWebhookGoogleCalendarView(View):
+    """
+    View to handle Google Calendar webhook events.
+    This endpoint is called by Google when events occur (calendar notifications, etc.)
+    """
+
+    def post(self, request, *args, **kwargs):
+        logger.info(f"Received Google Calendar webhook event. Headers: {request.headers}")
+        channel_id = request.headers.get("X-Goog-Channel-ID")
+        calendar_notification_channel = CalendarNotificationChannel.objects.filter(object_id=channel_id).first()
+        if not calendar_notification_channel:
+            logger.info(f"No calendar notification channel found for channel ID: {channel_id}")
+            return HttpResponse(status=200)
+
+        calendar_notification_channel.notification_last_received_at = timezone.now()
+        calendar_notification_channel.save()
+
+        # Request a sync task for the calendar. Don't request immediately to provide debouncing.
+        calendar_notification_channel.calendar.sync_task_requested_at = timezone.now()
+        calendar_notification_channel.calendar.save()
+
+        logger.info(f"Requested sync task for calendar {calendar_notification_channel.calendar.object_id}")
+
+        return HttpResponse(status=200)
 
 
 @method_decorator(csrf_exempt, name="dispatch")
