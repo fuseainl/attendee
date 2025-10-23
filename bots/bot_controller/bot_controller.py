@@ -265,7 +265,7 @@ class BotController:
     def get_zoom_rtms_adapter(self):
         from bots.zoom_rtms_adapter import ZoomRTMSAdapter
 
-        zoom_oauth_credentials = self.get_zoom_oauth_credentials()
+        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
             add_audio_chunk_callback = None
