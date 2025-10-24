@@ -1,4 +1,5 @@
 import copy
+import json
 import logging
 import re
 import uuid
@@ -24,6 +25,9 @@ from bots.webhook_utils import trigger_webhook
 logger = logging.getLogger(__name__)
 
 URL_CANDIDATE = re.compile(r"https?://[^\s<>\"']+")
+
+NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS = 26  # If the latest channel will expire within this amount of hours, create a new one
+NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS = 24  # If a channel has expired more than this amount of hours ago, delete it
 
 
 def extract_meeting_url_from_text(text: str) -> Optional[str]:
@@ -329,6 +333,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             "address": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
             "type": "webhook",
             "id": notification_channel_uuid,
+            "token": json.dumps({"calendar_id": self.calendar.object_id}),
         }
         logger.info(f"Creating notification channel in Google API for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}.")
         response = self._make_gcal_request(url, access_token, method="POST", body=body)
@@ -354,14 +359,21 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         # Get notification channel with largest expires_at
         notification_channel = notification_channels.order_by("-expires_at").first()
 
+        # Wrote a warning to the logs if the latest notification channel has expired already. This should never happen.
+        if notification_channel and notification_channel.expires_at < timezone.now():
+            logger.warning(f"Latest notification channel ({notification_channel.platform_uuid}) for calendar {self.calendar.object_id} has expired already. This should never happen.")
+
         # If there is no notification channel or it will expire within 26 hours, create a new one
         # The choice of 26 hours ensures that there won't be any window where there's no active notification channel
         # Because the scheduler process guarantees that calendars will never go more than 24 hours without a sync task.
-        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=26):
+        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS):
             self._create_notification_channel()
 
         # Any notification channels that expired over 24 hours ago should be deleted
-        notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=24)).delete()
+        expired_notification_channels = notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS))
+        if expired_notification_channels.count() > 0:
+            logger.info(f"Deleting {expired_notification_channels.count()} expired notification channels: {list(map(lambda x: x.platform_uuid, expired_notification_channels))}")
+        expired_notification_channels.delete()
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         error_code = e.response.json().get("error")
