@@ -16,6 +16,11 @@ urlpatterns = [
         name="external-webhook-google-calendar",
     ),
     path(
+        "microsoft_calendar",
+        external_webhooks_views.ExternalWebhookMicrosoftCalendarView.as_view(),
+        name="external-webhook-microsoft-calendar",
+    ),
+    path(
         "zoom/oauth_apps/<str:object_id>",
         external_webhooks_views.ExternalWebhookZoomOAuthAppView.as_view(),
         name="external-webhook-zoom-oauth-app",

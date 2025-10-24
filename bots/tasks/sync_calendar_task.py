@@ -574,8 +574,37 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
     CALENDAR_EVENT_SELECT_FIELDS = "id,subject,start,end,attendees,organizer,iCalUId,seriesMasterId,isCancelled,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,onlineMeetingUrl,location,body,webLink"
 
     def _refresh_notification_channels(self):
-        """Will implement later. For now we'll use polling."""
-        pass
+        notification_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar)
+        # For microsoft calendars, we only need one notification channel. We can keep updating it to increase the expiration time.
+        notification_channel = notification_channels.first()
+
+        if not notification_channel:
+            self._create_notification_channel()
+        else:
+            self._extend_notification_channel_expiration_time(notification_channel)
+
+    def _create_notification_channel(self):
+        # Make request to create a notification channel in Microsoft Graph
+        url = f"{self.GRAPH_BASE}/subscriptions"
+        if self.calendar.platform_uuid:
+            resource_url = f"me/calendars/{self.calendar.platform_uuid}/events"
+        else:
+            resource_url = "me/calendar/events"
+        expires_at = timezone.now() + timedelta(minutes=10070 - 1)
+        body = {"changeType": "created,updated,deleted", "notificationUrl": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-microsoft-calendar')}", "resource": resource_url, "clientState": json.dumps({"calendar_id": self.calendar.object_id}), "expirationDateTime": expires_at.isoformat(), "latestSupportedTlsVersion": "v1_2"}
+        logger.info(f"Creating Microsoft Calendar notification channel. Body: {body}")
+        access_token = self._get_access_token()
+        response = self._make_graph_request(url, access_token, method="POST", body=body)
+        logger.info(f"Created Microsoft Calendar notification channel. Response: {response}")
+
+        calendar_notification_channel = CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid=response.get("id"),
+            unique_key=f"notification_channel_{self.calendar.object_id}",
+            expires_at=expires_at,
+            raw=response,
+        )
+        logger.info(f"Created Microsoft Calendar notification channel in database. Platform UUID: {calendar_notification_channel.platform_uuid}")
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         if e.response.json().get("error") == "invalid_grant":
@@ -635,7 +664,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
     # ---------------------------
     # HTTP helpers
     # ---------------------------
-    def _make_graph_request(self, url: str, access_token: str, params: dict | None = None) -> dict:
+    def _make_graph_request(self, url: str, access_token: str, params: dict | None = None, method: str = "GET", body: dict | None = None) -> dict:
         """
         Make a Microsoft Graph request with proper headers. If url is a full @odata.nextLink,
         we pass it as-is and ignore params.
@@ -647,10 +676,14 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         }
 
         # Build request
-        if params is None:
-            req = requests.Request("GET", url, headers=headers).prepare()
+        if params is None and body is None:
+            req = requests.Request(method, url, headers=headers).prepare()
+        elif params is None:
+            req = requests.Request(method, url, headers=headers, json=body).prepare()
+        elif body is None:
+            req = requests.Request(method, url, headers=headers, params=params).prepare()
         else:
-            req = requests.Request("GET", url, headers=headers, params=params).prepare()
+            req = requests.Request(method, url, headers=headers, params=params, json=body).prepare()
 
         logger.info("Fetching Microsoft Graph: %s", req.url)
 

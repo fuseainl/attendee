@@ -20,8 +20,8 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.sync_calendar_task import (
-    NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS,
     NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS,
+    NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS,
     CalendarAPIAuthenticationError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
