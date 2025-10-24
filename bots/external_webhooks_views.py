@@ -10,7 +10,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import ZoomOAuthApp, ZoomOAuthConnection, CalendarNotificationChannel
+from .models import CalendarNotificationChannel, ZoomOAuthApp, ZoomOAuthConnection
 from .stripe_utils import process_checkout_session_completed, process_customer_updated, process_payment_intent_succeeded
 from .zoom_oauth_connections_utils import _upsert_zoom_meeting_to_zoom_oauth_connection_mapping, _verify_zoom_webhook_signature, compute_zoom_webhook_validation_response
 
@@ -26,10 +26,17 @@ class ExternalWebhookGoogleCalendarView(View):
 
     def post(self, request, *args, **kwargs):
         logger.info(f"Received Google Calendar webhook event. Headers: {request.headers}")
+        resource_state = request.headers.get("X-Goog-Resource-State")
+        # If the resource state is sync, then this is just a notification that the channel is active. We don't need to do anything.
+        if resource_state == "sync":
+            logger.info("Ignoring Google Calendar webhook event because resource state is sync.")
+            return HttpResponse(status=200)
+
         channel_id = request.headers.get("X-Goog-Channel-ID")
-        calendar_notification_channel = CalendarNotificationChannel.objects.filter(object_id=channel_id).first()
+        calendar_notification_channel = CalendarNotificationChannel.objects.filter(platform_uuid=channel_id).first()
         if not calendar_notification_channel:
             logger.info(f"No calendar notification channel found for channel ID: {channel_id}")
+            # TODO make request to stop the channel in Google API
             return HttpResponse(status=200)
 
         calendar_notification_channel.notification_last_received_at = timezone.now()

@@ -76,12 +76,12 @@ class Command(BaseCommand):
     def _run_periodic_calendar_syncs(self):
         """
         Run periodic calendar syncs.
-        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 30 minutes.
+        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 24 hours.
         """
         now = timezone.now()
-        cutoff_time = now - timezone.timedelta(minutes=30)
+        cutoff_time = now - timezone.timedelta(hours=24)
 
-        # Find connected calendars that haven't had a sync task enqueued in the last 30 minutes
+        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours
         calendars = Calendar.objects.filter(
             state=CalendarStates.CONNECTED,
         ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))

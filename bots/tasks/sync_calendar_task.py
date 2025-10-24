@@ -1,6 +1,7 @@
 import copy
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as python_timezone
 from typing import Dict, List, Optional
@@ -9,7 +10,6 @@ from zoneinfo import ZoneInfo
 import dateutil.parser
 import requests
 from celery import shared_task
-from django.conf import settings
 from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
@@ -316,34 +316,48 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         calendar_id = self.calendar.platform_uuid or "primary"
         url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/watch"
         access_token = self._get_access_token()
-        with transaction.atomic():
-            calendar_notification_channel = CalendarNotificationChannel.objects.create(
-                calendar=self.calendar,
-                expires_at=timezone.now() + timedelta(days=7),
-                raw={},
-            )
-            body = {
-                "address": f"https://0f2f82536851.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
-                "type": "webhook",
-                "id": calendar_notification_channel.object_id,
-            }
-            response = self._make_gcal_request(url, access_token, method="POST", body=body)
-            logger.info(f"Created notification channel for calendar {self.calendar.object_id}: {calendar_notification_channel.object_id}. Response: {response}")
-            if response.get("expiration"):
-                expiration_timestamp_ms = int(response.get("expiration"))
-                calendar_notification_channel.expires_at = datetime.fromtimestamp(expiration_timestamp_ms / 1000)
-            calendar_notification_channel.raw = response
-            calendar_notification_channel.platform_uuid = response.get("id")
-            calendar_notification_channel.save()
-            logger.info(f"Created notification channel for calendar {self.calendar.object_id}: {calendar_notification_channel.object_id}. Response: {response}")
+        notification_channel_uuid = str(uuid.uuid4())
+        # The unique key will be used to stop concurrency errors where a bunch of threads are creating notification channels for the same calendar.
+        # It will be set to the platform_uuid of the most recent existing notification channel or "first_channel_" + object_id of the calendar
+        most_recent_notification_channel = CalendarNotificationChannel.objects.filter(calendar=self.calendar).order_by("-created_at").first()
+        if most_recent_notification_channel:
+            notification_channel_unique_key = most_recent_notification_channel.platform_uuid
+        else:
+            notification_channel_unique_key = "first_channel_" + self.calendar.object_id
+
+        body = {
+            "address": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
+            "type": "webhook",
+            "id": notification_channel_uuid,
+        }
+        logger.info(f"Creating notification channel in Google API for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}.")
+        response = self._make_gcal_request(url, access_token, method="POST", body=body)
+        logger.info(f"Created notification channel in Google API for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}. Response: {response}")
+
+        if response.get("expiration"):
+            expiration_timestamp_ms = int(response.get("expiration"))
+        else:
+            expiration_timestamp_ms = datetime.now().timestamp() + 60 * 60 * 24 * 7
+            logger.warn(f"No expiration timestamp in Google Calendar API response for calendar {self.calendar.object_id}. Using default of 1 week.")
+
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid=notification_channel_uuid,
+            unique_key=notification_channel_unique_key,
+            expires_at=datetime.fromtimestamp(expiration_timestamp_ms / 1000),
+            raw=response,
+        )
+        logger.info(f"Created notification channel in database for calendar {self.calendar.object_id} with platform_uuid {notification_channel_uuid}.")
 
     def _refresh_notification_channels(self):
         notification_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar)
         # Get notification channel with largest expires_at
         notification_channel = notification_channels.order_by("-expires_at").first()
 
-        # If there is no notification channel or it will expire within 24 hours, create a new one
-        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=24):
+        # If there is no notification channel or it will expire within 26 hours, create a new one
+        # The choice of 26 hours ensures that there won't be any window where there's no active notification channel
+        # Because the scheduler process guarantees that calendars will never go more than 24 hours without a sync task.
+        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=26):
             self._create_notification_channel()
 
         # Any notification channels that expired over 24 hours ago should be deleted
