@@ -21,6 +21,7 @@ from bots.models import (
 )
 from bots.tasks.sync_calendar_task import (
     NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS,
+    NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS,
     CalendarAPIAuthenticationError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
@@ -875,3 +876,9 @@ class TestNotificationChannelRefreshWithScheduler(TransactionTestCase):
 
         # Verify the initial channel is still there
         self.assertEqual(all_channels[0].platform_uuid, "initial_channel_uuid")
+
+        # Now switch to the time that the original notification channel will expire + the cleanup threshold and make sure that it is deleted
+        with patch("django.utils.timezone.now", return_value=initial_channel.expires_at + timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS, minutes=1)):
+            command._run_periodic_calendar_syncs()
+            self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1, "The initial notification channel should be deleted")
+            self.assertFalse(CalendarNotificationChannel.objects.filter(calendar=self.calendar, platform_uuid="initial_channel_uuid").exists(), "The initial notification channel should be deleted")
