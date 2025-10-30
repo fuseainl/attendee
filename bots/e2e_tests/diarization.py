@@ -3,27 +3,28 @@ import argparse
 import base64
 import concurrent.futures
 import json
-import mimetypes
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, List, Optional
 
 import requests
-
 
 # ----------------------------
 # Helpers / HTTP
 # ----------------------------
 
+
 class AttendeeClient:
     def __init__(self, base_url: str, api_key: str, timeout=30):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Token {api_key}",
-            "Content-Type": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "Authorization": f"Token {api_key}",
+                "Content-Type": "application/json",
+            }
+        )
         self.timeout = timeout
 
     def _url(self, path: str) -> str:
@@ -104,23 +105,24 @@ class AttendeeClient:
         r.raise_for_status()
         return r.json()
 
+
 # ----------------------------
 # Core workflow
 # ----------------------------
 
 JOINED_RECORDING_KEYS = {"joined_recording", "joined_recording_audio", "joined - recording", "joined - recording"}  # be permissive
 
+
 def state_is_joined_recording(state: str) -> bool:
     s = (state or "").strip().lower()
     # Accept fuzzy match to handle human-readable values like "Joined - Recording"
     return "joined" in s and "record" in s
 
+
 def wait_for_state(client: AttendeeClient, bot_id: str, predicate, desc: str, timeout_s: int, poll_s: float = 2.0) -> Dict:
     start = time.time()
-    last = None
     while True:
         bot = client.get_bot(bot_id)
-        last = bot
         state = str(bot.get("state", ""))
         if predicate(state, bot):
             return bot
@@ -130,18 +132,12 @@ def wait_for_state(client: AttendeeClient, bot_id: str, predicate, desc: str, ti
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Spin up three Attendee bots in a Teams meeting: two speaker bots to play audio and one recorder bot to transcribe."
-    )
+    parser = argparse.ArgumentParser(description="Spin up three Attendee bots in a Teams meeting: two speaker bots to play audio and one recorder bot to transcribe.")
     parser.add_argument("--api-key", required=True, help="Attendee API key")
     parser.add_argument("--base-url", required=True, help="Attendee base URL, e.g. https://staging.attendee.dev")
     parser.add_argument("--speaker1", required=True, help="Path to first speaker audio (mp3/wav)")
     parser.add_argument("--speaker2", required=True, help="Path to second speaker audio (mp3/wav)")
-    parser.add_argument(
-        "--meeting-url",
-        default=None,
-        help="Meeting URL (must bypass waiting room)."
-    )
+    parser.add_argument("--meeting-url", default=None, help="Meeting URL (must bypass waiting room).")
     parser.add_argument("--join-timeout", type=int, default=180, help="Seconds to wait for 'Joined - Recording'")
     parser.add_argument("--end-timeout", type=int, default=300, help="Seconds to wait for 'Ended'")
     parser.add_argument("--speak-wait", type=float, default=0.0, help="Seconds to wait after reaching joined_recording before speaking")
@@ -228,12 +224,13 @@ def main():
     # 5) Poll until all three bots are in the "ended" state.
     if args.verbose:
         print("Waiting for all three bots to be 'ended'...")
+
     def _pred_ended(state: str, bot_obj: Dict) -> bool:
         return (state or "").strip().lower() == "ended"
 
-    bot1_final = wait_for_state(client, bot1_id, _pred_ended, "ended", args.end_timeout)
-    bot2_final = wait_for_state(client, bot2_id, _pred_ended, "ended", args.end_timeout)
-    recorder_final = wait_for_state(client, recorder_id, _pred_ended, "ended", args.end_timeout)
+    wait_for_state(client, bot1_id, _pred_ended, "ended", args.end_timeout)
+    wait_for_state(client, bot2_id, _pred_ended, "ended", args.end_timeout)
+    wait_for_state(client, recorder_id, _pred_ended, "ended", args.end_timeout)
 
     # 6) Verify that the transcription has the correct diarization.
     # Strategy:
@@ -248,11 +245,11 @@ def main():
 
     if args.verbose:
         print(f"Transcript: {transcript}")
-    
+
     # Get list of all utterances for speaker_1
     speaker1_utterances = [utterance["transcription"]["transcript"] for utterance in transcript if utterance.get("speaker_name") == bot1_name]
     speaker2_utterances = [utterance["transcription"]["transcript"] for utterance in transcript if utterance.get("speaker_name") == bot2_name]
-    
+
     print(f"Speaker 1 utterances: {speaker1_utterances}")
     print(f"Speaker 2 utterances: {speaker2_utterances}")
 
