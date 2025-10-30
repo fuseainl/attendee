@@ -343,9 +343,10 @@ function leaveMeeting() {
     ZoomMtg.leaveMeeting({});
 }
 
-function sendChatMessage(text) {
+function sendChatMessage(text, to_user_uuid ) {
     ZoomMtg.sendChat({
         message: text,
+        userId: to_user_uuid ? parseInt(to_user_uuid, 10) : 0,
         success: (success) => {
             console.log('sendChatMessage success', success);
         },

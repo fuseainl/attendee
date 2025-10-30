@@ -882,15 +882,15 @@ class BotDetailView(APIView):
 
     @extend_schema(
         operation_id="Patch Bot",
-        summary="Update a scheduled bot",
-        description="Updates a scheduled bot. Currently only the join_at field can be updated, and only for bots in the scheduled state.",
+        summary="Update a bot",
+        description="Updates a bot. Currently only the join_at and metadata fields can be updated. The join_at field can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
         request=PatchBotSerializer,
         responses={
             200: OpenApiResponse(
                 response=BotSerializer,
                 description="Bot updated successfully",
             ),
-            400: OpenApiResponse(description="Invalid input or bot is not in scheduled state"),
+            400: OpenApiResponse(description="Invalid input or bot cannot be updated"),
             404: OpenApiResponse(description="Bot not found"),
         },
         parameters=[
@@ -1098,6 +1098,9 @@ class SendChatMessageView(APIView):
 
             return Response(status=status.HTTP_200_OK)
 
+        except ValidationError as e:
+            logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
+            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
             return Response(

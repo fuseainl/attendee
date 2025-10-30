@@ -35,7 +35,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info(f"send_video called with video_url = {video_url}. This is not supported for teams")
         return
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         chatInput = self.driver.execute_script("return document.querySelector('[aria-label=\"Type a message\"]')")
 
         if not chatInput:

@@ -534,6 +534,9 @@ class TranscriptionSettings:
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
 
+    def deepgram_replace_settings(self):
+        return self._settings.get("deepgram", {}).get("replace", [])
+
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
 

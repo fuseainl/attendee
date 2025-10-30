@@ -3893,3 +3893,176 @@ class TestZoomBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.VideoInputManager")
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("jwt.encode")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("deepgram.DeepgramClient")
+    @patch("time.time")
+    def test_bot_auto_leaves_only_participant_with_participant_rejoin(
+        self,
+        mock_time,
+        MockDeepgramClient,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        MockVideoInputManager,
+    ):
+        """
+        Test scenario where participant rejoins before timeout, ensuring timer resets properly.
+        1. Participant joins
+        2. Participant leaves (timer starts)
+        3. 5 seconds later, participant joins again (timer resets)
+        4. Wait 10 seconds - bot should NOT leave (because participant is there)
+        5. Participant leaves again (timer starts again)
+        6. Wait 8+ seconds - bot should leave
+        """
+        # Set up Deepgram mock
+        MockDeepgramClient.return_value = create_mock_deepgram()
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the JWT token generation
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        # Mock VideoInputManager to avoid renderer creation issues
+        mock_video_input_manager = MagicMock()
+        mock_video_input_manager.set_mode = MagicMock()
+        mock_video_input_manager.cleanup = MagicMock()
+        MockVideoInputManager.return_value = mock_video_input_manager
+
+        # Set initial time
+        current_time = 1000.0
+        mock_time.return_value = current_time
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+        controller.automatic_leave_configuration = AutomaticLeaveConfiguration(
+            only_participant_in_meeting_timeout_seconds=8,
+            silence_timeout_seconds=999999,  # Set very high so it doesn't interfere
+            silence_activate_after_seconds=999999,  # Set very high so it doesn't interfere
+            waiting_room_timeout_seconds=300,
+            wait_for_host_to_start_meeting_timeout_seconds=300,
+            max_uptime_seconds=None,
+        )
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_join_flow():
+            adapter = controller.adapter
+
+            # Simulate successful auth
+            adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Configure GetMeetingStatus to return the correct status
+            adapter.meeting_service.GetMeetingStatus.return_value = mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING
+
+            # Simulate connecting
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_CONNECTING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Update GetMeetingStatus to return in-meeting status
+            adapter.meeting_service.GetMeetingStatus.return_value = mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING
+
+            # Simulate successful join
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_INMEETING,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Wait for the video input manager to be set up
+            time.sleep(2)
+
+            # Step 1: Participant joins (participant ID = 2, bot ID = 1)
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1, 2]
+            adapter.on_user_join_callback([2], [])
+
+            # Check auto-leave conditions - should not trigger (2 participants)
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Step 2: Participant leaves (only bot remains)
+            nonlocal current_time
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1]
+            adapter.on_user_left_callback([2], [])
+
+            # Check auto-leave conditions - timer should start
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Step 3: Advance time by 5 seconds
+            current_time += 5
+            mock_time.return_value = current_time
+
+            # Participant joins again
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1, 2]
+            adapter.on_user_join_callback([2], [])
+
+            # Check auto-leave conditions - timer should reset
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Step 4: Advance time by 10 seconds
+            current_time += 10
+            mock_time.return_value = current_time
+
+            # Check auto-leave conditions - should NOT trigger (participant is still there)
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Verify bot hasn't requested to leave yet
+            assert not adapter.requested_leave, "Bot should not have requested to leave yet"
+
+            # Step 5: Participant leaves again
+            adapter.participants_ctrl.GetParticipantsList.return_value = [1]
+            adapter.on_user_left_callback([2], [])
+
+            # Check auto-leave conditions - timer should start again
+            adapter.check_auto_leave_conditions()
+            time.sleep(0.5)
+
+            # Step 6: Advance time by 9 seconds (past the 8 second threshold)
+            current_time += 9
+            mock_time.return_value = current_time
+
+            # Check auto-leave conditions - should trigger auto-leave now
+            adapter.check_auto_leave_conditions()
+            time.sleep(1)
+
+            # Update GetMeetingStatus to return ended status when meeting ends
+            adapter.meeting_service.GetMeetingStatus.return_value = mock_zoom_sdk_adapter.MEETING_STATUS_ENDED
+
+            # Simulate meeting ended after auto-leave
+            adapter.meeting_service_event.onMeetingStatusChangedCallback(
+                mock_zoom_sdk_adapter.MEETING_STATUS_ENDED,
+                mock_zoom_sdk_adapter.SDKERR_SUCCESS,
+            )
+
+            # Clean up connections in thread
+            connection.close()
+
+        # Run join flow simulation after a short delay
+        threading.Timer(2, simulate_join_flow).start()
+
+        # Give the bot some time to process
+        bot_thread.join(timeout=20)
+
+        # Refresh the bot from the database
+        time.sleep(2)
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the ENDED state
+        self.assertEqual(self.bot.state, BotStates.ENDED)
+
+        # Verify that the bot auto-left due to being only participant
+        bot_events = self.bot.bot_events.all()
+        auto_leave_events = [event for event in bot_events if event.event_sub_type == BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING]
+        self.assertEqual(len(auto_leave_events), 1, "Expected exactly one auto-leave event")

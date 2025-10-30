@@ -199,9 +199,10 @@ paths:
           description: Bot not found
     patch:
       operationId: Patch Bot
-      description: Updates a scheduled bot. Currently only the join_at field can be
-        updated, and only for bots in the scheduled state.
-      summary: Update a scheduled bot
+      description: Updates a bot. Currently only the join_at and metadata fields can
+        be updated. The join_at field can only be updated when the bot is in the scheduled
+        state. The metadata field can be updated at any time.
+      summary: Update a bot
       parameters:
       - in: header
         name: Authorization
@@ -251,7 +252,7 @@ paths:
                 $ref: '#/components/schemas/Bot'
           description: Bot updated successfully
         '400':
-          description: Invalid input or bot is not in scheduled state
+          description: Invalid input or bot cannot be updated
         '404':
           description: Bot not found
     delete:
@@ -1921,6 +1922,14 @@ components:
                     Automatically removes or masks sensitive information like PII,
                     PCI data, and numbers from transcripts. See here for details:
                     https://developers.deepgram.com/docs/redaction'
+                replace:
+                  type: array
+                  items:
+                    type: string
+                  description: 'Array of terms to find and replace in the transcript.
+                    Each string should be in the format ''term_to_find:replacement_term''
+                    (e.g., ''kpis:Key Performance Indicators''). See here for details:
+                    https://developers.deepgram.com/docs/find-and-replace'
               additionalProperties: false
             gladia:
               type: object

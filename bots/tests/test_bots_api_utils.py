@@ -468,7 +468,7 @@ class TestPatchBot(TestCase):
         self.assertEqual(updated_bot.join_at.replace(microsecond=0), new_join_time.replace(microsecond=0))
         self.assertEqual(updated_bot.meeting_url, new_meeting_url)
 
-    def test_patch_bot_not_in_scheduled_state(self):
+    def test_patch_bot_join_at_not_in_scheduled_state(self):
         """Test that patching a bot not in scheduled state fails."""
         from bots.bots_api_utils import patch_bot
 
@@ -488,7 +488,46 @@ class TestPatchBot(TestCase):
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertEqual(patch_error["error"], "Bot is in state joining but can only be updated when in scheduled state")
+        self.assertEqual(patch_error["error"], "Bot is in state joining but the join_at or meeting_url can only be updated when in the scheduled state")
+
+    def test_patch_bot_meeting_url_not_in_scheduled_state(self):
+        """Test that patching a bot not in scheduled state fails."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.JOINING)  # Should be in JOINING state after creation
+
+        # Try to patch the bot
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "https://meet.google.com/new-meeting-url"})
+        self.assertIsNone(updated_bot)
+        self.assertIsNotNone(patch_error)
+
+    def test_patch_bot_metadata_not_in_scheduled_state(self):
+        """Test that patching a bot not in scheduled state succeeds."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.JOINING)  # Should be in JOINING state after creation
+
+        # Try to patch the bot
+        updated_bot, patch_error = patch_bot(bot, {"metadata": {"test": "test"}})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.metadata, {"test": "test"})
 
     def test_patch_bot_with_invalid_join_at(self):
         """Test that patching with invalid join_at fails validation."""

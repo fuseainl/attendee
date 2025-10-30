@@ -219,19 +219,30 @@ class ZoomBotAdapter(BotAdapter):
 
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
+        self.update_only_one_participant_in_meeting_at()
         for joined_user_id in joined_user_ids:
             self.get_participant(joined_user_id)
             self.send_participant_event(joined_user_id, event_type=ParticipantEventTypes.JOIN)
             self.request_permission_to_record_if_joined_user_is_host(joined_user_id)
 
-    def on_user_left_callback(self, left_user_ids, _):
-        logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
+    def update_only_one_participant_in_meeting_at(self):
+        if not self.joined_at:
+            return
+
+        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting() <= 1:
+            return
+
         all_participant_ids = self.participants_ctrl.GetParticipantsList()
         if len(all_participant_ids) == 1:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
         else:
             self.only_one_participant_in_meeting_at = None
+
+    def on_user_left_callback(self, left_user_ids, _):
+        logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
+        self.update_only_one_participant_in_meeting_at()
 
         for left_user_id in left_user_ids:
             self.send_participant_event(left_user_id, event_type=ParticipantEventTypes.LEAVE)
@@ -395,6 +406,9 @@ class ZoomBotAdapter(BotAdapter):
             logger.info(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
 
+    def number_of_participants_ever_in_meeting(self):
+        return len(self._participant_cache)
+
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
         sharing_status = sharing_info.status
@@ -412,12 +426,16 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
-        builder.SetReceiver(0)
-        builder.SetMessageType(zoom.SDKChatMessageType.To_All)
+        if to_user_uuid:
+            builder.SetReceiver(to_user_uuid)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
+        else:
+            builder.SetReceiver(0)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_All)
         msg = builder.Build()
         send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
         logger.info(f"send_chat_message_result = {send_chat_message_result}")

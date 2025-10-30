@@ -68,6 +68,17 @@ class TestCreateCalendar(TestCase):
         self.assertIsNotNone(error)
         self.assertIn("platform", error)
 
+    def test_create_calendar_with_invalid_metadata(self):
+        """Test calendar creation with invalid metadata."""
+        invalid_metadata_data = {"platform": CalendarPlatform.GOOGLE, "client_id": "test_client_id", "client_secret": "test_client_secret", "refresh_token": "test_refresh_token", "metadata": {"test": 123}}
+        calendar, error = create_calendar(invalid_metadata_data, self.project)
+
+        # Verify failure
+        self.assertIsNone(calendar)
+        self.assertIsNotNone(error)
+        self.assertIn("metadata", error)
+        self.assertIn("must be a string", error["metadata"][0])
+
     def test_create_calendar_with_duplicate_deduplication_key(self):
         """Test calendar creation with duplicate deduplication key in same project."""
         deduplication_key = "duplicate_key_test"

@@ -896,7 +896,7 @@ class BotController:
     def take_action_based_on_chat_message_requests_in_db(self):
         chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
         for chat_message_request in chat_message_requests:
-            self.adapter.send_chat_message(text=chat_message_request.message)
+            self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
 
     def take_action_based_on_media_requests_in_db(self):

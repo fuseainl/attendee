@@ -1,8 +1,10 @@
 import os
+import sys
 
 import dj_database_url
 
 from .base import *
+from .base import LOG_FORMATTERS
 
 DEBUG = False
 ALLOWED_HOSTS = ["*"]
@@ -20,6 +22,7 @@ DATABASES = {
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
@@ -51,9 +54,12 @@ SERVER_EMAIL = os.getenv("SERVER_EMAIL", "noreply@mail.attendee.dev")
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": LOG_FORMATTERS,
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
+            "stream": sys.stdout,
+            "formatter": os.getenv("ATTENDEE_LOG_FORMAT"),  # `None` (default formatter) is the default
         },
     },
     "root": {
