@@ -2960,7 +2960,7 @@ class CallManager {
         const speakingParticipantIds = new Set();
 
         this.activeCall.participants.forEach(participant => {
-            if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
+            if (!participant.isServerMuted && contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
                 speakingParticipantIds.add(participant.id);
         });
 
