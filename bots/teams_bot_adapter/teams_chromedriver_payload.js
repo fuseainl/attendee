@@ -1640,15 +1640,8 @@ class ReceiverManager {
                 continue;
 
             const currentTime = Date.now();
-            const speakingParticipantIds = [];
-            for (const contributingSource of contributingSources) {
-                if (currentTime - contributingSource.timestamp <= 50) {
-                    const speakingParticipant = virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(contributingSource.source.toString());
-                    if (!speakingParticipant)
-                        continue;
-                    speakingParticipantIds.push(speakingParticipant.id);
-                }
-            }
+            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
+            const speakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
 
             for (const speakingParticipantId of speakingParticipantIds) {
                 if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
@@ -1659,7 +1652,7 @@ class ReceiverManager {
             // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
             for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
                 participantSpeakingStateMachine.addSample({
-                    isSpeaking: speakingParticipantIds.includes(participantId),
+                    isSpeaking: speakingParticipantIds.has(participantId),
                     timestamp: currentTime
                 });
             }
@@ -2952,6 +2945,26 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+
+    getSpeakingParticipantIds(contributingSources) {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+
+        const speakingParticipantIds = new Set();
+
+        this.activeCall.participants.forEach(participant => {
+            if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
+                speakingParticipantIds.add(participant.id);
+        });
+
+        return speakingParticipantIds;
     }
 
     syncParticipants() {
