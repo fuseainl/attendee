@@ -2271,6 +2271,7 @@ function turnOffMicAndCamera() {
 
 const turnOnMicArialLabel = "Unmute mic"
 const turnOnScreenshareButtonId = "screenshare-button"
+const turnOnScreenshareButtonAlternateId = "share-button"
 const turnOffMicArialLabel = "Turn off microphone"
 const turnOffScreenshareAriaLabel = "Stop sharing"
 
@@ -2288,7 +2289,7 @@ function turnOnMicAndScreenshare() {
     }
 
     // Click screenshare button to turn it on
-    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`);
+    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
     if (screenshareButton) {
         console.log("Clicking the screenshare button to turn it on");
         screenshareButton.click();
