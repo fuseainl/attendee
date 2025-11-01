@@ -2088,7 +2088,7 @@ const turnOffScreenshareClass = "stop my screenshare"
 
 function turnOnMicAndScreenshare() {
     // Click microphone button to turn it on
-    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOnMicArialLabel}"]`);
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`);
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it on");
         microphoneButton.click();
@@ -2108,7 +2108,7 @@ function turnOnMicAndScreenshare() {
 
 function turnOffMicAndScreenshare() {
     // Click microphone button to turn it off
-    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOffMicArialLabel}"]`);
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`);
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it off");
         microphoneButton.click();
