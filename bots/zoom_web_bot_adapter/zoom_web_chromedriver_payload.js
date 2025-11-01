@@ -1120,15 +1120,7 @@ class BotOutputManager {
                 // If we've received both video and audio, play the stream
                 if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
                     if (window.initialData.voiceAgentVideoOutputDestination === "screenshare") {
-                        window.ws.sendJson({
-                            type: 'BOT_OUTPUT_VIDEO_OUTPUT_DESTINATION',
-                            destination: "screenshare"
-                        });
                         botOutputManager.playMediaStreamThroughScreenshare(ms);
-                        window.ws.sendJson({
-                            type: 'BOT_OUTPUT_VIDEO_OUTPUT_DESTINATION_END',
-                            destination: "screenshare"
-                        });
                     } else {
                         botOutputManager.playMediaStream(ms);
                     }
