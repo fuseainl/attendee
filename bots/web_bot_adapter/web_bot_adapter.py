@@ -46,6 +46,7 @@ class WebBotAdapter(BotAdapter):
         stop_recording_screen_callback,
         video_frame_size: tuple[int, int],
         voice_agent_url: str,
+        voice_agent_video_output_destination: str,
         webpage_streamer_service_hostname: str,
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
@@ -107,6 +108,7 @@ class WebBotAdapter(BotAdapter):
         self.recording_paused = False
 
         self.voice_agent_url = voice_agent_url
+        self.voice_agent_video_output_destination = voice_agent_video_output_destination
         self.webpage_streamer_service_hostname = webpage_streamer_service_hostname
 
         self.webpage_streamer_keepalive_task = None
@@ -493,7 +495,7 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options)
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, voiceAgentVideoOutputDestination: '{self.voice_agent_video_output_destination}', collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
 
         # Define the CDN libraries needed
         CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]

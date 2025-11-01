@@ -594,6 +594,8 @@ const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"
 const turnOnMicArialLabel = "unmute my microphone"
 const turnOffMicArialLabel = "mute my microphone"
+const turnOnScreenshareArialLabel = "Share Screen"
+const turnOffScreenshareClass = "sharer-button--stop"
 
 async function turnOnCamera() {
     // Click camera button to turn it on
@@ -666,7 +668,7 @@ function turnOnMicAndCamera() {
 }
 
 function turnOffMicAndCamera() {
-    // Click microphone button to turn it on
+    // Click microphone button to turn it off
     const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOffMicArialLabel}"]`);
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it off");
@@ -675,7 +677,7 @@ function turnOffMicAndCamera() {
         console.log("Microphone off button not found");
     }
 
-    // Click camera button to turn it on
+    // Click camera button to turn it off
     const cameraButton = document.querySelector(`button[aria-label="${turnOffCameraArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOffCameraArialLabel}"]`);
     if (cameraButton) {
         console.log("Clicking the camera button to turn it off");
@@ -685,7 +687,48 @@ function turnOffMicAndCamera() {
     }
 }
 
+function turnOnMicAndScreenshare() {
+    // Click microphone button to turn it on
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOnMicArialLabel}"]`);
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it on");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone button not found");
+    }
+
+    // Click screenshare button to turn it on
+    const screenshareButton = document.querySelector(`button[aria-label="${turnOnScreenshareArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOnScreenshareArialLabel}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it on");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare button not found");
+    }
+}
+
+function turnOffMicAndScreenshare() {
+    // Click microphone button to turn it off
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOffMicArialLabel}"]`);
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it off");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone off button not found");
+    }
+
+    // Click screenshare button to turn it off
+    const screenshareButton = document.querySelector(`.${turnOffScreenshareClass}`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it off");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare off button not found");
+    }
+}
+
 const _getUserMedia = navigator.mediaDevices.getUserMedia;
+const _getDisplayMedia = navigator.mediaDevices.getDisplayMedia;
 
 class BotOutputManager {
     constructor() {
@@ -731,6 +774,21 @@ class BotOutputManager {
             turnOnMicAndCamera();
         }, 1000);
     }
+
+    playMediaStreamThroughScreenshare(stream) {
+        if (this.botOutputMediaStream) {
+            this.botOutputMediaStream.disconnect();
+        }
+        this.botOutputMediaStream = stream;
+
+        turnOffMicAndScreenshare();
+
+        // after 1000 ms
+        setTimeout(() => {
+            turnOnMicAndScreenshare();
+        }, 1000);
+    }
+    
 
     playVideo(videoUrl) {
         // If camera or mic are on, turn them off
@@ -1061,7 +1119,19 @@ class BotOutputManager {
                 ms.addTrack(ev.track);
                 // If we've received both video and audio, play the stream
                 if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
-                    botOutputManager.playMediaStream(ms);
+                    if (window.initialData.voiceAgentVideoOutputDestination === "screenshare") {
+                        window.ws.sendJson({
+                            type: 'BOT_OUTPUT_VIDEO_OUTPUT_DESTINATION',
+                            destination: "screenshare"
+                        });
+                        botOutputManager.playMediaStreamThroughScreenshare(ms);
+                        window.ws.sendJson({
+                            type: 'BOT_OUTPUT_VIDEO_OUTPUT_DESTINATION_END',
+                            destination: "screenshare"
+                        });
+                    } else {
+                        botOutputManager.playMediaStream(ms);
+                    }
                 }
             };
 
@@ -1184,6 +1254,32 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
       })
       .catch(err => {
         console.error("Error in custom getUserMedia override:", err);
+        throw err;
+      });
+  };
+
+
+
+navigator.mediaDevices.getDisplayMedia = function(constraints) {
+    return _getDisplayMedia.call(navigator.mediaDevices, constraints)
+      .then(originalStream => {
+        console.log("Intercepted getDisplayMedia:", constraints);
+  
+        // Stop any original tracks so we don't actually capture real mic/cam
+        originalStream.getTracks().forEach(t => t.stop());
+  
+        // Create a new MediaStream to return
+        const newStream = new MediaStream();
+
+         if (constraints.video && botOutputManager.botOutputMediaStream) {
+            console.log("Adding botOutputMediaStream", botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
+            newStream.addTrack(botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
+        }
+
+        return newStream;
+      })
+      .catch(err => {
+        console.error("Error in custom getDisplayMedia override:", err);
         throw err;
       });
   };

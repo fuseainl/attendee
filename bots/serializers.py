@@ -847,10 +847,14 @@ class CallbackSettingsJSONField(serializers.JSONField):
         "properties": {
             "url": {
                 "type": "string",
-                "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details.",
+                "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
+            },
+            "screenshare_url": {
+                "type": "string",
+                "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url.",
             },
         },
-        "required": ["url"],
+        "oneOf": [{"required": ["url"]}, {"required": ["screenshare_url"]}],
         "additionalProperties": False,
     }
 )
@@ -1039,8 +1043,11 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             "url": {
                 "type": "string",
             },
+            "screenshare_url": {
+                "type": "string",
+            },
         },
-        "required": ["url"],
+        "oneOf": [{"required": ["url"]}, {"required": ["screenshare_url"]}],
         "additionalProperties": False,
     }
 

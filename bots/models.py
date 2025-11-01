@@ -799,7 +799,16 @@ class Bot(models.Model):
 
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
-        return voice_agent_settings.get("url", None)
+        return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
+
+    def voice_agent_video_output_destination(self):
+        voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
+        if voice_agent_settings.get("url", None):
+            return "webcam"
+        elif voice_agent_settings.get("screenshare_url", None):
+            return "screenshare"
+        else:
+            return None
 
     def should_launch_webpage_streamer(self):
         return bool(self.voice_agent_url())
