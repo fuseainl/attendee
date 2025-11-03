@@ -67,6 +67,9 @@ class WebBotAdapter(BotAdapter):
         self.disable_incoming_video = disable_incoming_video
         self.meeting_url = meeting_url
 
+        # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
+        self.meeting_uuid = None
+
         self.video_frame_size = video_frame_size
 
         self.driver = None
@@ -136,7 +139,27 @@ class WebBotAdapter(BotAdapter):
 
         return None
 
+    def meeting_uuid_mismatch(self, user):
+        # If no meeting id was provided, then don't try to detect a mismatch
+        if not user.get("meetingId"):
+            return False
+
+        # If the meeting uuid is not set, then set it to the user's meeting id
+        if not self.meeting_uuid:
+            self.meeting_uuid = user.get("meetingId")
+            logger.info(f"meeting_uuid set to {self.meeting_uuid} for user {user}")
+            return False
+
+        if self.meeting_uuid != user.get("meetingId"):
+            logger.info(f"meeting_uuid mismatch detected. meeting_uuid: {self.meeting_uuid} user_meeting_id: {user.get('meetingId')} for user {user}")
+            return True
+
+        return False
+
     def handle_participant_update(self, user):
+        if self.meeting_uuid_mismatch(user):
+            return
+
         user_before = self.participants_info.get(user["deviceId"], {"active": False})
         self.participants_info[user["deviceId"]] = user
 
@@ -420,6 +443,9 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def add_subclass_specific_chrome_options(self, options):
+        pass
+
     def init_driver(self):
         options = webdriver.ChromeOptions()
 
@@ -448,6 +474,8 @@ class WebBotAdapter(BotAdapter):
             "profile.password_manager_enabled": False,
         }
         options.add_experimental_option("prefs", prefs)
+
+        self.add_subclass_specific_chrome_options(options)
 
         if self.driver:
             # Simulate closing browser window
@@ -519,6 +547,9 @@ class WebBotAdapter(BotAdapter):
         repeatedly_attempt_to_join_meeting_thread = threading.Thread(target=self.repeatedly_attempt_to_join_meeting, daemon=True)
         repeatedly_attempt_to_join_meeting_thread.start()
 
+    def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
+        return False
+
     def repeatedly_attempt_to_join_meeting(self):
         logger.info(f"Trying to join meeting at {self.meeting_url}")
 
@@ -534,8 +565,9 @@ class WebBotAdapter(BotAdapter):
                 break
 
             except UiLoginRequiredException:
-                self.send_login_required_message()
-                return
+                if not self.should_retry_joining_meeting_that_requires_login_by_logging_in():
+                    self.send_login_required_message()
+                    return
 
             except UiLoginAttemptFailedException:
                 self.send_login_attempt_failed_message()
@@ -684,6 +716,7 @@ class WebBotAdapter(BotAdapter):
             if self.driver:
                 # Simulate closing browser window
                 try:
+                    self.subclass_specific_before_driver_close()
                     self.driver.close()
                 except Exception as e:
                     logger.info(f"Error closing driver: {e}")
@@ -841,7 +874,7 @@ class WebBotAdapter(BotAdapter):
         # Call the JavaScript function to enqueue the PCM chunk
         self.driver.execute_script(f"window.botOutputManager.playPCMAudio({audio_data}, {sample_rate})")
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         logger.info("send_chat_message not supported in web bots")
 
     # Sub-classes can override this to add class-specific initial data code
@@ -854,4 +887,8 @@ class WebBotAdapter(BotAdapter):
 
     # Sub-classes can override this to handle class-specific failed to join issues
     def subclass_specific_handle_failed_to_join(self, reason):
+        pass
+
+    # Sub-classes can override this to add class-specific before driver close code
+    def subclass_specific_before_driver_close(self):
         pass

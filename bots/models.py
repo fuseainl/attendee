@@ -59,6 +59,225 @@ class Project(models.Model):
         return self.name
 
 
+class GoogleMeetBotLoginGroup(models.Model):
+    OBJECT_ID_PREFIX = "gbg_"
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id}"
+
+
+class GoogleMeetBotLogin(models.Model):
+    OBJECT_ID_PREFIX = "gbl_"
+    group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    workspace_domain = models.CharField(max_length=255)
+    email = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def cert(self):
+        return self.get_credentials().get("cert")
+
+    @property
+    def private_key(self):
+        return self.get_credentials().get("private_key")
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.email} - {self.object_id}"
+
+    class Meta:
+        # Within a Google Meet Bot Login Group, we don't want to allow Google Meet Bot Logins with the same email
+        constraints = [
+            models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
+        ]
+
+
+class ZoomOAuthApp(models.Model):
+    OBJECT_ID_PREFIX = "zoa_"
+
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="zoom_oauth_apps")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+    client_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_verified_webhook_received_at = models.DateTimeField(null=True, blank=True)
+    last_unverified_webhook_received_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def client_secret(self):
+        return self.get_credentials().get("client_secret")
+
+    @property
+    def webhook_secret(self):
+        return self.get_credentials().get("webhook_secret")
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id} - {self.client_id}"
+
+
+class ZoomOAuthConnectionStates(models.IntegerChoices):
+    CONNECTED = 1
+    DISCONNECTED = 2
+
+
+class ZoomOAuthConnection(models.Model):
+    OBJECT_ID_PREFIX = "zoc_"
+
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+    zoom_oauth_app = models.ForeignKey(ZoomOAuthApp, on_delete=models.PROTECT, related_name="zoom_oauth_connections")
+    state = models.IntegerField(choices=ZoomOAuthConnectionStates.choices, default=ZoomOAuthConnectionStates.CONNECTED)
+    connection_failure_data = models.JSONField(null=True, default=None)
+    user_id = models.CharField(max_length=255)
+    account_id = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    version = IntegerVersionField()
+
+    metadata = models.JSONField(null=True, blank=True)
+
+    last_attempted_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_at = models.DateTimeField(null=True, blank=True)
+    last_successful_sync_started_at = models.DateTimeField(null=True, blank=True)
+    sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    sync_task_requested_at = models.DateTimeField(null=True, blank=True)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        # Within a zoom oauth app, we don't want to allow zoom oauth connections with the same user_id
+        constraints = [
+            models.UniqueConstraint(fields=["zoom_oauth_app", "user_id"], name="unique_zoom_oauth_connection_user_id"),
+        ]
+
+
+class ZoomMeetingToZoomOAuthConnectionMapping(models.Model):
+    OBJECT_ID_PREFIX = "zm_"
+
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+    zoom_oauth_connection = models.ForeignKey(ZoomOAuthConnection, on_delete=models.CASCADE, related_name="zoom_meeting_to_zoom_oauth_connection_mappings")
+    zoom_oauth_app = models.ForeignKey(ZoomOAuthApp, on_delete=models.PROTECT, related_name="zoom_meeting_to_zoom_oauth_connection_mappings")
+    meeting_id = models.CharField(max_length=25)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    class Meta:
+        # Within a Zoom App, we don't want to allow zoom meetings with the same meeting_id
+        constraints = [
+            models.UniqueConstraint(fields=["zoom_oauth_app", "meeting_id"], name="unique_zoom_meeting_id_zoom_oauth_app_id"),
+        ]
+
+        # Add indexes on meeting_id and zoom_oauth_connection_id
+        indexes = [
+            models.Index(fields=["meeting_id"], name="zoom_meeting_meeting_id_idx"),
+            models.Index(fields=["zoom_oauth_connection_id"], name="zm_zac_id_idx"),
+        ]
+
+
 class CalendarPlatform(models.TextChoices):
     GOOGLE = "google"
     MICROSOFT = "microsoft"
@@ -392,6 +611,9 @@ class TranscriptionSettings:
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
 
+    def deepgram_replace_settings(self):
+        return self._settings.get("deepgram", {}).get("replace", [])
+
     def kyutai_model(self):
         return self._settings.get("kyutai", {}).get("model", None)
 
@@ -544,6 +766,12 @@ class Bot(models.Model):
     @property
     def transcription_settings(self):
         return TranscriptionSettings(self.settings.get("transcription_settings"))
+
+    def google_meet_use_bot_login(self):
+        return self.settings.get("google_meet_settings", {}).get("use_login", False)
+
+    def google_meet_login_mode_is_always(self):
+        return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
 
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
@@ -1155,6 +1383,10 @@ class BotEventManager:
 
     @classmethod
     def is_state_that_can_update_transcription_settings(cls, state: int):
+        return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
+
+    @classmethod
+    def is_state_that_can_change_gallery_view_page(cls, state: int):
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod
@@ -2333,6 +2565,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     CALENDAR_EVENTS_UPDATE = 5, "Calendar Events Update"
     CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     ASYNC_TRANSCRIPTION_STATE_CHANGE = 7, "Async Transcription State Change"
+    ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
     # add other event types here
 
     @classmethod
@@ -2346,6 +2579,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.CALENDAR_EVENTS_UPDATE: "calendar.events_update",
             cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
             cls.ASYNC_TRANSCRIPTION_STATE_CHANGE: "async_transcription.state_change",
+            cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
         }
 
     @classmethod
@@ -2396,6 +2630,7 @@ class WebhookDeliveryAttempt(models.Model):
     idempotency_key = models.UUIDField(unique=True, editable=False)
     bot = models.ForeignKey(Bot, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
     calendar = models.ForeignKey(Calendar, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
+    zoom_oauth_connection = models.ForeignKey(ZoomOAuthConnection, on_delete=models.SET_NULL, null=True, related_name="webhook_delivery_attempts")
     payload = models.JSONField(default=dict)
     status = models.IntegerField(choices=WebhookDeliveryAttemptStatus.choices, default=WebhookDeliveryAttemptStatus.PENDING, null=False)
     attempt_count = models.IntegerField(default=0)

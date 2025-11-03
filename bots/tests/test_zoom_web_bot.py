@@ -2,11 +2,12 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import requests
 from django.db import connection
 from django.test import TransactionTestCase
 
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
 
 # Helper functions for creating mocks
@@ -31,9 +32,9 @@ class TestZoomWebBot(TransactionTestCase):
         self.organization = Organization.objects.create(name="Test Org")
         self.project = Project.objects.create(name="Test Project", organization=self.organization)
 
-        # Recreate credentials
-        self.credentials = Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
-        self.credentials.set_credentials({"client_id": "test_client_id", "client_secret": "test_client_secret"})
+        # Recreate zoom oauth app
+        self.zoom_credentials = Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        self.zoom_credentials.set_credentials({"client_id": "123", "client_secret": "test_client_secret"})
 
         # Create a bot for each test
         self.bot = Bot.objects.create(
@@ -198,3 +199,119 @@ class TestZoomWebBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.zoom_oauth_connections_utils.requests.post")
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_zoom_oauth_app_token_failure(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_requests_post,
+    ):
+        """Test that when OAuth token retrieval fails, the connection status is updated and webhook is sent"""
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook",
+            triggers=[WebhookTriggerTypes.ZOOM_OAUTH_CONNECTION_STATE_CHANGE],
+            is_active=True,
+        )
+
+        # Create ZoomOAuthApp
+        zoom_oauth_app = ZoomOAuthApp.objects.create(
+            project=self.project,
+            client_id="test_client_id",
+        )
+        zoom_oauth_app.set_credentials(
+            {
+                "client_secret": "test_client_secret",
+                "webhook_secret": "test_webhook_secret",
+            }
+        )
+
+        # Create ZoomOAuthConnection
+        zoom_oauth_connection = ZoomOAuthConnection.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            user_id="test_user_id",
+            account_id="test_account_id",
+            state=ZoomOAuthConnectionStates.CONNECTED,
+        )
+        zoom_oauth_connection.set_credentials(
+            {
+                "access_token": "test_access_token",
+                "refresh_token": "test_refresh_token",
+            }
+        )
+
+        # Create mapping for the meeting
+        meeting_id = "123123213"
+        self.bot.meeting_url = f"https://zoom.us/j/{meeting_id}"
+        self.bot.save()
+
+        ZoomMeetingToZoomOAuthConnectionMapping.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            zoom_oauth_connection=zoom_oauth_connection,
+            meeting_id=meeting_id,
+        )
+
+        # Mock the token refresh response to fail with authentication error
+        mock_token_response = MagicMock()
+        mock_token_response.status_code = 401
+        mock_token_response.json.return_value = {
+            "error": "invalid_grant",
+            "error_description": "Invalid grant",
+        }
+
+        # Create a proper HTTPError with a response
+        http_error = requests.HTTPError("401 Unauthorized")
+        http_error.response = mock_token_response
+        mock_token_response.raise_for_status.side_effect = http_error
+        mock_requests_post.return_value = mock_token_response
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Give the bot some time to attempt token retrieval
+        time.sleep(2)
+
+        # Verify that the ZoomOAuthConnection state was updated to DISCONNECTED
+        zoom_oauth_connection.refresh_from_db()
+        self.assertEqual(zoom_oauth_connection.state, ZoomOAuthConnectionStates.DISCONNECTED, "ZoomOAuthConnection should be DISCONNECTED after authentication failure")
+
+        # Verify that connection_failure_data was set
+        self.assertIsNotNone(zoom_oauth_connection.connection_failure_data)
+        self.assertIn("error", zoom_oauth_connection.connection_failure_data)
+
+        # Verify that a webhook was triggered for the connection state change
+        webhook_attempts = WebhookDeliveryAttempt.objects.filter(
+            webhook_trigger_type=WebhookTriggerTypes.ZOOM_OAUTH_CONNECTION_STATE_CHANGE,
+            zoom_oauth_connection=zoom_oauth_connection,
+        )
+        self.assertTrue(webhook_attempts.exists(), "A webhook should be triggered for ZoomOAuthConnection state change")
+
+        # Verify the webhook payload contains the connection info
+        webhook_attempt = webhook_attempts.first()
+        self.assertEqual(webhook_attempt.payload["state"], "disconnected")
+        self.assertIsNotNone(webhook_attempt.payload["connection_failure_data"])
+
+        # Close the database connection since we're in a thread
+        connection.close()

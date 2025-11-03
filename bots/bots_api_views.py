@@ -39,6 +39,7 @@ from .models import (
     Participant,
     ParticipantEvent,
     Recording,
+    RecordingViews,
     Utterance,
 )
 from .serializers import (
@@ -882,15 +883,15 @@ class BotDetailView(APIView):
 
     @extend_schema(
         operation_id="Patch Bot",
-        summary="Update a scheduled bot",
-        description="Updates a scheduled bot. Currently only the join_at field can be updated, and only for bots in the scheduled state.",
+        summary="Update a bot",
+        description="Updates a bot. Currently only the join_at and metadata fields can be updated. The join_at field can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
         request=PatchBotSerializer,
         responses={
             200: OpenApiResponse(
                 response=BotSerializer,
                 description="Bot updated successfully",
             ),
-            400: OpenApiResponse(description="Invalid input or bot is not in scheduled state"),
+            400: OpenApiResponse(description="Invalid input or bot cannot be updated"),
             404: OpenApiResponse(description="Bot not found"),
         },
         parameters=[
@@ -1098,6 +1099,9 @@ class SendChatMessageView(APIView):
 
             return Response(status=status.HTTP_200_OK)
 
+        except ValidationError as e:
+            logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
+            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
             return Response(
@@ -1163,6 +1167,51 @@ class AdmitFromWaitingRoomView(APIView):
                 logging.error(f"Error admitting from waiting room for bot {bot.object_id}: {str(e)}")
                 return Response(
                     {"error": "Failed to admit from waiting room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ChangeGalleryViewPageView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(exclude=True)
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            # This functionality is only supported for zoom bots
+            meeting_type = meeting_type_from_url(bot.meeting_url)
+            if meeting_type != MeetingTypes.ZOOM:
+                return Response({"error": "Changing gallery view page is not supported for this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
+            if not bot.use_zoom_web_adapter():
+                return Response({"error": "Changing gallery view page is only supported for Zoom Web SDK"}, status=status.HTTP_400_BAD_REQUEST)
+            if bot.recording_view() != RecordingViews.GALLERY_VIEW:
+                return Response({"error": "Changing gallery view page is only supported for when recording in gallery view"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if bot is in a state that allows changing the gallery view page
+            if not BotEventManager.is_state_that_can_change_gallery_view_page(bot.state):
+                return Response(
+                    {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot change the gallery view page"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            direction = request.data.get("direction", "next")
+            sync_command_to_send = "change_gallery_view_page_next" if direction == "next" else "change_gallery_view_page_previous"
+
+            # Call the utility method on the bot instance to change the gallery view page
+            try:
+                logging.info(f"Changing gallery view page for bot {bot.object_id} to {direction}")
+
+                send_sync_command(bot, sync_command_to_send)
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error changing gallery view page for bot {bot.object_id} to {direction}: {str(e)}")
+                return Response(
+                    {"error": f"Failed to change gallery view page for bot {bot.object_id} to {direction}"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 

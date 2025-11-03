@@ -1,7 +1,5 @@
-import re
 import time
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlparse
 
 import cv2
 import gi
@@ -10,6 +8,7 @@ import numpy as np
 import zoom_meeting_sdk as zoom
 
 from bots.bot_adapter import BotAdapter
+from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
@@ -53,21 +52,6 @@ def create_black_yuv420_frame(width=640, height=360):
     return yuv_frame.tobytes()
 
 
-def parse_join_url(join_url):
-    # Parse the URL into components
-    parsed = urlparse(join_url)
-
-    # Extract meeting ID using regex to match only numeric characters
-    meeting_id_match = re.search(r"(\d+)", parsed.path)
-    meeting_id = meeting_id_match.group(1) if meeting_id_match else None
-
-    # Extract password from query parameters
-    query_params = parse_qs(parsed.query)
-    password = query_params.get("pwd", [None])[0]
-
-    return (meeting_id, password)
-
-
 class ZoomBotAdapter(BotAdapter):
     def __init__(
         self,
@@ -108,7 +92,7 @@ class ZoomBotAdapter(BotAdapter):
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
-        self.meeting_id, self.meeting_password = parse_join_url(meeting_url)
+        self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)
 
         self.meeting_service = None
         self.setting_service = None
@@ -235,19 +219,30 @@ class ZoomBotAdapter(BotAdapter):
 
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
+        self.update_only_one_participant_in_meeting_at()
         for joined_user_id in joined_user_ids:
             self.get_participant(joined_user_id)
             self.send_participant_event(joined_user_id, event_type=ParticipantEventTypes.JOIN)
             self.request_permission_to_record_if_joined_user_is_host(joined_user_id)
 
-    def on_user_left_callback(self, left_user_ids, _):
-        logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
+    def update_only_one_participant_in_meeting_at(self):
+        if not self.joined_at:
+            return
+
+        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting() <= 1:
+            return
+
         all_participant_ids = self.participants_ctrl.GetParticipantsList()
         if len(all_participant_ids) == 1:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
         else:
             self.only_one_participant_in_meeting_at = None
+
+    def on_user_left_callback(self, left_user_ids, _):
+        logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
+        self.update_only_one_participant_in_meeting_at()
 
         for left_user_id in left_user_ids:
             self.send_participant_event(left_user_id, event_type=ParticipantEventTypes.LEAVE)
@@ -411,6 +406,9 @@ class ZoomBotAdapter(BotAdapter):
             logger.info(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
 
+    def number_of_participants_ever_in_meeting(self):
+        return len(self._participant_cache)
+
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
         sharing_status = sharing_info.status
@@ -428,12 +426,16 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
-        builder.SetReceiver(0)
-        builder.SetMessageType(zoom.SDKChatMessageType.To_All)
+        if to_user_uuid:
+            builder.SetReceiver(to_user_uuid)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
+        else:
+            builder.SetReceiver(0)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_All)
         msg = builder.Build()
         send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
         logger.info(f"send_chat_message_result = {send_chat_message_result}")

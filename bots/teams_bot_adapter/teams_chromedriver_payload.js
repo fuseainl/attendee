@@ -901,7 +901,8 @@ class UserManager {
             status: user.state,
             humanized_status: user.state === "active" ? "in_meeting" : "not_in_meeting",
             isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId),
-            isHost: user.meetingRole === "organizer"
+            isHost: user.meetingRole === "organizer",
+            meetingId: user.callId,
         }
     }
 
@@ -940,7 +941,8 @@ class UserManager {
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
                 isCurrentUser: user.isCurrentUser,
-                isHost: user.isHost
+                isHost: user.isHost,
+                meetingId: user.meetingId
             });
         }
 
@@ -966,7 +968,8 @@ class UserManager {
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
                 isCurrentUser: user.isCurrentUser,
-                isHost: user.isHost
+                isHost: user.isHost,
+                meetingId: user.meetingId
             });
         }
 
@@ -1395,15 +1398,23 @@ function syncVirtualStreamsFromParticipant(participant) {
     }
 }
 
+function extractCallIdFromEventDataObject(eventDataObject) {
+    return eventDataObject?.headers?.["X-Microsoft-Skype-Chain-ID"];
+}
+
 function handleRosterUpdate(eventDataObject) {
     try {
         const decodedBody = decodeWebSocketBody(eventDataObject.body);
         realConsole?.log('handleRosterUpdate decodedBody', decodedBody);
         // Teams includes a user with no display name. Not sure what this user is but we don't want to sync that user.
         const participants = Object.values(decodedBody.participants).filter(participant => participant.details?.displayName);
-
+        const callId = extractCallIdFromEventDataObject(eventDataObject);
         for (const participant of participants) {
-            window.userManager.singleUserSynced(participant);
+            const participantWithCallId = {
+                ...participant,
+                callId: callId
+            };
+            window.userManager.singleUserSynced(participantWithCallId);
             syncVirtualStreamsFromParticipant(participant);
         }
     } catch (error) {
@@ -2729,6 +2740,15 @@ class CallManager {
         }
     }
 
+    getCallId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall._callId;
+    }
+
     getCurrentUserId() {
         this.setActiveCall();
         if (!this.activeCall) {
@@ -2781,7 +2801,8 @@ class CallManager {
                 details: {id: participant.id, displayName: participant.displayName},
                 meetingRole: participant.meetingRole,
                 state: "active",
-                endpoints: Object.fromEntries(endpoints)
+                endpoints: Object.fromEntries(endpoints),
+                callId: this.getCallId()
             };
             window.userManager.singleUserSynced(participantConverted);
             syncVirtualStreamsFromParticipant(participantConverted);

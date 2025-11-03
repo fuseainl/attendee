@@ -121,7 +121,8 @@ class PerParticipantStreamingAudioInputManager:
                 sample_rate=self.sample_rate,
                 callback=self.utterance_handler.handle_utterance,
                 metadata=metadata_list,
-                redaction_settings=(self.bot.transcription_settings.deepgram_redaction_settings()),
+                redaction_settings=self.bot.transcription_settings.deepgram_redaction_settings(),
+                replace_settings=self.bot.transcription_settings.deepgram_replace_settings(),
             )
         elif self.transcription_provider == TranscriptionProviders.KYUTAI:
 

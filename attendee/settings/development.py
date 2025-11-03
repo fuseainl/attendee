@@ -36,6 +36,7 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "xmlschema": {"level": "WARNING", "handlers": ["console"], "propagate": False},
         # Uncomment to log database queries
         # "django.db.backends": {
         #    "handlers": ["console"],

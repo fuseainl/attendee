@@ -72,12 +72,21 @@ def create_bot_chat_message_request(bot, chat_message_data):
         BotChatMessageRequest: The created chat message request
     """
     try:
+        # Make sure the bot has a participant with the given to_user_uuid
+        to_user_uuid = chat_message_data.get("to_user_uuid")
+        if to_user_uuid:
+            participant = bot.participants.filter(uuid=to_user_uuid).first()
+            if not participant:
+                raise ValidationError(f"No participant found with uuid {to_user_uuid}. Use the /participants endpoint to get the list of participants.", params={"to_user_uuid": to_user_uuid})
+
         bot_chat_message_request = BotChatMessageRequest.objects.create(
             bot=bot,
-            to_user_uuid=chat_message_data.get("to_user_uuid"),
+            to_user_uuid=to_user_uuid,
             to=chat_message_data["to"],
             message=chat_message_data["message"],
         )
+    except ValidationError as e:
+        raise e
     except Exception as e:
         error_message_first_line = str(e).split("\n")[0]
         logging.error(f"Error creating bot chat message request: {error_message_first_line}")
@@ -112,7 +121,7 @@ def validate_meeting_url_and_credentials(meeting_url, project):
     """
 
     if meeting_type_from_url(meeting_url) == MeetingTypes.ZOOM:
-        zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
+        zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first() or project.zoom_oauth_apps.first()
         if not zoom_credentials:
             relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
             settings_url = build_site_url(relative_url)
@@ -198,6 +207,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     recording_settings = serializer.validated_data["recording_settings"]
     debug_settings = serializer.validated_data["debug_settings"]
     automatic_leave_settings = serializer.validated_data["automatic_leave_settings"]
+    google_meet_settings = serializer.validated_data["google_meet_settings"]
     teams_settings = serializer.validated_data["teams_settings"]
     zoom_settings = serializer.validated_data["zoom_settings"]
     bot_image = serializer.validated_data["bot_image"]
@@ -226,6 +236,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "recording_settings": recording_settings,
         "debug_settings": debug_settings,
         "automatic_leave_settings": automatic_leave_settings,
+        "google_meet_settings": google_meet_settings,
         "teams_settings": teams_settings,
         "zoom_settings": zoom_settings,
         "websocket_settings": websocket_settings,
@@ -327,9 +338,6 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
     Returns:
         tuple: (updated_bot, error) where one is None
     """
-    # Check if bot is in scheduled state
-    if bot.state != BotStates.SCHEDULED:
-        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be updated when in scheduled state"}
 
     # Validate the request data
     serializer = PatchBotSerializer(data=data)
@@ -340,8 +348,17 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
 
     try:
         # Update the bot
+        previous_join_at = bot.join_at
         bot.join_at = validated_data.get("join_at", bot.join_at)
+        previous_meeting_url = bot.meeting_url
         bot.meeting_url = validated_data.get("meeting_url", bot.meeting_url)
+        bot.metadata = validated_data.get("metadata", bot.metadata)
+
+        # If the join_at or meeting_url is being updated, the state must be scheduled. If it isn't error out.
+        update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url
+        if update_only_legal_for_scheduled_bots and bot.state != BotStates.SCHEDULED:
+            return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but the join_at or meeting_url can only be updated when in the scheduled state"}
+
         bot.save()
 
         return bot, None

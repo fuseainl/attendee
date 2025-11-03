@@ -1,4 +1,4 @@
-from bots.serializers import CalendarSerializer, ChatMessageSerializer, ParticipantEventSerializer
+from bots.serializers import CalendarSerializer, ChatMessageSerializer, ParticipantEventSerializer, ZoomOAuthConnectionSerializer
 
 
 def chat_message_webhook_payload(chat_message):
@@ -28,4 +28,14 @@ def calendar_webhook_payload(calendar):
         "connection_failure_data": serialized_calendar["connection_failure_data"],
         "last_successful_sync_at": serialized_calendar["last_successful_sync_at"],
         "last_attempted_sync_at": serialized_calendar["last_attempted_sync_at"],
+    }
+
+
+def zoom_oauth_connection_webhook_payload(zoom_oauth_connection):
+    serialized_zoom_oauth_connection = ZoomOAuthConnectionSerializer(zoom_oauth_connection).data
+    return {
+        "state": serialized_zoom_oauth_connection["state"],
+        "connection_failure_data": serialized_zoom_oauth_connection["connection_failure_data"],
+        "last_successful_sync_at": serialized_zoom_oauth_connection["last_successful_sync_at"],
+        "last_attempted_sync_at": serialized_zoom_oauth_connection["last_attempted_sync_at"],
     }

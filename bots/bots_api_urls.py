@@ -75,6 +75,11 @@ urlpatterns = [
         name="bot-admit-from-waiting-room",
     ),
     path(
+        "bots/<str:object_id>/change_gallery_view_page",
+        bots_api_views.ChangeGalleryViewPageView.as_view(),
+        name="bot-change-gallery-view-page",
+    ),
+    path(
         "bots/<str:object_id>/transcription_settings",
         bots_api_views.TranscriptionSettingsView.as_view(),
         name="bot-transcription-settings",
