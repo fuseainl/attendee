@@ -204,6 +204,9 @@ class KyutaiStreamingTranscriber:
         self._last_utterance_check_time = 0.0
         self._utterance_check_interval = 0.1  # Check at most every 100ms
 
+        # Track when audio was last sent (used for monitoring/cleanup)
+        self.last_send_time = time.time()
+
         # WebSocket connection
         self.ws = None
         self.connected = False
@@ -522,6 +525,9 @@ class KyutaiStreamingTranscriber:
         if not self.connected or self.should_stop:
             # Silently drop audio during shutdown - expected behavior
             return
+
+        # Update last send time for monitoring/cleanup
+        self.last_send_time = time.time()
 
         try:
             # Resample if needed (cache resampler state for performance)
