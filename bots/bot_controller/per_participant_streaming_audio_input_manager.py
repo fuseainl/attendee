@@ -228,4 +228,4 @@ class PerParticipantStreamingAudioInputManager:
             oldest_speaker_id, oldest_transcriber = min(self.streaming_transcribers.items(), key=lambda item: item[1].last_send_time)
             oldest_transcriber.finish()
             del self.streaming_transcribers[oldest_speaker_id]
-            logger.info(f"Stopped oldest streaming transcriber for " f"speaker {oldest_speaker_id}")
+            logger.info(f"Stopped oldest streaming transcriber for speaker {oldest_speaker_id}")
