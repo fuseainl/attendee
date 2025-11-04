@@ -68,7 +68,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         return
 
     def send_chat_message(self, text, to_user_uuid):
-        chatInput = self.driver.execute_script("return document.querySelector('[aria-label=\"Type a message\"], [placeholder=\"Type a message\"]')")
+        chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')
 
         if not chatInput:
             logger.error("Could not find chat input")
