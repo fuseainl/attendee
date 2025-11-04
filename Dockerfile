@@ -76,6 +76,9 @@ RUN apt-get update && apt-get install -y xterm
 # Install xmlsec1
 RUN apt-get update && apt-get install -y xmlsec1
 
+# Install xclip
+RUN apt-get update && apt-get install -y xclip
+
 # Install python dependencies
 RUN pip install pyjwt cython gdown python-dotenv
 
