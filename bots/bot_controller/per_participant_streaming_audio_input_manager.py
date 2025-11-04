@@ -224,7 +224,8 @@ class PerParticipantStreamingAudioInputManager:
         # If Number of streaming transcribers is greater than 4,
         # stop the oldest one
         if len(self.streaming_transcribers) > 4:
-            oldest_transcriber = min(self.streaming_transcribers.values(), key=lambda x: x.last_send_time)
+            # Find speaker_id and transcriber with oldest last_send_time
+            oldest_speaker_id, oldest_transcriber = min(self.streaming_transcribers.items(), key=lambda item: item[1].last_send_time)
             oldest_transcriber.finish()
-            del self.streaming_transcribers[oldest_transcriber.speaker_id]
-            logger.info(f"Stopped oldest streaming transcriber for speaker {oldest_transcriber.speaker_id}")
+            del self.streaming_transcribers[oldest_speaker_id]
+            logger.info(f"Stopped oldest streaming transcriber for " f"speaker {oldest_speaker_id}")
