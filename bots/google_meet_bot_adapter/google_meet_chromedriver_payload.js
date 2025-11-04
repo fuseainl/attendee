@@ -2096,6 +2096,7 @@ function turnOnMicAndScreenshare() {
         console.log("Microphone button not found");
     }
 
+
     // Click screenshare button to turn it on
     const screenshareButton = document.querySelector(`button[aria-label="${turnOnScreenshareArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOnScreenshareArialLabel}"]`);
     if (screenshareButton) {
@@ -2104,6 +2105,10 @@ function turnOnMicAndScreenshare() {
     } else {
         console.log("Screenshare button not found");
     }
+
+    window.botOutputManager.initializeBotOutputAudioTrack();
+    const botOutputMediaStreamSource = window.botOutputManager.audioContextForBotOutput.createMediaStreamSource(window.botOutputManager.botOutputMediaStream);
+    botOutputMediaStreamSource.connect(window.botOutputManager.gainNode);
 }
 
 function turnOffMicAndScreenshare() {
@@ -2628,7 +2633,6 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
         if (botOutputManager.botOutputVideoElementCaptureStream) {
             botOutputManager.connectVideoSourceToAudioContext();
         }
-
         if (botOutputManager.botOutputMediaStream) {
             // connect the botOutputMediaStream stream to the audio context
             if (botOutputManager.botOutputMediaStream.getAudioTracks().length > 0) {
