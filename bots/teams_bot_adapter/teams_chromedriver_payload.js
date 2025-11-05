@@ -803,11 +803,20 @@ The tracks have a streamId that looks like this mainVideo-39016. The SDP has tha
 class ChatMessageManager {
     constructor(ws) {
         this.ws = ws;
+        this.chatMessages = {};
     }
 
     // The more sophisticated approach gets blocked by trusted html csp
     stripHtml(html) {
         return html.replace(/<[^>]*>/g, '');
+    }
+
+    // Teams client sometimes sends duplicate updates, this filters them out.
+    isNewOrUpdatedChatMessage(chatMessage) {
+        const currentMessage = this.chatMessages[chatMessage.clientMessageId];
+        if (!currentMessage)
+            return true;
+        return currentMessage.content !== chatMessage.content || currentMessage.originalArrivalTime !== chatMessage.originalArrivalTime || currentMessage.from !== chatMessage.from;
     }
 
     handleChatMessage(chatMessage) {
@@ -820,6 +829,10 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            if (!this.isNewOrUpdatedChatMessage(chatMessage))
+                return;
+
+            this.chatMessages[chatMessage.clientMessageId] = chatMessage;
 
             const timestamp_ms = new Date(chatMessage.originalArrivalTime).getTime();
             this.ws.sendJson({
