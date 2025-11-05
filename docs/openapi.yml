@@ -1541,7 +1541,7 @@ components:
         message:
           type: string
           minLength: 1
-          description: The message text to send. Does not support emojis currently.
+          description: The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.
       required:
       - message
     BotImageRequest:
