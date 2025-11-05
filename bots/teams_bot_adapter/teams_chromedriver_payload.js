@@ -2361,8 +2361,9 @@ class BotOutputManager {
 
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
-        this.canvas.width = 640;
-        this.canvas.height = 480;
+        // Canvas must be 1280x640. Needed to work in Teams.
+        this.canvas.width = 1280;
+        this.canvas.height = 640;
         this.canvasCtx = this.canvas.getContext("2d");
 
         this.canvasCtx.fillStyle = "black";
@@ -2404,7 +2405,7 @@ class BotOutputManager {
             const stream = new MediaStream();
 
             if (needVideo && self.sourceVideoTrack) {
-                // Clone from the source so app-level stop() doesn't kill our source.
+                // Clone from the source so app-level stop() doesn't kill our source. Otherwise this won't work in Teams.
                 const videoClone = self.sourceVideoTrack.clone();
                 stream.addTrack(videoClone);
                 self._ensureWebcamOn();
@@ -2460,12 +2461,44 @@ class BotOutputManager {
         }
     }
 
+    calculateImageDrawParamsForLetterBoxing(imageWidth, imageHeight) {
+        const imgAspect = imageWidth / imageHeight;
+        const canvasAspect = this.canvas.width / this.canvas.height;
+        
+        // Calculate dimensions to fit image within canvas with letterboxing
+        let renderWidth, renderHeight, offsetX, offsetY;
+        
+        if (imgAspect > canvasAspect) {
+            // Image is wider than canvas (horizontal letterboxing)
+            renderWidth = this.canvas.width;
+            renderHeight = this.canvas.width / imgAspect;
+            offsetX = 0;
+            offsetY = (this.canvas.height - renderHeight) / 2;
+        } else {
+            // Image is taller than canvas (vertical letterboxing)
+            renderHeight = this.canvas.height;
+            renderWidth = this.canvas.height * imgAspect;
+            offsetX = (this.canvas.width - renderWidth) / 2;
+            offsetY = 0;
+        }
+        
+        return {
+            offsetX: offsetX,
+            offsetY: offsetY,
+            width: renderWidth,
+            height: renderHeight
+        };
+    }
+
     /**
      * Display a PNG image on the virtual webcam.
      *
      * @param {ArrayBuffer|Uint8Array} imageBytes - Raw PNG bytes.
      * @returns {Promise<void>}
      */
+    // 3 non-obvious things you need to do to make this work:
+    // 1. Image needs to be redrawn on canvas
+    // 2. Canvas needs to have a fixed "reasonable" size
     async displayImage(imageBytes) {
         this._stopVideoPlayback(); // Ensure no video is currently drawing
 
@@ -2488,13 +2521,11 @@ class BotOutputManager {
         const url = URL.createObjectURL(blob);
         try {
             const img = await this._loadImage(url);
-            // Resize canvas to match image
-            this.canvas.width = 1280;
-            this.canvas.height = 640;
-            this.canvasCtx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
-            // Set up an interval that redraws the image every 1000ms
+            const imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(img.width, img.height);
+            this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
+            // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
             this.imageRedrawInterval = setInterval(() => {
-                this.canvasCtx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+                this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
             }, 1000);
             this._ensureWebcamOn();
         } finally {
