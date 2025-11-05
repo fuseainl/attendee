@@ -2347,7 +2347,7 @@ class BotOutputManager {
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
 
-        // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers.
+        // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers. Not sure why this happens.
         this.sourceAudioTrack = null;
 
         // ---- AUDIO QUEUE STATE ----
@@ -2430,6 +2430,7 @@ class BotOutputManager {
             }
 
             if (needAudio) {
+                // You need to initialize the source audio track here. It will play through the speakers if you initialize it in the constructor.
                 self._createSourceAudioTrack();
                 const audioClone = self.sourceAudioTrack.clone();
                 stream.addTrack(audioClone);
@@ -2692,7 +2693,7 @@ class BotOutputManager {
         if (!this.videoElement) {
             this.videoElement = document.createElement("video");
             this.videoElement.playsInline = true;
-            this.videoElement.muted = true; // avoid autoplay issues; audio will go via Web Audio
+            this.videoElement.muted = false;
         }
 
         this.videoElement.src = videoUrl;
@@ -2737,8 +2738,8 @@ class BotOutputManager {
             const vw = this.videoElement.videoWidth;
             const vh = this.videoElement.videoHeight;
             if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
-                this.canvas.width = vw;
-                this.canvas.height = vh;
+            //    this.canvas.width = vw;
+           //     this.canvas.height = vh;
             }
 
             this.canvasCtx.drawImage(
