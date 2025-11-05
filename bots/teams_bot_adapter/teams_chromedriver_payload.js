@@ -2321,491 +2321,357 @@ function turnOffMicAndScreenshare() {
     }
 }
 
-const _getUserMedia = navigator.mediaDevices.getUserMedia;
-const _getDisplayMedia = navigator.mediaDevices.getDisplayMedia;
+
+// --------------
 
 class BotOutputManager {
-    constructor() {
-        
-        // For outputting video
-        this.botOutputVideoElement = null;
-        this.videoSource = null;
-        this.botOutputVideoElementCaptureStream = null;
-
-        // For outputting image
-        this.botOutputCanvasElement = null;
-        this.botOutputCanvasElementCaptureStream = null;
-        
-        // For outputting audio
-        this.audioContextForBotOutput = null;
-        this.gainNode = null;
-        this.destination = null;
-        this.botOutputAudioTrack = null;
-
-        // For outputting a stream
-        this.botOutputMediaStream = null;
-        this.botOutputPeerConnection = null;
-    }
-
-    playMediaStream(stream) {
-        if (this.botOutputMediaStream) {
-            this.botOutputMediaStream.disconnect();
+    /**
+     * @param {Object} callbacks
+     * @param {Function} [callbacks.turnOnWebcam]
+     * @param {Function} [callbacks.turnOffWebcam]
+     * @param {Function} [callbacks.turnOnMic]
+     * @param {Function} [callbacks.turnOffMic]
+     */
+    constructor({
+        turnOnWebcam = () => {},
+        turnOffWebcam = () => {},
+        turnOnMic = () => {},
+        turnOffMic = () => {},
+    } = {}) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
         }
-        this.botOutputMediaStream = stream;
 
-        turnOffMicAndCamera();
+        this.turnOnWebcam = turnOnWebcam;
+        this.turnOffWebcam = turnOffWebcam;
+        this.turnOnMic = turnOnMic;
+        this.turnOffMic = turnOffMic;
 
-        // after 1000 ms
-        setTimeout(() => {
-            turnOnMicAndCamera();
-        }, 1000);
-    }
-
-    playMediaStreamThroughScreenshare(stream) {
-        if (this.botOutputMediaStream) {
-            this.botOutputMediaStream.disconnect();
+        // --- AUDIO SOURCE SETUP (single source) ---
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextCtor) {
+            throw new Error("Web Audio API is not available (AudioContext missing).");
         }
-        this.botOutputMediaStream = stream;
+        this.audioContext = new AudioContextCtor();
+        this.audioDestination = this.audioContext.createMediaStreamDestination();
 
-        turnOffMicAndScreenshare();
+        // This is our *source* audio track; we will CLONE it for callers.
+        const audioTracks = this.audioDestination.stream.getAudioTracks();
+        this.sourceAudioTrack = audioTracks[0] || null;
 
-        // after 1000 ms
-        setTimeout(() => {
-            turnOnMicAndScreenshare();
-        }, 1000);
+        // --- VIDEO SOURCE SETUP (single source canvas) ---
+        this.canvas = document.createElement("canvas");
+        this.canvas.width = 640;
+        this.canvas.height = 480;
+        this.canvasCtx = this.canvas.getContext("2d");
+
+        this.canvasCtx.fillStyle = "black";
+        this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        const sourceVideoStream = this.canvas.captureStream(30); // ~30 FPS
+
+        // This is our *source* video track; we will CLONE it for callers.
+        const videoTracks = sourceVideoStream.getVideoTracks();
+        this.sourceVideoTrack = videoTracks[0] || null;
+
+        this._originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
+            navigator.mediaDevices
+        );
+
+        this.videoElement = null;
+        this.videoRafId = null;
+        this.videoAudioSource = null;
+
+        this._installGetUserMediaInterceptor();
     }
 
-    async getBotOutputPeerConnectionOffer() {
-        try
-        {
-            // 2) Create the RTCPeerConnection
-            this.botOutputPeerConnection = new RTCPeerConnection();
+    _installGetUserMediaInterceptor() {
+        const self = this;
 
-            // 3) Receive the server's *video* and *audio*
-            const ms = new MediaStream();
-            this.botOutputPeerConnection.ontrack = (ev) => {
-                ms.addTrack(ev.track);
-                // If we've received both video and audio, play the stream
-                if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
-                    if (window.initialData.voiceAgentVideoOutputDestination === "screenshare") {
-                        botOutputManager.playMediaStreamThroughScreenshare(ms);
-                    } else {
-                        botOutputManager.playMediaStream(ms);
-                    }
-                }
-            };
+        navigator.mediaDevices.getUserMedia = async function interceptedGetUserMedia(
+            constraints
+        ) {
+            const needAudio =
+                !!(constraints && constraints.audio !== false && constraints.audio != null);
+            const needVideo =
+                !!(constraints && constraints.video !== false && constraints.video != null);
 
-            // We still want to receive the server's video
-            this.botOutputPeerConnection.addTransceiver('video', { direction: 'recvonly' });
-
-            // ❗ Instead of recvonly audio, we now **send** our mic upstream:
-            const meetingAudioStream = window.styleManager.getMeetingAudioStream();
-            for (const track of meetingAudioStream.getAudioTracks()) {
-                this.botOutputPeerConnection.addTrack(track, meetingAudioStream);
+            // Edge-case: if nothing is requested, just delegate.
+            if (!needAudio && !needVideo) {
+                return self._originalGetUserMedia(constraints);
             }
 
-            // Create/POST offer → set remote answer
-            const offer = await this.botOutputPeerConnection.createOffer();
-            await this.botOutputPeerConnection.setLocalDescription(offer);
-            return { sdp: this.botOutputPeerConnection.localDescription.sdp, type: this.botOutputPeerConnection.localDescription.type };
-        }
-        catch (e) {
-            return { error: e.message };
-        }
+            const stream = new MediaStream();
+
+            if (needVideo && self.sourceVideoTrack) {
+                // Clone from the source so app-level stop() doesn't kill our source.
+                const videoClone = self.sourceVideoTrack.clone();
+                stream.addTrack(videoClone);
+                self._ensureWebcamOn();
+            }
+
+            if (needAudio && self.sourceAudioTrack) {
+                const audioClone = self.sourceAudioTrack.clone();
+                stream.addTrack(audioClone);
+                self._ensureMicOn();
+            }
+
+            return stream;
+        };
     }
 
-    async startBotOutputPeerConnection(offerResponse) {
-        await this.botOutputPeerConnection.setRemoteDescription(offerResponse);
-
-        // Start latency measurement for the bot output peer connection
-        this.startLatencyMeter(this.botOutputPeerConnection, "bot-output");
-    }
-
-    startLatencyMeter(pc, label="rx") {
-        setInterval(async () => {
-            const stats = await pc.getStats();
-            let rtt_ms = 0, jb_a_ms = 0, jb_v_ms = 0, dec_v_ms = 0;
-
-            stats.forEach(r => {
-                if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
-                    rtt_ms = (r.currentRoundTripTime || 0) * 1000;
-                }
-                if (r.type === 'inbound-rtp' && r.kind === 'audio') {
-                    const d = (r.jitterBufferDelay || 0);
-                    const n = (r.jitterBufferEmittedCount || 1);
-                    jb_a_ms = (d / n) * 1000;
-                }
-                if (r.type === 'inbound-rtp' && r.kind === 'video') {
-                    const d = (r.jitterBufferDelay || 0);
-                    const n = (r.jitterBufferEmittedCount || 1);
-                    jb_v_ms = (d / n) * 1000;
-                    dec_v_ms = ((r.totalDecodeTime || 0) / (r.framesDecoded || 1)) * 1000;
-                }
-            });
-
-            const est_audio_owd = (rtt_ms / 2) + jb_a_ms;
-            const est_video_owd = (rtt_ms / 2) + jb_v_ms + dec_v_ms;
-
-            const logStatement = `[${label}] est one-way: audio≈${est_audio_owd|0}ms, video≈${est_video_owd|0}ms  (rtt=${rtt_ms|0}, jb_a=${jb_a_ms|0}, jb_v=${jb_v_ms|0}, dec_v=${dec_v_ms|0})`;
-            console.log(logStatement);
-            window.ws.sendJson({
-                type: 'BOT_OUTPUT_PEER_CONNECTION_STATS',
-                logStatement: logStatement
-            });
-        }, 60000);
-    }
-
-    displayImage(imageBytes) {
+    _ensureWebcamOn() {
         try {
-            // Wait for the image to be loaded onto the canvas
-            return this.writeImageToBotOutputCanvas(imageBytes)
-                .then(() => {
-                // If the stream is already broadcasting, don't do anything
-                if (this.botOutputCanvasElementCaptureStream)
-                {
-                    console.log("Stream already broadcasting, skipping");
-                    return;
-                }
-
-                // Now that the image is loaded, capture the stream and turn on camera
-                this.botOutputCanvasElementCaptureStream = this.botOutputCanvasElement.captureStream(1);
-                // Wait for 3 seconds before turning on camera, this is necessary for teams only
-                setTimeout(turnOnCamera, 3000);
-            })
-            .catch(error => {
-                console.error('Error in botOutputManager.displayImage:', error);
-            });
-        } catch (error) {
-            console.error('Error in botOutputManager.displayImage:', error);
+            this.turnOnWebcam && this.turnOnWebcam();
+        } catch (e) {
+            console.error("Error in turnOnWebcam callback:", e);
         }
     }
 
-    writeImageToBotOutputCanvas(imageBytes) {
-        if (!this.botOutputCanvasElement) {
-            // Create a new canvas element with fixed dimensions
-            this.botOutputCanvasElement = document.createElement('canvas');
-            this.botOutputCanvasElement.width = 1280; // Fixed width
-            this.botOutputCanvasElement.height = 640; // Fixed height
+    _ensureMicOn() {
+        try {
+            this.turnOnMic && this.turnOnMic();
+        } catch (e) {
+            console.error("Error in turnOnMic callback:", e);
         }
-        
+    }
+
+    enableWebcam() {
+        this._ensureWebcamOn();
+    }
+
+    disableWebcam() {
+        try {
+            this.turnOffWebcam && this.turnOffWebcam();
+        } catch (e) {
+            console.error("Error in turnOffWebcam callback:", e);
+        }
+    }
+
+    enableMic() {
+        this._ensureMicOn();
+    }
+
+    disableMic() {
+        try {
+            this.turnOffMic && this.turnOffMic();
+        } catch (e) {
+            console.error("Error in turnOffMic callback:", e);
+        }
+    }
+
+    /**
+     * Display a PNG image on the virtual webcam.
+     *
+     * @param {ArrayBuffer|Uint8Array} imageBytes - Raw PNG bytes.
+     * @returns {Promise<void>}
+     */
+    async displayImage(imageBytes) {
+        this._stopVideoPlayback(); // Ensure no video is currently drawing
+
+        if (!imageBytes) {
+            throw new Error("displayImage: imageBytes is required.");
+        }
+
+        let buffer;
+        if (imageBytes instanceof ArrayBuffer) {
+            buffer = imageBytes;
+        } else if (ArrayBuffer.isView(imageBytes)) {
+            buffer = imageBytes.buffer;
+        } else {
+            throw new Error(
+                "displayImage: expected ArrayBuffer or TypedArray for imageBytes."
+            );
+        }
+
+        const blob = new Blob([buffer], { type: "image/png" });
+        const url = URL.createObjectURL(blob);
+        try {
+            const img = await this._loadImage(url);
+            // Resize canvas to match image
+            this.canvas.width = 1280;
+            this.canvas.height = 640;
+            this.canvasCtx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+            // Set up an interval that redraws the image every 1000ms
+            this.imageRedrawInterval = setInterval(() => {
+                this.canvasCtx.drawImage(img, 0, 0, this.canvas.width, this.canvas.height);
+            }, 1000);
+            this._ensureWebcamOn();
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    }
+
+    _loadImage(url) {
         return new Promise((resolve, reject) => {
-            // Create an Image object to load the PNG
             const img = new Image();
-            
-            // Convert the image bytes to a data URL
-            const blob = new Blob([imageBytes], { type: 'image/png' });
-            const url = URL.createObjectURL(blob);
-            
-            // Draw the image on the canvas when it loads
-            img.onload = () => {
-                // Revoke the URL immediately after image is loaded
-                URL.revokeObjectURL(url);
-                
-                const canvas = this.botOutputCanvasElement;
-                const ctx = canvas.getContext('2d');
-                
-                // Clear the canvas
-                ctx.fillStyle = 'black';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                // Calculate aspect ratios
-                const imgAspect = img.width / img.height;
-                const canvasAspect = canvas.width / canvas.height;
-                
-                // Calculate dimensions to fit image within canvas with letterboxing
-                let renderWidth, renderHeight, offsetX, offsetY;
-                
-                if (imgAspect > canvasAspect) {
-                    // Image is wider than canvas (horizontal letterboxing)
-                    renderWidth = canvas.width;
-                    renderHeight = canvas.width / imgAspect;
-                    offsetX = 0;
-                    offsetY = (canvas.height - renderHeight) / 2;
-                } else {
-                    // Image is taller than canvas (vertical letterboxing)
-                    renderHeight = canvas.height;
-                    renderWidth = canvas.height * imgAspect;
-                    offsetX = (canvas.width - renderWidth) / 2;
-                    offsetY = 0;
-                }
-                
-                this.imageDrawParams = {
-                    img: img,
-                    offsetX: offsetX,
-                    offsetY: offsetY,
-                    width: renderWidth,
-                    height: renderHeight
-                };
-
-                // Clear any existing draw interval
-                if (this.drawInterval) {
-                    clearInterval(this.drawInterval);
-                }
-
-                ctx.drawImage(
-                    this.imageDrawParams.img,
-                    this.imageDrawParams.offsetX,
-                    this.imageDrawParams.offsetY,
-                    this.imageDrawParams.width,
-                    this.imageDrawParams.height
-                );
-
-                // Set up interval to redraw the image every 1 second
-                this.drawInterval = setInterval(() => {
-                    ctx.drawImage(
-                        this.imageDrawParams.img,
-                        this.imageDrawParams.offsetX,
-                        this.imageDrawParams.offsetY,
-                        this.imageDrawParams.width,
-                        this.imageDrawParams.height
-                    );
-                }, 1000);
-                
-                // Resolve the promise now that image is loaded
-                resolve();
-            };
-            
-            // Handle image loading errors
-            img.onerror = (error) => {
-                URL.revokeObjectURL(url);
-                reject(new Error('Failed to load image'));
-            };
-            
-            // Set the image source to start loading
+            img.onload = () => resolve(img);
+            img.onerror = (err) => reject(err);
             img.src = url;
         });
     }
 
-
-    initializeBotOutputAudioTrack() {
-        if (this.botOutputAudioTrack) {
-            return;
+    /**
+     * Play raw PCM audio data through the virtual microphone.
+     *
+     * @param {Int16Array|Array<number>|TypedArray} pcmData - raw PCM samples (interleaved for multi-channel).
+     * @param {number} [sampleRate=44100]
+     * @param {number} [numChannels=1]
+     * @returns {Promise<void>}
+     */
+    async playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
+        if (!pcmData || pcmData.length === 0) {
+            throw new Error("playPCMAudio: pcmData is required and cannot be empty.");
         }
 
-        // Create AudioContext and nodes
-        this.audioContextForBotOutput = new AudioContext();
-        this.gainNode = this.audioContextForBotOutput.createGain();
-        this.destination = this.audioContextForBotOutput.createMediaStreamDestination();
-
-        // Set initial gain
-        this.gainNode.gain.value = 1.0;
-
-        // Connect gain node to both destinations
-        this.gainNode.connect(this.destination);
-        this.gainNode.connect(this.audioContextForBotOutput.destination);  // For local monitoring
-
-        this.botOutputAudioTrack = this.destination.stream.getAudioTracks()[0];
-        
-        // Initialize audio queue for continuous playback
-        this.audioQueue = [];
-        this.nextPlayTime = 0;
-        this.isPlaying = false;
-        this.sampleRate = 44100; // Default sample rate
-        this.numChannels = 1;    // Default channels
-        this.turnOffMicTimeout = null;
-    }
-
-    playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
-        turnOnMic();
-
-        // Make sure audio context is initialized
-        this.initializeBotOutputAudioTrack();
-        
-        // Update properties if they've changed
-        if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
-            this.sampleRate = sampleRate;
-            this.numChannels = numChannels;
+        if (this.audioContext.state === "suspended") {
+            await this.audioContext.resume();
         }
-        
-        // Convert Int16 PCM data to Float32 with proper scaling
-        let audioData;
-        if (pcmData instanceof Float32Array) {
-            audioData = pcmData;
-        } else {
-            // Create a Float32Array of the same length
-            audioData = new Float32Array(pcmData.length);
-            // Scale Int16 values (-32768 to 32767) to Float32 range (-1.0 to 1.0)
-            for (let i = 0; i < pcmData.length; i++) {
-                // Division by 32768.0 scales the range correctly
-                audioData[i] = pcmData[i] / 32768.0;
-            }
-        }
-        
-        // Add to queue with timing information
-        const chunk = {
-            data: audioData,
-            duration: audioData.length / (numChannels * sampleRate)
-        };
-        
-        this.audioQueue.push(chunk);
-        
-        // Start playing if not already
-        if (!this.isPlaying) {
-            this.processAudioQueue();
-        }
-    }
-    
-    processAudioQueue() {
-        if (this.audioQueue.length === 0) {
-            this.isPlaying = false;
 
-            if (this.turnOffMicTimeout) {
-                clearTimeout(this.turnOffMicTimeout);
-                this.turnOffMicTimeout = null;
-            }
-            
-            // Delay turning off the mic by 2 second and check if queue is still empty
-            this.turnOffMicTimeout = setTimeout(() => {
-                // Only turn off mic if the queue is still empty
-                if (this.audioQueue.length === 0)
-                    turnOffMic();
-            }, 2000);
-            
-            return;
-        }
-        
-        this.isPlaying = true;
-        
-        // Get current time and next play time
-        const currentTime = this.audioContextForBotOutput.currentTime;
-        this.nextPlayTime = Math.max(currentTime, this.nextPlayTime);
-        
-        // Get next chunk
-        const chunk = this.audioQueue.shift();
-        
-        // Create buffer for this chunk
-        const audioBuffer = this.audioContextForBotOutput.createBuffer(
-            this.numChannels,
-            chunk.data.length / this.numChannels,
-            this.sampleRate
+        const totalSamples = pcmData.length;
+        const frames = Math.floor(totalSamples / numChannels);
+
+        const buffer = this.audioContext.createBuffer(
+            numChannels,
+            frames,
+            sampleRate
         );
-        
-        // Fill the buffer
-        if (this.numChannels === 1) {
-            const channelData = audioBuffer.getChannelData(0);
-            channelData.set(chunk.data);
-        } else {
-            for (let channel = 0; channel < this.numChannels; channel++) {
-                const channelData = audioBuffer.getChannelData(channel);
-                for (let i = 0; i < chunk.data.length / this.numChannels; i++) {
-                    channelData[i] = chunk.data[i * this.numChannels + channel];
+
+        // Accept either Int16-style data or [-1, 1] floats; convert to Float32
+        const isIntLike = pcmData instanceof Int16Array;
+
+        for (let ch = 0; ch < numChannels; ch++) {
+            const channelData = buffer.getChannelData(ch);
+            for (let i = 0; i < frames; i++) {
+                const idx = i * numChannels + ch;
+                const sample = pcmData[idx];
+
+                let floatSample;
+                if (isIntLike) {
+                    // Convert Int16 -> float (-1..1)
+                    floatSample = sample / 32768;
+                } else {
+                    // Assume already in [-1,1], but clamp just in case
+                    floatSample = Math.max(-1, Math.min(1, sample));
                 }
+                channelData[i] = floatSample;
             }
         }
-        
-        // Create source and schedule it
-        const source = this.audioContextForBotOutput.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.gainNode);
-        
-        // Schedule precisely
-        source.start(this.nextPlayTime);
-        this.nextPlayTime += chunk.duration;
-        
-        // Schedule the next chunk processing
-        const timeUntilNextProcess = (this.nextPlayTime - currentTime) * 1000 * 0.8;
-        setTimeout(() => this.processAudioQueue(), Math.max(0, timeUntilNextProcess));
+
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.audioDestination); // -> MediaStreamDestination -> mic track
+        // (Optional: also connect to speakers if you want local monitoring)
+        // source.connect(this.audioContext.destination);
+
+        source.start();
+        this._ensureMicOn();
     }
 
+    /**
+     * Play a video (with audio) through the virtual webcam/mic.
+     *
+     * @param {string} videoUrl - URL of the video to play.
+     * @returns {Promise<void>}
+     */
+    async playVideo(videoUrl) {
+        if (!videoUrl) {
+            throw new Error("playVideo: videoUrl is required.");
+        }
+
+        this._stopVideoPlayback();
+
+        if (!this.videoElement) {
+            this.videoElement = document.createElement("video");
+            this.videoElement.playsInline = true;
+            this.videoElement.muted = true; // avoid autoplay issues; audio will go via Web Audio
+        }
+
+        this.videoElement.src = videoUrl;
+        this.videoElement.loop = false;
+        this.videoElement.autoplay = true;
+        this.videoElement.crossOrigin = "anonymous";
+
+        if (!this.videoAudioSource) {
+            // Create a Web Audio source for the video element
+            this.videoAudioSource =
+                this.audioContext.createMediaElementSource(this.videoElement);
+            this.videoAudioSource.connect(this.audioDestination);
+            // (Optional) also connect to speakers:
+            // this.videoAudioSource.connect(this.audioContext.destination);
+        }
+
+        if (this.audioContext.state === "suspended") {
+            await this.audioContext.resume();
+        }
+
+        await this.videoElement.play();
+        this._ensureWebcamOn();
+        this._ensureMicOn();
+
+        this._startVideoDrawingLoop();
+    }
+
+    _startVideoDrawingLoop() {
+        if (!this.videoElement) return;
+
+        const drawFrame = () => {
+            if (
+                !this.videoElement ||
+                this.videoElement.paused ||
+                this.videoElement.ended
+            ) {
+                this.videoRafId = null;
+                return;
+            }
+
+            // Resize canvas on first valid frame
+            const vw = this.videoElement.videoWidth;
+            const vh = this.videoElement.videoHeight;
+            if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
+                this.canvas.width = vw;
+                this.canvas.height = vh;
+            }
+
+            this.canvasCtx.drawImage(
+                this.videoElement,
+                0,
+                0,
+                this.canvas.width,
+                this.canvas.height
+            );
+
+            this.videoRafId = requestAnimationFrame(drawFrame);
+        };
+
+        this.videoRafId = requestAnimationFrame(drawFrame);
+    }
+
+    _stopVideoPlayback() {
+        if (this.videoRafId != null) {
+            cancelAnimationFrame(this.videoRafId);
+            this.videoRafId = null;
+        }
+        if (this.videoElement) {
+            this.videoElement.pause();
+            // Keep src in case you want to resume later; or clear it:
+            // this.videoElement.src = "";
+        }
+    }
 }
 
-const botOutputManager = new BotOutputManager();
+botOutputManager = new BotOutputManager({
+    turnOnWebcam: turnOnCamera,
+    turnOffWebcam: () => {
+        console.log("Turning off webcam");
+    },
+    turnOnMic: turnOnMic,
+    turnOffMic: turnOffMic,
+});
+
 window.botOutputManager = botOutputManager;
 
-navigator.mediaDevices.getUserMedia = function(constraints) {
-    return _getUserMedia.call(navigator.mediaDevices, constraints)
-      .then(originalStream => {
-        realConsole?.log("Intercepted getUserMedia:", constraints);
-  
-        // Stop any original tracks so we don't actually capture real mic/cam
-        originalStream.getTracks().forEach(t => t.stop());
-  
-        // Create a new MediaStream to return
-        const newStream = new MediaStream();
-  
-        // Video sending not supported yet
-        /* 
-        if (constraints.video && botOutputVideoElementCaptureStream) {
-            console.log("Adding video track", botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-        }
-        */
-        if (constraints.video && botOutputManager.botOutputMediaStream) {
-            console.log("Adding botOutputMediaStream", botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
-        }
 
-        if (constraints.video && botOutputManager.botOutputCanvasElementCaptureStream) {
-            realConsole?.log("Adding canvas track", botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-        }
-
-        if (constraints.audio) {  // Only create once
-            botOutputManager.initializeBotOutputAudioTrack();
-            newStream.addTrack(botOutputManager.botOutputAudioTrack);
-        }  
-  
-        if (botOutputManager.botOutputMediaStream) {
-            // connect the botOutputMediaStream stream to the audio context
-            if (botOutputManager.botOutputMediaStream.getAudioTracks().length > 0) {
-                botOutputManager.initializeBotOutputAudioTrack();
-                const botOutputMediaStreamSource = botOutputManager.audioContextForBotOutput.createMediaStreamSource(botOutputManager.botOutputMediaStream);
-                botOutputMediaStreamSource.connect(botOutputManager.gainNode);
-                console.log("Connected botOutputMediaStream audio track to audio context");
-            }
-        }
-
-        return newStream;
-      })
-      .catch(err => {
-        console.error("Error in custom getUserMedia override:", err);
-        throw err;
-      });
-  };
-
-navigator.mediaDevices.getDisplayMedia = function(constraints) {
-return _getDisplayMedia.call(navigator.mediaDevices, constraints)
-    .then(originalStream => {
-    console.log("Intercepted getDisplayMedia:", constraints);
-
-    // Stop any original tracks so we don't actually capture real mic/cam
-    originalStream.getTracks().forEach(t => t.stop());
-
-    // Create a new MediaStream to return
-    const newStream = new MediaStream();
-
-        if (constraints.video && botOutputManager.botOutputMediaStream) {
-        console.log("Adding botOutputMediaStream", botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
-        newStream.addTrack(botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
-    }
-
-    return newStream;
-    })
-    .catch(err => {
-    console.error("Error in custom getDisplayMedia override:", err);
-    throw err;
-    });
-};
-
-(function () {
-    const _bind = Function.prototype.bind;
-    Function.prototype.bind = function (thisArg, ...args) {
-      if (this.name === 'onMessageReceived') {
-        const bound = _bind.apply(this, [thisArg, ...args]);
-        return function (...callArgs) {
-          const eventData = callArgs[0];
-          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
-          {
-            const message = eventData.data.chatServiceBatchEvent[0].message;
-            realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
-          }
-          return bound.apply(this, callArgs);
-        };
-      }
-      return _bind.apply(this, [thisArg, ...args]);
-    };
-  })();
 
 class CallManager {
     constructor() {
