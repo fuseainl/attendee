@@ -770,7 +770,7 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         help_text="The UUID of the user to send the message to. Required if 'to' is 'specific_user'.",
     )
     to = serializers.ChoiceField(choices=BotChatMessageToOptions.values, help_text="Who to send the message to.", default=BotChatMessageToOptions.EVERYONE)
-    message = serializers.CharField(help_text="The message text to send. Does not support emojis currently.")
+    message = serializers.CharField(help_text="The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.")
 
     def validate(self, data):
         to_value = data.get("to")

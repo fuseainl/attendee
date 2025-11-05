@@ -63,7 +63,7 @@ class StyleManager {
 
     waitForChatInputAndSendReadyMessage() {
         const checkForChatInput = () => {
-            const chatInput = document.querySelector('[aria-label="Type a message"]');
+            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
             if (chatInput) {
                 // Chat input is now available, send the ready message
                 window.ws.sendJson({
