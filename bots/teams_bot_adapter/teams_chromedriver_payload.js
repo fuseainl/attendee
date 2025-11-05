@@ -2347,17 +2347,16 @@ class BotOutputManager {
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
 
-        // --- AUDIO SOURCE SETUP (single source) ---
-        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextCtor) {
-            throw new Error("Web Audio API is not available (AudioContext missing).");
-        }
-        this.audioContext = new AudioContextCtor();
-        this.audioDestination = this.audioContext.createMediaStreamDestination();
+        // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers.
+        this.sourceAudioTrack = null;
 
-        // This is our *source* audio track; we will CLONE it for callers.
-        const audioTracks = this.audioDestination.stream.getAudioTracks();
-        this.sourceAudioTrack = audioTracks[0] || null;
+        // ---- AUDIO QUEUE STATE ----
+        this.audioQueue = [];
+        this.isPlayingAudioQueue = false;
+        this.nextPlayTime = 0;
+        this.sampleRate = 44100;
+        this.numChannels = 1;
+        this.turnOffMicTimeout = null;
 
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
@@ -2386,6 +2385,26 @@ class BotOutputManager {
         this._installGetUserMediaInterceptor();
     }
 
+    _createSourceAudioTrack() {
+        if (this.sourceAudioTrack) {
+            return;
+        }
+
+        // --- AUDIO SOURCE SETUP (single source) ---
+        this.audioContext = new AudioContext();
+        this.gainNode = this.audioContext.createGain();
+        this.audioDestination = this.audioContext.createMediaStreamDestination();
+
+        this.gainNode.gain.value = 1.0;
+
+        this.gainNode.connect(this.audioDestination);
+        this.gainNode.connect(this.audioContext.destination);
+
+        // This is our *source* audio track; we will CLONE it for callers.
+        const audioTracks = this.audioDestination.stream.getAudioTracks();
+        this.sourceAudioTrack = audioTracks[0] || null;
+    }
+
     _installGetUserMediaInterceptor() {
         const self = this;
 
@@ -2408,13 +2427,12 @@ class BotOutputManager {
                 // Clone from the source so app-level stop() doesn't kill our source. Otherwise this won't work in Teams.
                 const videoClone = self.sourceVideoTrack.clone();
                 stream.addTrack(videoClone);
-                self._ensureWebcamOn();
             }
 
-            if (needAudio && self.sourceAudioTrack) {
+            if (needAudio) {
+                self._createSourceAudioTrack();
                 const audioClone = self.sourceAudioTrack.clone();
                 stream.addTrack(audioClone);
-                self._ensureMicOn();
             }
 
             return stream;
@@ -2545,58 +2563,117 @@ class BotOutputManager {
     /**
      * Play raw PCM audio data through the virtual microphone.
      *
-     * @param {Int16Array|Array<number>|TypedArray} pcmData - raw PCM samples (interleaved for multi-channel).
+     * This version immediately enqueues chunks and lets a queue processor
+     * build/schedule AudioBuffers, avoiding per-call scheduling jitter.
+     *
+     * @param {Int16Array|Float32Array|Array<number>|TypedArray} pcmData
      * @param {number} [sampleRate=44100]
      * @param {number} [numChannels=1]
-     * @returns {Promise<void>}
      */
     async playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
-        if (!pcmData || pcmData.length === 0) {
-            throw new Error("playPCMAudio: pcmData is required and cannot be empty.");
+        this._createSourceAudioTrack();
+        this._ensureMicOn();
+
+        // Update properties if they've changed
+        if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
+            this.sampleRate = sampleRate;
+            this.numChannels = numChannels;
         }
 
-        if (this.audioContext.state === "suspended") {
-            await this.audioContext.resume();
-        }
-
-        const totalSamples = pcmData.length;
-        const frames = Math.floor(totalSamples / numChannels);
-
-        const buffer = this.audioContext.createBuffer(
-            numChannels,
-            frames,
-            sampleRate
-        );
-
-        // Accept either Int16-style data or [-1, 1] floats; convert to Float32
-        const isIntLike = pcmData instanceof Int16Array;
-
-        for (let ch = 0; ch < numChannels; ch++) {
-            const channelData = buffer.getChannelData(ch);
-            for (let i = 0; i < frames; i++) {
-                const idx = i * numChannels + ch;
-                const sample = pcmData[idx];
-
-                let floatSample;
-                if (isIntLike) {
-                    // Convert Int16 -> float (-1..1)
-                    floatSample = sample / 32768;
-                } else {
-                    // Assume already in [-1,1], but clamp just in case
-                    floatSample = Math.max(-1, Math.min(1, sample));
-                }
-                channelData[i] = floatSample;
+        // Convert Int16 PCM data to Float32 with proper scaling
+        let audioData;
+        if (pcmData instanceof Float32Array) {
+            audioData = pcmData;
+        } else {
+            // Create a Float32Array of the same length
+            audioData = new Float32Array(pcmData.length);
+            // Scale Int16 values (-32768 to 32767) to Float32 range (-1.0 to 1.0)
+            for (let i = 0; i < pcmData.length; i++) {
+                // Division by 32768.0 scales the range correctly
+                audioData[i] = pcmData[i] / 32768.0;
             }
         }
 
-        const source = this.audioContext.createBufferSource();
-        source.buffer = buffer;
-        source.connect(this.audioDestination); // -> MediaStreamDestination -> mic track
-        // (Optional: also connect to speakers if you want local monitoring)
-        // source.connect(this.audioContext.destination);
+        const duration = audioData.length / (numChannels * sampleRate);
 
-        source.start();
-        this._ensureMicOn();
+        this.audioQueue.push({
+            data: audioData,
+            duration,
+        });
+
+        // If we had a pending mic-off timer, cancel it – new audio is coming
+        if (this.turnOffMicTimeout) {
+            clearTimeout(this.turnOffMicTimeout);
+            this.turnOffMicTimeout = null;
+        }
+
+        // Start processing if not already in progress
+        if (!this.isPlayingAudioQueue) {
+            this._processAudioQueue();
+        }
+    }
+
+    _processAudioQueue() {
+        if (this.audioQueue.length === 0) {
+            this.isPlayingAudioQueue = false;
+    
+            // Delay turning off the mic by 2 seconds, only if queue stays empty
+            if (this.turnOffMicTimeout) {
+                clearTimeout(this.turnOffMicTimeout);
+            }
+            this.turnOffMicTimeout = setTimeout(() => {
+                if (this.audioQueue.length === 0) {
+                    this.disableMic();
+                }
+            }, 2000);
+    
+            return;
+        }
+    
+        this.isPlayingAudioQueue = true;
+    
+        const currentTime = this.audioContext.currentTime;
+        if (!this.nextPlayTime || this.nextPlayTime < currentTime) {
+            // Catch up if we've fallen behind
+            this.nextPlayTime = currentTime;
+        }
+    
+        const { data, duration } = this.audioQueue.shift();
+    
+        const frames = data.length / this.numChannels;
+        const audioBuffer = this.audioContext.createBuffer(
+            this.numChannels,
+            frames,
+            this.sampleRate
+        );
+    
+        if (this.numChannels === 1) {
+            const channelData = audioBuffer.getChannelData(0);
+            channelData.set(data);
+        } else {
+            for (let ch = 0; ch < this.numChannels; ch++) {
+                const channelData = audioBuffer.getChannelData(ch);
+                for (let i = 0; i < frames; i++) {
+                    channelData[i] = data[i * this.numChannels + ch];
+                }
+            }
+        }
+    
+        const source = this.audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.gainNode); // -> gain node -> mic track
+    
+        source.start(this.nextPlayTime);
+        this.nextPlayTime += duration;
+    
+        // Schedule the next queue processing a bit before the scheduled end
+        const timeUntilNextProcessMs =
+            (this.nextPlayTime - currentTime) * 1000 * 0.8;
+    
+        setTimeout(
+            () => this._processAudioQueue(),
+            Math.max(0, timeUntilNextProcessMs)
+        );
     }
 
     /**
@@ -2627,7 +2704,7 @@ class BotOutputManager {
             // Create a Web Audio source for the video element
             this.videoAudioSource =
                 this.audioContext.createMediaElementSource(this.videoElement);
-            this.videoAudioSource.connect(this.audioDestination);
+            this.videoAudioSource.connect(this.gainNode);
             // (Optional) also connect to speakers:
             // this.videoAudioSource.connect(this.audioContext.destination);
         }
