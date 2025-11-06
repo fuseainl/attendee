@@ -87,7 +87,6 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         return 8765
 
     def is_sent_video_still_playing(self):
-        return True
         result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
         logger.info(f"is_sent_video_still_playing result = {result}")
         return result

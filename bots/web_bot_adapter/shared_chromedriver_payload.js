@@ -35,8 +35,10 @@ class BotOutputManager {
         // --- VIDEO SOURCE SETUP (single source canvas) ---
         this.canvas = document.createElement("canvas");
         // Canvas must be 1280x640. Needed to work in Teams.
-        this.canvas.width = 1280;
-        this.canvas.height = 640;
+        this.canvasWidthForImage = 1280;
+        this.canvasHeightForImage = 640;
+        this.canvas.width = this.canvasWidthForImage;
+        this.canvas.height = this.canvasHeightForImage;
         this.canvasCtx = this.canvas.getContext("2d");
         this.imageRedrawInterval = null;
 
@@ -218,6 +220,8 @@ class BotOutputManager {
         const url = URL.createObjectURL(blob);
         try {
             const img = await this._loadImage(url);
+            this.canvas.width = this.canvasWidthForImage;
+            this.canvas.height = this.canvasHeightForImage;
             const imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(img.width, img.height);
             this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
             // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
@@ -225,6 +229,9 @@ class BotOutputManager {
                 this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
             }, 1000);
             this._ensureWebcamOn();
+
+            // Capture last image bytes, so that we can display it again if we play a video
+            this.lastImageBytes = imageBytes;
         } finally {
             URL.revokeObjectURL(url);
         }
@@ -402,6 +409,14 @@ class BotOutputManager {
         this._ensureMicOn();
 
         this._startVideoDrawingLoop();
+
+        // Add event listener for when video ends to display the last image
+        this.videoEndedHandler = () => {
+            if (this.lastImageBytes) {
+                this.displayImage(this.lastImageBytes);
+            }
+        };
+        this.videoElement.addEventListener('ended', this.videoEndedHandler);
     }
 
     getAudioContextDestination() {
@@ -583,6 +598,11 @@ class BotOutputManager {
         }
         if (this.videoElement) {
             this.videoElement.pause();
+            // Remove the ended event listener if it exists
+            if (this.videoEndedHandler) {
+                this.videoElement.removeEventListener('ended', this.videoEndedHandler);
+                this.videoEndedHandler = null;
+            }
             // Keep src in case you want to resume later; or clear it:
             // this.videoElement.src = "";
         }
