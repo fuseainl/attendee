@@ -1364,6 +1364,35 @@ class BotController:
                 logger.error(f"Error processing message from websocket: {e}")
             self.websocket_audio_error_ticker += 1
 
+    def save_debug_artifacts(self, message, new_bot_event):
+        screenshot_available = message.get("screenshot_path") is not None
+        mhtml_file_available = message.get("mhtml_file_path") is not None
+
+        if screenshot_available:
+            # Create debug screenshot
+            debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
+
+            # Read the file content from the path
+            with open(message.get("screenshot_path"), "rb") as f:
+                screenshot_content = f.read()
+                debug_screenshot.file.save(
+                    f"debug_screenshot_{debug_screenshot.object_id}.png",
+                    ContentFile(screenshot_content),
+                    save=True,
+                )
+
+        if mhtml_file_available:
+            # Create debug screenshot
+            mhtml_debug_screenshot = BotDebugScreenshot.objects.create(bot_event=new_bot_event)
+
+            with open(message.get("mhtml_file_path"), "rb") as f:
+                mhtml_content = f.read()
+                mhtml_debug_screenshot.file.save(
+                    f"debug_screenshot_{mhtml_debug_screenshot.object_id}.mhtml",
+                    ContentFile(mhtml_content),
+                    save=True,
+                )
+
     def take_action_based_on_message_from_adapter(self, message):
         if message.get("message") == BotAdapter.Messages.JOINING_BREAKOUT_ROOM:
             logger.info("Received message that bot is joining breakout room")
@@ -1417,11 +1446,14 @@ class BotController:
 
         if message.get("message") == BotAdapter.Messages.LOGIN_ATTEMPT_FAILED:
             logger.info("Received message that login attempt failed")
-            BotEventManager.create_event(
+            new_bot_event = BotEventManager.create_event(
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BOT_LOGIN_ATTEMPT_FAILED,
             )
+
+            self.save_debug_artifacts(message, new_bot_event)
+
             self.cleanup()
             return
 
