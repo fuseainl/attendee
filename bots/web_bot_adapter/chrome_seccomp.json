@@ -832,6 +832,11 @@
             "args": null
         },
         {
+            "name": "personality",
+            "action": "SCMP_ACT_ALLOW",
+            "args": null
+        },
+        {
             "name": "pipe",
             "action": "SCMP_ACT_ALLOW",
             "args": null
