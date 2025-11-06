@@ -558,8 +558,8 @@ class BotOutputManager {
             const vw = this.videoElement.videoWidth;
             const vh = this.videoElement.videoHeight;
             if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
-            //    this.canvas.width = vw;
-           //     this.canvas.height = vh;
+                this.canvas.width = vw;
+                this.canvas.height = vh;
             }
 
             this.canvasCtx.drawImage(
