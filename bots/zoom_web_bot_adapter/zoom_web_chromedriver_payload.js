@@ -728,6 +728,28 @@ function turnOffMicAndScreenshare() {
     }
 }
 
+function turnOnScreenshare() {
+    // Click screenshare button to turn it on
+    const screenshareButton = document.querySelector(`button[aria-label="${turnOnScreenshareArialLabel}"]`) || document.querySelector(`div[aria-label="${turnOnScreenshareArialLabel}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it on");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare button not found");
+    }
+}
+
+function turnOffScreenshare() {
+    // Click screenshare button to turn it off
+    const screenshareButton = document.querySelector(`.${turnOffScreenshareClass}`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it off");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare off button not found");
+    }
+}
+
 // BotOutputManager is defined in shared_chromedriver_payload.js
 
 botOutputManager = new BotOutputManager({
@@ -735,6 +757,8 @@ botOutputManager = new BotOutputManager({
     turnOffWebcam: () => {
         console.log("Turning off webcam");
     },
+    turnOnScreenshare: turnOnScreenshare,
+    turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
 });
