@@ -76,7 +76,7 @@ class BotOutputManager {
         this.gainNode.gain.value = 1.0;
 
         this.gainNode.connect(this.audioDestination);
-        this.gainNode.connect(this.audioContext.destination);
+        this.gainNode.connect(this.audioContext.destination); // This causes it to play through the speakers
 
         // This is our *source* audio track; we will CLONE it for callers.
         const audioTracks = this.audioDestination.stream.getAudioTracks();
@@ -402,6 +402,10 @@ class BotOutputManager {
         this._ensureMicOn();
 
         this._startVideoDrawingLoop();
+    }
+
+    getAudioContextDestination() {
+        return this.audioContext?.destination;
     }
 
     /**

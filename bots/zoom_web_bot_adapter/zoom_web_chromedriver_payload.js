@@ -552,8 +552,9 @@ class UserManager {
     const origConnect = AudioNode.prototype.connect;
   
     AudioNode.prototype.connect = function(target, ...rest) {
-      // Only intercept connections directly to the speakers
-      if (target instanceof AudioDestinationNode) {
+
+      // Only intercept connections directly to the speakers. The target !== window.botOutputManager?.getAudioContextDestination() condition is to avoid capturing the bots output 
+      if (target instanceof AudioDestinationNode && target !== window.botOutputManager?.getAudioContextDestination()) {
         const ctx = this.context;
         // Create a single tee per context
         if (!ctx.__captureTee) {
