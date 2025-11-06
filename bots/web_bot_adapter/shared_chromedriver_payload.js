@@ -331,6 +331,8 @@ class BotOutputManager {
     constructor({
         turnOnWebcam = () => {},
         turnOffWebcam = () => {},
+        turnOnScreenshare = () => {},
+        turnOffScreenshare = () => {},
         turnOnMic = () => {},
         turnOffMic = () => {},
     } = {}) {
@@ -340,6 +342,8 @@ class BotOutputManager {
 
         this.turnOnWebcam = turnOnWebcam;
         this.turnOffWebcam = turnOffWebcam;
+        this.turnOnScreenshare = turnOnScreenshare;
+        this.turnOffScreenshare = turnOffScreenshare;
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
 
@@ -372,7 +376,18 @@ class BotOutputManager {
             createSourceAudioTrack: () => this._createSourceAudioTrack(),
         });
 
+        this.screenShareVideoOutputStream = new BotVideoOutputStream({
+            turnOnInput: this.turnOnScreenshare,
+            turnOffInput: this.turnOffScreenshare,
+            ensureMicOn: () => this.ensureMicOn(),
+            ensureMicOff: () => this.ensureMicOff(),
+            getGainNode: () => this.gainNode,
+            getAudioContext: () => this.audioContext,
+            createSourceAudioTrack: () => this._createSourceAudioTrack(),
+        });
+
         this._installGetUserMediaInterceptor();
+        this._installGetDisplayMediaInterceptor();
     }
 
     _createSourceAudioTrack() {
@@ -424,6 +439,32 @@ class BotOutputManager {
                 self._createSourceAudioTrack();
                 const audioClone = self.sourceAudioTrack.clone();
                 stream.addTrack(audioClone);
+            }
+
+            return stream;
+        };
+    }
+
+    _installGetDisplayMediaInterceptor() {
+        const self = this;
+
+        navigator.mediaDevices.getDisplayMedia = async function interceptedGetDisplayMedia(
+            constraints
+        ) {
+            const needVideo =
+                !!(constraints && constraints.video !== false && constraints.video != null);
+
+            // Edge-case: if nothing is requested, just delegate.
+            if (!needVideo) {
+                return self._originalGetDisplayMedia(constraints);
+            }
+
+            const stream = new MediaStream();
+
+            if (needVideo && self.screenShareVideoOutputStream.sourceVideoTrack) {
+                // Clone from the source so app-level stop() doesn't kill our source. Otherwise this won't work in Teams.
+                const videoClone = self.screenShareVideoOutputStream.sourceVideoTrack.clone();
+                stream.addTrack(videoClone);
             }
 
             return stream;
@@ -590,7 +631,10 @@ class BotOutputManager {
                 ms.addTrack(ev.track);
                 // If we've received both video and audio, play the stream
                 if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
-                    this.webcamVideoOutputStream.playMediaStream(ms);
+                    if (window.initialData.voiceAgentVideoOutputDestination === "screenshare")
+                        this.screenShareVideoOutputStream.playMediaStream(ms);
+                    else
+                        this.webcamVideoOutputStream.playMediaStream(ms);
                 }
             };
         
