@@ -60,24 +60,25 @@ Here are the steps to set it up:
 
 #### Create a new Google Workspace account for the bot
 1. Create a new Google Workspace account for the bot to use. The workspace will need to be on a paid plan and be associated with a domain you own. This can be a subdomain of your main workspace account's domain.
-2. Navigate to the Admin Console, then to Security -> Set up single sign-on (SSO) with a third party IdP.
-3. On the SSO page, click the "Add SAML Profile" button.
-4. At the bottom of the SAML Profile page click the "Legacy SSO profile" link.
-5. Create a certificate and private key for the SSO profile. You can use the following command to generate a certificate and private key:
+2. Create another user in the Google Workspace account that the bot will sign in as. The name of this user should be the name of the bot.
+3. Login as this new user and go through the 'Welcome to Google Workspace' flow. Otherwise, the bot will not be able to sign in as the user.
+4. Navigate to the Admin Console, then to Security -> Set up single sign-on (SSO) with a third party IdP.
+5. On the SSO page, click the "Add SAML Profile" button.
+6. At the bottom of the SAML Profile page click the "Legacy SSO profile" link.
+7. Create a certificate and private key for the SSO profile. You can use the following command to generate a certificate and private key:
     ```
     openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -sha256 -days 3650 -nodes
     ```
-6. In the Legacy SSO profile page, enter the following information:
+8. In the Legacy SSO profile page, enter the following information:
     - Enable legacy SSO profile - Yes
     - Sign-in URL - https://app.attendee.dev/bot_sso/google_meet_sign_in
     - Sign-out URL - https://app.attendee.dev/bot_sso/google_meet_sign_out
     - Use a domain-specific issuer - Yes
     - Certificate - Upload the cert.pem file you generated in the previous step
-7. Click the "Save" button.
-8. Return to the Security -> Set up single sign-on (SSO) with a third party IdP page.
-9. Under the Manage SSO profile assignments section, click the "Manage" button.
-10. Select the Legacy SSO profile you created in the previous step and click the "Save" button.
-11. Add another user to the workspace that the bot will use to sign in. The name of this user should be the name of the bot.
+9. Click the "Save" button.
+10. Return to the Security -> Set up single sign-on (SSO) with a third party IdP page.
+11. Under the Manage SSO profile assignments section, click the "Manage" button.
+12. Select the Legacy SSO profile you created in the previous step and click the "Save" button.
 
 #### Create a new Google Meet bot login for your Attendee project
 1. Navigate to the Settings -> Credentials page in the Attendee dashboard.

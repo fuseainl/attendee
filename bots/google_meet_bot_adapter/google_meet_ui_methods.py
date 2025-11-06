@@ -516,14 +516,22 @@ class GoogleMeetUIMethods:
         start_waiting_at = time.time()
         while self.driver.current_url == url_before_signin:
             time.sleep(1)
-            if time.time() - start_waiting_at > 60:
+            if time.time() - start_waiting_at > 120:
                 logger.info("Login timed out, redirecting to meeting page")
                 # TODO Replace with error message for login failed
                 break
 
         logger.info(f"Redirected to {self.driver.current_url}")
-        self.wait_until_url_has_stopped_changing(stable_for=1.0)
-        logger.info(f"stabilized to {self.driver.current_url}")
+
+        # Wait for the URL to include https://myaccount.google.com, this indicates that we have logged in successfully
+        start_waiting_at = time.time()
+        while "https://myaccount.google.com" not in self.driver.current_url:
+            time.sleep(1)
+            if time.time() - start_waiting_at > 120:
+                # We'll raise an exception if it's not logged in after 120 seconds
+                raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
+
+        logger.info(f"After waiting, URL is {self.driver.current_url}")
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
