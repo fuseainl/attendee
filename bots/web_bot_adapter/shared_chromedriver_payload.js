@@ -1,3 +1,325 @@
+// Holds the state of a bot video output stream. We need this class because there are two bot video output streams, one for webcam and one for screenshare.
+class BotVideoOutputStream {
+    constructor({
+        turnOnInput = () => {},
+        turnOffInput = () => {},
+        ensureMicOn = () => {},
+        ensureMicOff = () => {},
+        getGainNode = () => {},
+        getAudioContext = () => {},
+        createSourceAudioTrack = () => {},
+    }) {
+        this.turnOnInput = turnOnInput;
+        this.turnOffInput = turnOffInput;
+        this.ensureMicOn = ensureMicOn;
+        this.ensureMicOff = ensureMicOff;
+        this.getGainNode = getGainNode;
+        this.getAudioContext = getAudioContext;
+        this.createSourceAudioTrack = createSourceAudioTrack;
+
+        // --- VIDEO SOURCE SETUP (single source canvas) ---
+        this.canvas = document.createElement("canvas");
+        // Canvas must be 1280x640. Needed to work in Teams.
+        this.canvasWidthForImage = 1280;
+        this.canvasHeightForImage = 640;
+        this.canvas.width = this.canvasWidthForImage;
+        this.canvas.height = this.canvasHeightForImage;
+        this.canvasCtx = this.canvas.getContext("2d");
+        this.imageRedrawInterval = null;
+
+        this.canvasCtx.fillStyle = "black";
+        this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        const sourceVideoStream = this.canvas.captureStream(30); // ~30 FPS
+
+        // This is our *source* video track; we will CLONE it for callers.
+        const videoTracks = sourceVideoStream.getVideoTracks();
+        this.sourceVideoTrack = videoTracks[0] || null;
+
+        this.videoElement = null;
+        this.videoRafId = null;
+        this.videoAudioSource = null;
+    }
+
+    /**
+     * Display a PNG image on the virtual webcam.
+     *
+     * @param {ArrayBuffer|Uint8Array} imageBytes - Raw PNG bytes.
+     * @returns {Promise<void>}
+     */
+    // 3 non-obvious things you need to do to make this work:
+    // 1. Image needs to be redrawn on canvas
+    // 2. Canvas needs to have a fixed "reasonable" size
+    async displayImage(imageBytes) {
+        this._stopVideoPlayback(); // Ensure no video is currently drawing
+
+        if (!imageBytes) {
+            throw new Error("displayImage: imageBytes is required.");
+        }
+
+        let buffer;
+        if (imageBytes instanceof ArrayBuffer) {
+            buffer = imageBytes;
+        } else if (ArrayBuffer.isView(imageBytes)) {
+            buffer = imageBytes.buffer;
+        } else {
+            throw new Error(
+                "displayImage: expected ArrayBuffer or TypedArray for imageBytes."
+            );
+        }
+
+        const blob = new Blob([buffer], { type: "image/png" });
+        const url = URL.createObjectURL(blob);
+        try {
+            const img = await this._loadImage(url);
+            this.canvas.width = this.canvasWidthForImage;
+            this.canvas.height = this.canvasHeightForImage;
+            const imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(img.width, img.height);
+            this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
+            // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
+            this.imageRedrawInterval = setInterval(() => {
+                this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
+            }, 1000);
+            this.ensureInputOn();
+
+            // Capture last image bytes, so that we can display it again if we play a video
+            this.lastImageBytes = imageBytes;
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    }
+
+    _loadImage(url) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = (err) => reject(err);
+            img.src = url;
+        });
+    }
+
+    ensureInputOn() {
+        try {
+            this.turnOnInput && this.turnOnInput();
+        } catch (e) {
+            console.error("Error in turnOnInput callback:", e);
+        }
+    }
+
+    isVideoPlaying() {
+        return !!this.videoElement && !this.videoElement.paused && !this.videoElement.ended;
+    }
+
+    /**
+     * Play a video (with audio) through the virtual webcam/mic.
+     *
+     * @param {string} videoUrl - URL of the video to play.
+     * @returns {Promise<void>}
+     */
+    async playVideo(videoUrl) {
+        if (!videoUrl) {
+            throw new Error("playVideo: videoUrl is required.");
+        }
+
+        this._stopVideoPlayback();
+        this._stopImageRedrawInterval();
+
+        if (!this.videoElement) {
+            this.videoElement = document.createElement("video");
+            this.videoElement.playsInline = true;
+            this.videoElement.muted = false;
+        }
+
+        this.videoElement.src = videoUrl;
+        this.videoElement.loop = false;
+        this.videoElement.autoplay = true;
+        this.videoElement.crossOrigin = "anonymous";
+
+        if (!this.videoAudioSource) {
+            // Create a Web Audio source for the video element
+            this.videoAudioSource =
+                this.getAudioContext().createMediaElementSource(this.videoElement);
+            this.videoAudioSource.connect(this.getGainNode());
+            // (Optional) also connect to speakers:
+            // this.videoAudioSource.connect(this.audioContext.destination);
+        }
+
+        if (this.getAudioContext().state === "suspended") {
+            await this.getAudioContext().resume();
+        }
+
+        await this.videoElement.play();
+        this.ensureInputOn();
+        this.ensureMicOn();
+
+        this._startVideoDrawingLoop();
+
+        // Add event listener for when video ends to display the last image
+        this.videoEndedHandler = () => {
+            if (this.lastImageBytes) {
+                this.displayImage(this.lastImageBytes);
+            }
+        };
+        this.videoElement.addEventListener('ended', this.videoEndedHandler);
+    }
+
+
+
+    _startVideoDrawingLoop() {
+        if (!this.videoElement) return;
+
+        const drawFrame = () => {
+            if (
+                !this.videoElement ||
+                this.videoElement.paused ||
+                this.videoElement.ended
+            ) {
+                this.videoRafId = null;
+                return;
+            }
+
+            // Resize canvas on first valid frame
+            const vw = this.videoElement.videoWidth;
+            const vh = this.videoElement.videoHeight;
+            if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
+                this.canvas.width = vw;
+                this.canvas.height = vh;
+            }
+
+            this.canvasCtx.drawImage(
+                this.videoElement,
+                0,
+                0,
+                this.canvas.width,
+                this.canvas.height
+            );
+
+            this.videoRafId = requestAnimationFrame(drawFrame);
+        };
+
+        this.videoRafId = requestAnimationFrame(drawFrame);
+    }
+
+    _stopVideoPlayback() {
+        if (this.videoRafId != null) {
+            cancelAnimationFrame(this.videoRafId);
+            this.videoRafId = null;
+        }
+        if (this.videoElement) {
+            this.videoElement.pause();
+            // Remove the ended event listener if it exists
+            if (this.videoEndedHandler) {
+                this.videoElement.removeEventListener('ended', this.videoEndedHandler);
+                this.videoEndedHandler = null;
+            }
+            // Keep src in case you want to resume later; or clear it:
+            // this.videoElement.src = "";
+        }
+    }
+
+    _stopImageRedrawInterval() {
+        if (this.imageRedrawInterval) {
+            clearInterval(this.imageRedrawInterval);
+            this.imageRedrawInterval = null;
+        }
+    }
+
+
+
+    calculateImageDrawParamsForLetterBoxing(imageWidth, imageHeight) {
+        const imgAspect = imageWidth / imageHeight;
+        const canvasAspect = this.canvas.width / this.canvas.height;
+        
+        // Calculate dimensions to fit image within canvas with letterboxing
+        let renderWidth, renderHeight, offsetX, offsetY;
+        
+        if (imgAspect > canvasAspect) {
+            // Image is wider than canvas (horizontal letterboxing)
+            renderWidth = this.canvas.width;
+            renderHeight = this.canvas.width / imgAspect;
+            offsetX = 0;
+            offsetY = (this.canvas.height - renderHeight) / 2;
+        } else {
+            // Image is taller than canvas (vertical letterboxing)
+            renderHeight = this.canvas.height;
+            renderWidth = this.canvas.height * imgAspect;
+            offsetX = (this.canvas.width - renderWidth) / 2;
+            offsetY = 0;
+        }
+        
+        return {
+            offsetX: offsetX,
+            offsetY: offsetY,
+            width: renderWidth,
+            height: renderHeight
+        };
+    }
+
+
+
+    /**
+     * Play a MediaStream (e.g. from a WebRTC peer connection) through the
+     * virtual webcam and mic.
+     *
+     * - Video tracks are drawn onto the canvas (same path as playVideo).
+     * - Audio tracks, if present, are routed into the same gainNode /
+     *   virtual mic pipeline as playPCMAudio / playVideo.
+     *
+     * @param {MediaStream} mediaStream
+     * @returns {Promise<void>}
+     */
+    async playMediaStream(mediaStream) {
+        if (!(mediaStream instanceof MediaStream)) {
+            throw new Error("playMediaStream: mediaStream must be a MediaStream.");
+        }
+        try{
+
+            // Stop any previous video playback and image redraw loop
+            this._stopVideoPlayback();
+            this._stopImageRedrawInterval();
+
+            if (!this.videoElement) {
+                this.videoElement = document.createElement("video");
+                this.videoElement.playsInline = true;
+                this.videoElement.muted = false; // we route audio via Web Audio
+            }
+
+            // Attach the MediaStream to the video element
+            this.videoElement.srcObject = mediaStream;
+            this.videoElement.loop = false;
+            this.videoElement.autoplay = true;
+
+            ///---- NOT SURE IF WE NEED THIS
+            this.createSourceAudioTrack();
+
+            // (Re)wire a MediaStreamAudioSourceNode from the stream into the same gainNode
+            if (this.mediaStreamAudioSource) {
+                this.mediaStreamAudioSource.disconnect();
+            }
+            this.mediaStreamAudioSource =
+                this.getAudioContext().createMediaStreamSource(mediaStream);
+            this.mediaStreamAudioSource.connect(this.getGainNode());
+            ///----
+
+            if (this.getAudioContext().state === "suspended") {
+                await this.getAudioContext().resume();
+            }
+
+            await this.videoElement.play();
+            this.ensureInputOn();
+            this.ensureMicOn();
+
+            this._startVideoDrawingLoop();
+        }
+        catch (e) {
+            window.ws.sendJson({
+                type: 'PLAY_MEDIA_STREAM_ERROR',
+                error: e.message
+            });
+        }
+    }
+}
+
 class BotOutputManager {
     /**
      * @param {Object} callbacks
@@ -32,35 +354,23 @@ class BotOutputManager {
         this.numChannels = 1;
         this.turnOffMicTimeout = null;
 
-        // --- VIDEO SOURCE SETUP (single source canvas) ---
-        this.canvas = document.createElement("canvas");
-        // Canvas must be 1280x640. Needed to work in Teams.
-        this.canvasWidthForImage = 1280;
-        this.canvasHeightForImage = 640;
-        this.canvas.width = this.canvasWidthForImage;
-        this.canvas.height = this.canvasHeightForImage;
-        this.canvasCtx = this.canvas.getContext("2d");
-        this.imageRedrawInterval = null;
-
-        this.canvasCtx.fillStyle = "black";
-        this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-
-        const sourceVideoStream = this.canvas.captureStream(30); // ~30 FPS
-
-        // This is our *source* video track; we will CLONE it for callers.
-        const videoTracks = sourceVideoStream.getVideoTracks();
-        this.sourceVideoTrack = videoTracks[0] || null;
-
         this._originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(
             navigator.mediaDevices
         );
 
-        this.videoElement = null;
-        this.videoRafId = null;
-        this.videoAudioSource = null;
-
         // --- BOT OUTPUT PEER CONNECTION SETUP ---
         this.botOutputPeerConnection = null;
+
+        // Webcam video output stream
+        this.webcamVideoOutputStream = new BotVideoOutputStream({
+            turnOnInput: this.turnOnWebcam,
+            turnOffInput: this.turnOffWebcam,
+            ensureMicOn: () => this.ensureMicOn(),
+            ensureMicOff: () => this.ensureMicOff(),
+            getGainNode: () => this.gainNode,
+            getAudioContext: () => this.audioContext,
+            createSourceAudioTrack: () => this._createSourceAudioTrack(),
+        });
 
         this._installGetUserMediaInterceptor();
     }
@@ -103,9 +413,9 @@ class BotOutputManager {
 
             const stream = new MediaStream();
 
-            if (needVideo && self.sourceVideoTrack) {
+            if (needVideo && self.webcamVideoOutputStream.sourceVideoTrack) {
                 // Clone from the source so app-level stop() doesn't kill our source. Otherwise this won't work in Teams.
-                const videoClone = self.sourceVideoTrack.clone();
+                const videoClone = self.webcamVideoOutputStream.sourceVideoTrack.clone();
                 stream.addTrack(videoClone);
             }
 
@@ -120,36 +430,12 @@ class BotOutputManager {
         };
     }
 
-    _ensureWebcamOn() {
-        try {
-            this.turnOnWebcam && this.turnOnWebcam();
-        } catch (e) {
-            console.error("Error in turnOnWebcam callback:", e);
-        }
-    }
-
-    _ensureMicOn() {
+    ensureMicOn() {
         try {
             this.turnOnMic && this.turnOnMic();
         } catch (e) {
             console.error("Error in turnOnMic callback:", e);
         }
-    }
-
-    enableWebcam() {
-        this._ensureWebcamOn();
-    }
-
-    disableWebcam() {
-        try {
-            this.turnOffWebcam && this.turnOffWebcam();
-        } catch (e) {
-            console.error("Error in turnOffWebcam callback:", e);
-        }
-    }
-
-    enableMic() {
-        this._ensureMicOn();
     }
 
     disableMic() {
@@ -160,90 +446,16 @@ class BotOutputManager {
         }
     }
 
-    calculateImageDrawParamsForLetterBoxing(imageWidth, imageHeight) {
-        const imgAspect = imageWidth / imageHeight;
-        const canvasAspect = this.canvas.width / this.canvas.height;
-        
-        // Calculate dimensions to fit image within canvas with letterboxing
-        let renderWidth, renderHeight, offsetX, offsetY;
-        
-        if (imgAspect > canvasAspect) {
-            // Image is wider than canvas (horizontal letterboxing)
-            renderWidth = this.canvas.width;
-            renderHeight = this.canvas.width / imgAspect;
-            offsetX = 0;
-            offsetY = (this.canvas.height - renderHeight) / 2;
-        } else {
-            // Image is taller than canvas (vertical letterboxing)
-            renderHeight = this.canvas.height;
-            renderWidth = this.canvas.height * imgAspect;
-            offsetX = (this.canvas.width - renderWidth) / 2;
-            offsetY = 0;
-        }
-        
-        return {
-            offsetX: offsetX,
-            offsetY: offsetY,
-            width: renderWidth,
-            height: renderHeight
-        };
-    }
-
-    /**
-     * Display a PNG image on the virtual webcam.
-     *
-     * @param {ArrayBuffer|Uint8Array} imageBytes - Raw PNG bytes.
-     * @returns {Promise<void>}
-     */
-    // 3 non-obvious things you need to do to make this work:
-    // 1. Image needs to be redrawn on canvas
-    // 2. Canvas needs to have a fixed "reasonable" size
     async displayImage(imageBytes) {
-        this._stopVideoPlayback(); // Ensure no video is currently drawing
-
-        if (!imageBytes) {
-            throw new Error("displayImage: imageBytes is required.");
-        }
-
-        let buffer;
-        if (imageBytes instanceof ArrayBuffer) {
-            buffer = imageBytes;
-        } else if (ArrayBuffer.isView(imageBytes)) {
-            buffer = imageBytes.buffer;
-        } else {
-            throw new Error(
-                "displayImage: expected ArrayBuffer or TypedArray for imageBytes."
-            );
-        }
-
-        const blob = new Blob([buffer], { type: "image/png" });
-        const url = URL.createObjectURL(blob);
-        try {
-            const img = await this._loadImage(url);
-            this.canvas.width = this.canvasWidthForImage;
-            this.canvas.height = this.canvasHeightForImage;
-            const imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(img.width, img.height);
-            this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
-            // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
-            this.imageRedrawInterval = setInterval(() => {
-                this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
-            }, 1000);
-            this._ensureWebcamOn();
-
-            // Capture last image bytes, so that we can display it again if we play a video
-            this.lastImageBytes = imageBytes;
-        } finally {
-            URL.revokeObjectURL(url);
-        }
+        return this.webcamVideoOutputStream.displayImage(imageBytes);
     }
 
-    _loadImage(url) {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => resolve(img);
-            img.onerror = (err) => reject(err);
-            img.src = url;
-        });
+    isVideoPlaying() {
+        return this.webcamVideoOutputStream.isVideoPlaying();
+    }
+
+    async playVideo(videoUrl) {
+        return this.webcamVideoOutputStream.playVideo(videoUrl);
     }
 
     /**
@@ -258,7 +470,7 @@ class BotOutputManager {
      */
     async playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
         this._createSourceAudioTrack();
-        this._ensureMicOn();
+        this.ensureMicOn();
 
         // Update properties if they've changed
         if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
@@ -362,122 +574,8 @@ class BotOutputManager {
         );
     }
 
-    isVideoPlaying() {
-        return !!this.videoElement && !this.videoElement.paused && !this.videoElement.ended;
-    }
-
-    /**
-     * Play a video (with audio) through the virtual webcam/mic.
-     *
-     * @param {string} videoUrl - URL of the video to play.
-     * @returns {Promise<void>}
-     */
-    async playVideo(videoUrl) {
-        if (!videoUrl) {
-            throw new Error("playVideo: videoUrl is required.");
-        }
-
-        this._stopVideoPlayback();
-        this._stopImageRedrawInterval();
-
-        if (!this.videoElement) {
-            this.videoElement = document.createElement("video");
-            this.videoElement.playsInline = true;
-            this.videoElement.muted = false;
-        }
-
-        this.videoElement.src = videoUrl;
-        this.videoElement.loop = false;
-        this.videoElement.autoplay = true;
-        this.videoElement.crossOrigin = "anonymous";
-
-        if (!this.videoAudioSource) {
-            // Create a Web Audio source for the video element
-            this.videoAudioSource =
-                this.audioContext.createMediaElementSource(this.videoElement);
-            this.videoAudioSource.connect(this.gainNode);
-            // (Optional) also connect to speakers:
-            // this.videoAudioSource.connect(this.audioContext.destination);
-        }
-
-        if (this.audioContext.state === "suspended") {
-            await this.audioContext.resume();
-        }
-
-        await this.videoElement.play();
-        this._ensureWebcamOn();
-        this._ensureMicOn();
-
-        this._startVideoDrawingLoop();
-
-        // Add event listener for when video ends to display the last image
-        this.videoEndedHandler = () => {
-            if (this.lastImageBytes) {
-                this.displayImage(this.lastImageBytes);
-            }
-        };
-        this.videoElement.addEventListener('ended', this.videoEndedHandler);
-    }
-
     getAudioContextDestination() {
         return this.audioContext?.destination;
-    }
-
-    /**
-     * Play a MediaStream (e.g. from a WebRTC peer connection) through the
-     * virtual webcam and mic.
-     *
-     * - Video tracks are drawn onto the canvas (same path as playVideo).
-     * - Audio tracks, if present, are routed into the same gainNode /
-     *   virtual mic pipeline as playPCMAudio / playVideo.
-     *
-     * @param {MediaStream} mediaStream
-     * @returns {Promise<void>}
-     */
-    async playMediaStream(mediaStream) {
-        if (!(mediaStream instanceof MediaStream)) {
-            throw new Error("playMediaStream: mediaStream must be a MediaStream.");
-        }
-
-        // Stop any previous video playback and image redraw loop
-        this._stopVideoPlayback();
-        this._stopImageRedrawInterval();
-
-        const hasVideo = mediaStream.getVideoTracks().length > 0;
-        const hasAudio = mediaStream.getAudioTracks().length > 0;
-
-        if (!this.videoElement) {
-            this.videoElement = document.createElement("video");
-            this.videoElement.playsInline = true;
-            this.videoElement.muted = false; // we route audio via Web Audio
-        }
-
-        // Attach the MediaStream to the video element
-        this.videoElement.srcObject = mediaStream;
-        this.videoElement.loop = false;
-        this.videoElement.autoplay = true;
-
-        ///----
-        this._createSourceAudioTrack();
-
-        // (Re)wire a MediaStreamAudioSourceNode from the stream into the same gainNode
-        if (this.mediaStreamAudioSource) {
-            this.mediaStreamAudioSource.disconnect();
-        }
-        this.mediaStreamAudioSource =
-            this.audioContext.createMediaStreamSource(mediaStream);
-        this.mediaStreamAudioSource.connect(this.gainNode);
-        ///----
-
-        if (this.audioContext.state === "suspended") {
-            await this.audioContext.resume();
-        }
-
-        await this.videoElement.play();
-        this._ensureWebcamOn();
-        this._ensureMicOn();
-
-        this._startVideoDrawingLoop();
     }
 
     async getBotOutputPeerConnectionOffer() {
@@ -492,7 +590,7 @@ class BotOutputManager {
                 ms.addTrack(ev.track);
                 // If we've received both video and audio, play the stream
                 if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
-                    botOutputManager.playMediaStream(ms);
+                    this.webcamVideoOutputStream.playMediaStream(ms);
                 }
             };
         
@@ -554,64 +652,5 @@ class BotOutputManager {
                 logStatement: logStatement
             });
         }, 60000);
-    }
-
-    _startVideoDrawingLoop() {
-        if (!this.videoElement) return;
-
-        const drawFrame = () => {
-            if (
-                !this.videoElement ||
-                this.videoElement.paused ||
-                this.videoElement.ended
-            ) {
-                this.videoRafId = null;
-                return;
-            }
-
-            // Resize canvas on first valid frame
-            const vw = this.videoElement.videoWidth;
-            const vh = this.videoElement.videoHeight;
-            if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
-                this.canvas.width = vw;
-                this.canvas.height = vh;
-            }
-
-            this.canvasCtx.drawImage(
-                this.videoElement,
-                0,
-                0,
-                this.canvas.width,
-                this.canvas.height
-            );
-
-            this.videoRafId = requestAnimationFrame(drawFrame);
-        };
-
-        this.videoRafId = requestAnimationFrame(drawFrame);
-    }
-
-    _stopVideoPlayback() {
-        if (this.videoRafId != null) {
-            cancelAnimationFrame(this.videoRafId);
-            this.videoRafId = null;
-        }
-        if (this.videoElement) {
-            this.videoElement.pause();
-            // Remove the ended event listener if it exists
-            if (this.videoEndedHandler) {
-                this.videoElement.removeEventListener('ended', this.videoEndedHandler);
-                this.videoEndedHandler = null;
-            }
-            // Keep src in case you want to resume later; or clear it:
-            // this.videoElement.src = "";
-        }
-    }
-
-    _stopImageRedrawInterval() {
-        if (this.imageRedrawInterval) {
-            clearInterval(this.imageRedrawInterval);
-            this.imageRedrawInterval = null;
-        }
     }
 }
