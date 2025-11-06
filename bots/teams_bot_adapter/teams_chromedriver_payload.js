@@ -2337,6 +2337,7 @@ function turnOffMicAndScreenshare() {
 
 // --------------
 
+
 class BotOutputManager {
     /**
      * @param {Object} callbacks
@@ -2377,6 +2378,7 @@ class BotOutputManager {
         this.canvas.width = 1280;
         this.canvas.height = 640;
         this.canvasCtx = this.canvas.getContext("2d");
+        this.imageRedrawInterval = null;
 
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
@@ -2394,6 +2396,9 @@ class BotOutputManager {
         this.videoElement = null;
         this.videoRafId = null;
         this.videoAudioSource = null;
+
+        // --- BOT OUTPUT PEER CONNECTION SETUP ---
+        this.botOutputPeerConnection = null;
 
         this._installGetUserMediaInterceptor();
     }
@@ -2690,6 +2695,10 @@ class BotOutputManager {
         );
     }
 
+    isVideoPlaying() {
+        return !!this.videoElement && !this.videoElement.paused && !this.videoElement.ended;
+    }
+
     /**
      * Play a video (with audio) through the virtual webcam/mic.
      *
@@ -2702,6 +2711,7 @@ class BotOutputManager {
         }
 
         this._stopVideoPlayback();
+        this._stopImageRedrawInterval();
 
         if (!this.videoElement) {
             this.videoElement = document.createElement("video");
@@ -2732,6 +2742,139 @@ class BotOutputManager {
         this._ensureMicOn();
 
         this._startVideoDrawingLoop();
+    }
+
+    /**
+     * Play a MediaStream (e.g. from a WebRTC peer connection) through the
+     * virtual webcam and mic.
+     *
+     * - Video tracks are drawn onto the canvas (same path as playVideo).
+     * - Audio tracks, if present, are routed into the same gainNode /
+     *   virtual mic pipeline as playPCMAudio / playVideo.
+     *
+     * @param {MediaStream} mediaStream
+     * @returns {Promise<void>}
+     */
+    async playMediaStream(mediaStream) {
+        if (!(mediaStream instanceof MediaStream)) {
+            throw new Error("playMediaStream: mediaStream must be a MediaStream.");
+        }
+
+        // Stop any previous video playback and image redraw loop
+        this._stopVideoPlayback();
+        this._stopImageRedrawInterval();
+
+        const hasVideo = mediaStream.getVideoTracks().length > 0;
+        const hasAudio = mediaStream.getAudioTracks().length > 0;
+
+        if (!this.videoElement) {
+            this.videoElement = document.createElement("video");
+            this.videoElement.playsInline = true;
+            this.videoElement.muted = false; // we route audio via Web Audio
+        }
+
+        // Attach the MediaStream to the video element
+        this.videoElement.srcObject = mediaStream;
+        this.videoElement.loop = false;
+        this.videoElement.autoplay = true;
+
+        ///----
+        this._createSourceAudioTrack();
+
+        // (Re)wire a MediaStreamAudioSourceNode from the stream into the same gainNode
+        if (this.mediaStreamAudioSource) {
+            this.mediaStreamAudioSource.disconnect();
+        }
+        this.mediaStreamAudioSource =
+            this.audioContext.createMediaStreamSource(mediaStream);
+        this.mediaStreamAudioSource.connect(this.gainNode);
+        ///----
+
+        if (this.audioContext.state === "suspended") {
+            await this.audioContext.resume();
+        }
+
+        await this.videoElement.play();
+        this._ensureWebcamOn();
+        this._ensureMicOn();
+
+        this._startVideoDrawingLoop();
+    }
+
+    async getBotOutputPeerConnectionOffer() {
+        try
+        {
+            // 2) Create the RTCPeerConnection
+            this.botOutputPeerConnection = new RTCPeerConnection();
+        
+            // 3) Receive the server's *video* and *audio*
+            const ms = new MediaStream();
+            this.botOutputPeerConnection.ontrack = (ev) => {
+                ms.addTrack(ev.track);
+                // If we've received both video and audio, play the stream
+                if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
+                    botOutputManager.playMediaStream(ms);
+                }
+            };
+        
+            // We still want to receive the server's video
+            this.botOutputPeerConnection.addTransceiver('video', { direction: 'recvonly' });
+        
+            // ❗ Instead of recvonly audio, we now **send** our mic upstream:
+            const meetingAudioStream = window.styleManager.getMeetingAudioStream();
+            for (const track of meetingAudioStream.getAudioTracks()) {
+                this.botOutputPeerConnection.addTrack(track, meetingAudioStream);
+            }
+        
+            // Create/POST offer → set remote answer
+            const offer = await this.botOutputPeerConnection.createOffer();
+            await this.botOutputPeerConnection.setLocalDescription(offer);
+            return { sdp: this.botOutputPeerConnection.localDescription.sdp, type: this.botOutputPeerConnection.localDescription.type };
+        }
+        catch (e) {
+            return { error: e.message };
+        }
+    }
+
+    async startBotOutputPeerConnection(offerResponse) {
+        await this.botOutputPeerConnection.setRemoteDescription(offerResponse);
+        
+        // Start latency measurement for the bot output peer connection
+        this.startLatencyMeter(this.botOutputPeerConnection, "bot-output");
+    }
+
+    startLatencyMeter(pc, label="rx") {
+        setInterval(async () => {
+            const stats = await pc.getStats();
+            let rtt_ms = 0, jb_a_ms = 0, jb_v_ms = 0, dec_v_ms = 0;
+
+            stats.forEach(r => {
+                if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
+                    rtt_ms = (r.currentRoundTripTime || 0) * 1000;
+                }
+                if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+                    const d = (r.jitterBufferDelay || 0);
+                    const n = (r.jitterBufferEmittedCount || 1);
+                    jb_a_ms = (d / n) * 1000;
+                }
+                if (r.type === 'inbound-rtp' && r.kind === 'video') {
+                    const d = (r.jitterBufferDelay || 0);
+                    const n = (r.jitterBufferEmittedCount || 1);
+                    jb_v_ms = (d / n) * 1000;
+                    dec_v_ms = ((r.totalDecodeTime || 0) / (r.framesDecoded || 1)) * 1000;
+                }
+            });
+
+            const est_audio_owd = (rtt_ms / 2) + jb_a_ms;
+            const est_video_owd = (rtt_ms / 2) + jb_v_ms + dec_v_ms;
+
+            const logStatement = `[${label}] est one-way: audio≈${est_audio_owd|0}ms, video≈${est_video_owd|0}ms  (rtt=${rtt_ms|0}, jb_a=${jb_a_ms|0}, jb_v=${jb_v_ms|0}, dec_v=${dec_v_ms|0})`;
+            console.log(logStatement);
+            window.ws.sendJson({
+                type: 'BOT_OUTPUT_PEER_CONNECTION_STATS',
+                logStatement: logStatement
+            });
+        }, 60000);
     }
 
     _startVideoDrawingLoop() {
@@ -2780,6 +2923,13 @@ class BotOutputManager {
             // this.videoElement.src = "";
         }
     }
+
+    _stopImageRedrawInterval() {
+        if (this.imageRedrawInterval) {
+            clearInterval(this.imageRedrawInterval);
+            this.imageRedrawInterval = null;
+        }
+    }
 }
 
 botOutputManager = new BotOutputManager({
@@ -2792,8 +2942,6 @@ botOutputManager = new BotOutputManager({
 });
 
 window.botOutputManager = botOutputManager;
-
-
 
 class CallManager {
     constructor() {
