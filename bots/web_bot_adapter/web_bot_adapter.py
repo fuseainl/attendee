@@ -546,11 +546,16 @@ class WebBotAdapter(BotAdapter):
         with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
             payload_code = file.read()
 
+        # Read shared_chromedriver_payload.js
+        with open(os.path.join(current_dir, "shared_chromedriver_payload.js"), "r") as file:
+            shared_chromedriver_payload_code = file.read()
+
         # Combine them ensuring libraries load first
         combined_code = f"""
             {initial_data_code}
             {self.subclass_specific_initial_data_code()}
             {libraries_code}
+            {shared_chromedriver_payload_code}
             {payload_code}
         """
 
