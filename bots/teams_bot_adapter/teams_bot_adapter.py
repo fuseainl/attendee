@@ -74,7 +74,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             logger.error("Could not find chat input")
             return
 
-        text_contains_html = bool(re.search(r"<\s*(?:p|br|a)(?:\s|>|/)", text, flags=re.IGNORECASE))
+        text_contains_html = bool(re.search(r"<\s*(?:p|br|a|b|i)(?:\s|>|/)", text, flags=re.IGNORECASE))
         if text_contains_html:
             self.deliver_chat_message_via_xclip(chatInput, text)
         else:
