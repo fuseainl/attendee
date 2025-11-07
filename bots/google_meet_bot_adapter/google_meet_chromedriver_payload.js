@@ -2095,7 +2095,6 @@ function turnOffCamera() {
 const turnOnMicArialLabel = "Turn on microphone"
 const turnOnScreenshareArialLabel = "Share screen"
 const turnOffMicArialLabel = "Turn off microphone"
-const turnOffScreenshareClass = "stop my screenshare"
 
 function turnOnMicAndScreenshare() {
     // Click microphone button to turn it on
@@ -2159,13 +2158,19 @@ function turnOnScreenshare() {
 }
 
 function turnOffScreenshare() {
-    // Click screenshare button to turn it off
-    const screenshareButton = document.querySelector(`.${turnOffScreenshareClass}`);
-    if (screenshareButton) {
-        console.log("Clicking the screenshare button to turn it off");
-        screenshareButton.click();
+    // Find the span that has the right class/jsname
+    const stopPresentingSpan = document.querySelector('button span.UywwFc-vQzf8d[jsname="V67aGc"]')
+
+    if (stopPresentingSpan) {
+        const screenshareButton = stopPresentingSpan.closest("button");
+        if (screenshareButton) {
+            console.log('Clicking "Stop presenting" button to stop screenshare');
+            screenshareButton.click();
+        } else {
+            console.log('Found "Stop presenting" span but no parent button');
+        }
     } else {
-        console.log("Screenshare off button not found");
+        console.log('"Stop presenting" button not found');
     }
 }
 
