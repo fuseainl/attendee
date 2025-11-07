@@ -40,6 +40,7 @@ class WebpageStreamerManager:
                     self.start_or_update_webrtc_connection(url)
                 if output_destination != self.output_destination and self.output_destination:
                     self.stop_bot_output_media_stream_callback()
+                    time.sleep(1) # Seems like there's sometimes a DOM glitch if we don't wait a bit. Not ideal.
                 # Tell the adapter to start rendering the bot output media stream in the webcam / screenshare
                 self.play_bot_output_media_stream_callback(output_destination)
             if not url:
