@@ -760,11 +760,10 @@ class BotController:
         )
 
         self.webpage_streamer_manager = WebpageStreamerManager(
-            url=self.bot_in_db.voice_agent_url(),
-            output_destination=self.bot_in_db.voice_agent_video_output_destination(),
             get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
             start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
             play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
+            stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
             webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
         )
 
@@ -935,7 +934,7 @@ class BotController:
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
             logger.info("Bot should launch webpage streamer, so starting webpage streamer manager")
-            self.webpage_streamer_manager.start()
+            self.webpage_streamer_manager.update(url=self.bot_in_db.voice_agent_url(), output_destination=self.bot_in_db.voice_agent_video_output_destination())
         else:
             logger.info("Bot should not launch webpage streamer, so not starting webpage streamer manager")
 
@@ -987,6 +986,10 @@ class BotController:
                 logger.info(f"Syncing media requests for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()
                 self.take_action_based_on_media_requests_in_db()
+            elif command == "sync_voice_agent_settings":
+                logger.info(f"Syncing voice agent settings for bot {self.bot_in_db.object_id}")
+                self.bot_in_db.refresh_from_db()
+                self.take_action_based_on_voice_agent_settings_in_db()
             elif command == "sync_transcription_settings":
                 logger.info(f"Syncing transcription settings for bot {self.bot_in_db.object_id}")
                 self.bot_in_db.refresh_from_db()

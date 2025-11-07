@@ -2081,6 +2081,17 @@ function turnOffMicAndCamera() {
     }
 }
 
+function turnOffCamera() {
+    // Click camera button to turn it off
+    const cameraButton = document.querySelector('button[aria-label="Turn off camera"]');
+    if (cameraButton) {
+        console.log("Clicking the camera button to turn it off");
+        cameraButton.click();
+    } else {
+        console.log("Camera off button not found");
+    }
+}
+
 const turnOnMicArialLabel = "Turn on microphone"
 const turnOnScreenshareArialLabel = "Share screen"
 const turnOffMicArialLabel = "Turn off microphone"
@@ -2164,9 +2175,7 @@ function turnOffScreenshare() {
 
 botOutputManager = new BotOutputManager({
     turnOnWebcam: turnOnCamera,
-    turnOffWebcam: () => {
-        console.log("Turning off webcam");
-    },
+    turnOffWebcam: turnOffCamera,
     turnOnScreenshare: turnOnScreenshare,
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,

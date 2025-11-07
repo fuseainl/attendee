@@ -106,6 +106,14 @@ class BotVideoOutputStream {
         }
     }
 
+    ensureInputOff() {
+        try {
+            this.turnOffInput && this.turnOffInput();
+        } catch (e) {
+            console.error("Error in turnOffInput callback:", e);
+        }
+    }
+
     isVideoPlaying() {
         return !!this.videoElement && !this.videoElement.paused && !this.videoElement.ended;
     }
@@ -156,8 +164,12 @@ class BotVideoOutputStream {
 
         // Add event listener for when video ends to display the last image
         this.videoEndedHandler = () => {
+            // If we had an image, display it again keep the input on if not turn it off
             if (this.lastImageBytes) {
                 this.displayImage(this.lastImageBytes);
+            }
+            else {
+                this.ensureInputOff();
             }
         };
         this.videoElement.addEventListener('ended', this.videoEndedHandler);
@@ -316,6 +328,18 @@ class BotVideoOutputStream {
                 type: 'PLAY_MEDIA_STREAM_ERROR',
                 error: e.message
             });
+        }
+    }
+
+    async stopMediaStream() {
+        this._stopVideoPlayback();
+        
+        // If we had an image, display it again keep the input on if not turn it off
+        if (this.lastImageBytes) {
+            this.displayImage(this.lastImageBytes);
+        }
+        else {
+            this.ensureInputOff();
         }
     }
 }
@@ -648,6 +672,14 @@ class BotOutputManager {
             return this.screenShareVideoOutputStream.playMediaStream(this.botOutputMediaStream);
         } else {
             return this.webcamVideoOutputStream.playMediaStream(this.botOutputMediaStream);
+        }
+    }
+
+    async stopBotOutputMediaStream() {
+        if (this.botOutputMediaStreamOutputDestination === "screenshare") {
+            return this.screenShareVideoOutputStream.stopMediaStream();
+        } else {
+            return this.webcamVideoOutputStream.stopMediaStream();
         }
     }
 

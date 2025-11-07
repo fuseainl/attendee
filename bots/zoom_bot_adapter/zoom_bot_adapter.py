@@ -1127,3 +1127,6 @@ class ZoomBotAdapter(BotAdapter):
 
     def webpage_streamer_play_bot_output_media_stream(self, output_destination):
         pass
+
+    def webpage_streamer_stop_bot_output_media_stream(self, output_destination):
+        pass

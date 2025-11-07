@@ -11,21 +11,40 @@ logger = logging.getLogger(__name__)
 class WebpageStreamerManager:
     def __init__(
         self,
-        url,
-        output_destination,
         get_peer_connection_offer_callback,
         start_peer_connection_callback,
         play_bot_output_media_stream_callback,
+        stop_bot_output_media_stream_callback,
         webpage_streamer_service_hostname,
     ):
-        self.url = url
-        self.output_destination = output_destination
+        self.url = None
+        self.output_destination = None
         self.get_peer_connection_offer_callback = get_peer_connection_offer_callback
         self.start_peer_connection_callback = start_peer_connection_callback
         self.cleaned_up = False
         self.webpage_streamer_keepalive_task = None
         self.webpage_streamer_service_hostname = webpage_streamer_service_hostname
         self.play_bot_output_media_stream_callback = play_bot_output_media_stream_callback
+        self.stop_bot_output_media_stream_callback = stop_bot_output_media_stream_callback
+        self.webrtc_connection_started = False
+
+    # Possible cases:
+    # 1. Streaming has not started yet.
+    # 2. Streaming has started. URL has changed.
+    # 3. Streaming has started. Output destination has changed.
+    # 4. Streaming has started. URL and output destination have changed.
+    def update(self, url, output_destination):
+        if url != self.url or output_destination != self.output_destination:
+            if url:
+                if url != self.url:
+                    self.start_or_update_webrtc_connection(url)
+                # Tell the adapter to start rendering the bot output media stream in the webcam / screenshare
+                self.play_bot_output_media_stream_callback(output_destination)
+            if not url:
+                self.stop_bot_output_media_stream_callback()
+
+        self.url = url
+        self.output_destination = output_destination
 
     def cleanup(self):
         try:
@@ -41,7 +60,19 @@ class WebpageStreamerManager:
         # Otherwise the streaming service will be running in a separate docker compose service, so we address it using the service name
         return "attendee-webpage-streamer-local"
 
-    def start(self):
+    def update_webrtc_connection(self, url):
+        # Start and update do the same thing, so we can use the same endpoint
+        update_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": url})
+        logger.info(f"Update streaming response: {update_streaming_response}")
+
+        if update_streaming_response.status_code != 200:
+            logger.info(f"Failed to update streaming. Response: {update_streaming_response.status_code}")
+            return
+
+    def start_or_update_webrtc_connection(self, url):
+        if self.webrtc_connection_started:
+            return self.update_webrtc_connection(url)
+
         logger.info(f"Open webpage streaming connection. Settings are url={self.url} and output_destination={self.output_destination}")
         peerConnectionOffer = self.get_peer_connection_offer_callback()
         logger.info(f"Peer connection offer: {peerConnectionOffer}")
@@ -53,7 +84,7 @@ class WebpageStreamerManager:
         logger.info(f"Offer response: {offer_response.json()}")
         self.start_peer_connection_callback(offer_response.json())
 
-        start_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": self.url})
+        start_streaming_response = requests.post(f"http://{self.streaming_service_hostname()}:8000/start_streaming", json={"url": url})
         logger.info(f"Start streaming response: {start_streaming_response}")
 
         if start_streaming_response.status_code != 200:
@@ -65,8 +96,7 @@ class WebpageStreamerManager:
             self.webpage_streamer_keepalive_task = threading.Thread(target=self.send_webpage_streamer_keepalive_periodically, daemon=True)
             self.webpage_streamer_keepalive_task.start()
 
-        # Tell the adapter to start rendering the bot output media stream in the webcam / screenshare
-        self.play_bot_output_media_stream_callback(self.output_destination)
+        self.webrtc_connection_started = True
 
     def send_webpage_streamer_keepalive_periodically(self):
         """Send keepalive requests to the streaming service every 60 seconds."""

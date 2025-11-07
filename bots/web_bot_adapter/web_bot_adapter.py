@@ -808,6 +808,9 @@ class WebBotAdapter(BotAdapter):
     def webpage_streamer_play_bot_output_media_stream(self, output_destination):
         self.driver.execute_script(f"window.botOutputManager.playBotOutputMediaStream({json.dumps(output_destination)});")
 
+    def webpage_streamer_stop_bot_output_media_stream(self):
+        self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream();")
+
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
 
