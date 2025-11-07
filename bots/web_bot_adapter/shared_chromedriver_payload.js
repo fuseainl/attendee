@@ -364,6 +364,9 @@ class BotOutputManager {
 
         // --- BOT OUTPUT PEER CONNECTION SETUP ---
         this.botOutputPeerConnection = null;
+        this.botOutputMediaStream = null;
+        this.botOutputMediaStreamOutputDestination = null;
+        this.botOutputMediaStreamIsReadyInterval = null;
 
         // Webcam video output stream
         this.webcamVideoOutputStream = new BotVideoOutputStream({
@@ -619,6 +622,35 @@ class BotOutputManager {
         return this.audioContext?.destination;
     }
 
+    botOutputMediaStreamIsReady() {
+        return this.botOutputMediaStream.getVideoTracks().length > 0 && this.botOutputMediaStream.getAudioTracks().length > 0;
+    }
+
+    async playBotOutputMediaStream(outputDestination) {
+        this.botOutputMediaStreamOutputDestination = outputDestination;
+
+        if (!this.botOutputMediaStreamIsReady()) {
+            // Add interval to check if the bot output media stream is ready
+            
+            if (!this.botOutputMediaStreamIsReadyInterval)
+                this.botOutputMediaStreamIsReadyInterval = setInterval(() => {
+                    if (this.botOutputMediaStreamIsReady()) {
+                        this.playBotOutputMediaStream(this.botOutputMediaStreamOutputDestination);
+                    }
+                }, 1000);
+            return;
+        }
+
+        if (this.botOutputMediaStreamIsReadyInterval)
+            clearInterval(this.botOutputMediaStreamIsReadyInterval);
+
+        if (outputDestination === "screenshare") {
+            return this.screenShareVideoOutputStream.playMediaStream(this.botOutputMediaStream);
+        } else {
+            return this.webcamVideoOutputStream.playMediaStream(this.botOutputMediaStream);
+        }
+    }
+
     async getBotOutputPeerConnectionOffer() {
         try
         {
@@ -626,16 +658,9 @@ class BotOutputManager {
             this.botOutputPeerConnection = new RTCPeerConnection();
         
             // 3) Receive the server's *video* and *audio*
-            const ms = new MediaStream();
+            this.botOutputMediaStream = new MediaStream();
             this.botOutputPeerConnection.ontrack = (ev) => {
-                ms.addTrack(ev.track);
-                // If we've received both video and audio, play the stream
-                if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
-                    if (window.initialData.voiceAgentVideoOutputDestination === "screenshare")
-                        this.screenShareVideoOutputStream.playMediaStream(ms);
-                    else
-                        this.webcamVideoOutputStream.playMediaStream(ms);
-                }
+                this.botOutputMediaStream.addTrack(ev.track);
             };
         
             // We still want to receive the server's video

@@ -1117,3 +1117,13 @@ class ZoomBotAdapter(BotAdapter):
 
     def get_staged_bot_join_delay_seconds(self):
         return 0
+
+    # These webpage streaming functionality is not available for the zoom native adapter
+    def webpage_streamer_get_peer_connection_offer(self):
+        pass
+
+    def webpage_streamer_start_peer_connection(self, offer_response):
+        pass
+
+    def webpage_streamer_play_bot_output_media_stream(self, output_destination):
+        pass

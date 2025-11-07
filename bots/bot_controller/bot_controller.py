@@ -70,6 +70,7 @@ from .rtmp_client import RTMPClient
 from .s3_file_uploader import S3FileUploader
 from .screen_and_audio_recorder import ScreenAndAudioRecorder
 from .video_output_manager import VideoOutputManager
+from .webpage_streamer_manager import WebpageStreamerManager
 
 gi.require_version("GLib", "2.0")
 from gi.repository import GLib
@@ -132,9 +133,6 @@ class BotController:
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=add_audio_chunk_callback,
             meeting_url=self.bot_in_db.meeting_url,
-            voice_agent_url=self.bot_in_db.voice_agent_url(),
-            voice_agent_video_output_destination=self.bot_in_db.voice_agent_video_output_destination(),
-            webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
@@ -171,9 +169,6 @@ class BotController:
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=add_audio_chunk_callback,
             meeting_url=self.bot_in_db.meeting_url,
-            voice_agent_url=self.bot_in_db.voice_agent_url(),
-            voice_agent_video_output_destination=self.bot_in_db.voice_agent_video_output_destination(),
-            webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
@@ -237,9 +232,6 @@ class BotController:
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=add_audio_chunk_callback,
             meeting_url=self.bot_in_db.meeting_url,
-            voice_agent_url=self.bot_in_db.voice_agent_url(),
-            voice_agent_video_output_destination=self.bot_in_db.voice_agent_video_output_destination(),
-            webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
             add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback if self.pipeline_configuration.websocket_stream_audio else None,
@@ -514,6 +506,10 @@ class BotController:
             logger.info("Telling realtime audio output manager to cleanup...")
             self.realtime_audio_output_manager.cleanup()
 
+        if self.webpage_streamer_manager:
+            logger.info("Telling webpage streamer manager to cleanup...")
+            self.webpage_streamer_manager.cleanup()
+
         if self.websocket_audio_client:
             logger.info("Telling websocket audio client to cleanup...")
             self.websocket_audio_client.cleanup()
@@ -763,6 +759,15 @@ class BotController:
             play_video_callback=self.adapter.send_video,
         )
 
+        self.webpage_streamer_manager = WebpageStreamerManager(
+            url=self.bot_in_db.voice_agent_url(),
+            output_destination=self.bot_in_db.voice_agent_video_output_destination(),
+            get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
+            start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
+            play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
+            webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
+        )
+
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
 
         # Create GLib main loop
@@ -926,6 +931,13 @@ class BotController:
         for chat_message_request in chat_message_requests:
             self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
             BotChatMessageRequestManager.set_chat_message_request_sent(chat_message_request)
+
+    def take_action_based_on_voice_agent_settings_in_db(self):
+        if self.bot_in_db.should_launch_webpage_streamer():
+            logger.info("Bot should launch webpage streamer, so starting webpage streamer manager")
+            self.webpage_streamer_manager.start()
+        else:
+            logger.info("Bot should not launch webpage streamer, so not starting webpage streamer manager")
 
     def take_action_based_on_media_requests_in_db(self):
         self.take_action_based_on_audio_media_requests_in_db()
@@ -1654,6 +1666,13 @@ class BotController:
             # If there are any image media requests, this will start playing them
             # For now the only type of media request is an image, so this will start showing the bot's image
             self.take_action_based_on_image_media_requests_in_db()
+            return
+
+        if message.get("message") == BotAdapter.Messages.READY_TO_SHOW_WEBPAGE_STREAM:
+            logger.info("Received message that bot is ready to show webpage stream")
+            # If there are any webpage stream media requests, this will start playing them
+            # For now the only type of media request is a webpage stream, so this will start showing the bot's webpage stream
+            self.take_action_based_on_voice_agent_settings_in_db()
             return
 
         if message.get("message") == BotAdapter.Messages.BOT_RECORDING_PERMISSION_GRANTED:
