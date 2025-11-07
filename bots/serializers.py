@@ -841,24 +841,54 @@ class CallbackSettingsJSONField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-                "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
-            },
-            "screenshare_url": {
-                "type": "string",
-                "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url.",
-            },
+VOICE_AGENT_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
         },
-        "oneOf": [{"required": ["url"]}, {"required": ["screenshare_url"]}],
-        "additionalProperties": False,
-    }
-)
+        "screenshare_url": {
+            "type": "string",
+            "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url.",
+        },
+        "reserve_resources": {
+            "type": "boolean",
+            "description": "If you want to start a voice agent or stream a webpage mid-meeting, but not at the start of the meeting, set this to true. This will reserve resources for the voice agent. You cannot start a voice agent mid-meeting if this is not set to true.",
+            "default": False,
+        },
+    },
+    "oneOf": [{"required": ["url"]}, {"required": ["screenshare_url"]}, {"required": ["reserve_resources"]}],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(VOICE_AGENT_SETTINGS_SCHEMA)
 class VoiceAgentSettingsJSONField(serializers.JSONField):
+    pass
+
+
+PATCH_BOT_VOICE_AGENT_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Explicitly set to null to turn off.",
+        },
+        "screenshare_url": {
+            "type": "string",
+            "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url. Explcitly set to null to turn off.",
+        },
+    },
+    "additionalProperties": False,
+    "not": {
+        "required": ["url", "screenshare_url"],
+    },
+}
+
+
+@extend_schema_field(PATCH_BOT_VOICE_AGENT_SETTINGS_SCHEMA)
+class PatchBotVoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
 
@@ -1037,20 +1067,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         return value
 
-    VOICE_AGENT_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-            },
-            "screenshare_url": {
-                "type": "string",
-            },
-        },
-        "oneOf": [{"required": ["url"]}, {"required": ["screenshare_url"]}],
-        "additionalProperties": False,
-    }
-
     def validate_voice_agent_settings(self, value):
         if value is None:
             return value
@@ -1059,9 +1075,13 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             raise serializers.ValidationError("Voice agents are not enabled. Please set the ENABLE_VOICE_AGENTS environment variable to true to use voice agents.")
 
         try:
-            jsonschema.validate(instance=value, schema=self.VOICE_AGENT_SETTINGS_SCHEMA)
+            jsonschema.validate(instance=value, schema=VOICE_AGENT_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        # Set reserve resources to true if url or screenshare_url is provided
+        if value.get("url") or value.get("screenshare_url"):
+            value["reserve_resources"] = True
 
         # Validate that url is a proper URL
         url = value.get("url")
@@ -1670,6 +1690,30 @@ class ParticipantEventSerializer(serializers.Serializer):
 
     def get_event_type(self, obj):
         return ParticipantEventTypes.type_to_api_code(obj.event_type)
+
+
+class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
+    voice_agent_settings = PatchBotVoiceAgentSettingsJSONField(
+        help_text="Voice agent settings to update.",
+        required=True,
+        source="*",
+    )
+
+    def validate_voice_agent_settings(self, value):
+        if value is None:
+            return value
+
+        try:
+            jsonschema.validate(instance=value, schema=PATCH_BOT_VOICE_AGENT_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # Validate that url is a proper URL
+        url = value.get("url")
+        if url and not url.lower().startswith("https://"):
+            raise serializers.ValidationError({"url": "URL must start with https://"})
+
+        return value
 
 
 class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):

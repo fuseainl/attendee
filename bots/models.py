@@ -811,7 +811,8 @@ class Bot(models.Model):
             return None
 
     def should_launch_webpage_streamer(self):
-        return bool(self.voice_agent_url())
+        voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
+        return voice_agent_settings.get("reserve_resources", False)
 
     def zoom_tokens_callback_url(self):
         callback_settings = self.settings.get("callback_settings", {})
@@ -1387,6 +1388,10 @@ class BotEventManager:
 
     @classmethod
     def is_state_that_can_change_gallery_view_page(cls, state: int):
+        return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
+
+    @classmethod
+    def is_state_that_can_update_voice_agent_settings(cls, state: int):
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod
