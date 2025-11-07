@@ -2384,6 +2384,26 @@ botOutputManager = new BotOutputManager({
 
 window.botOutputManager = botOutputManager;
 
+(function () {
+    const _bind = Function.prototype.bind;
+    Function.prototype.bind = function (thisArg, ...args) {
+      if (this.name === 'onMessageReceived') {
+        const bound = _bind.apply(this, [thisArg, ...args]);
+        return function (...callArgs) {
+          const eventData = callArgs[0];
+          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
+          {
+            const message = eventData.data.chatServiceBatchEvent[0].message;
+            realConsole?.log('chatMessage', message);
+            window.chatMessageManager?.handleChatMessage(message);
+          }
+          return bound.apply(this, callArgs);
+        };
+      }
+      return _bind.apply(this, [thisArg, ...args]);
+    };
+  })();
+
 class CallManager {
     constructor() {
         this.activeCall = null;
