@@ -18,6 +18,7 @@ class WebpageStreamerManager:
         webpage_streamer_service_hostname,
     ):
         self.url = None
+        self.last_non_empty_url = None
         self.output_destination = None
         self.get_peer_connection_offer_callback = get_peer_connection_offer_callback
         self.start_peer_connection_callback = start_peer_connection_callback
@@ -34,20 +35,29 @@ class WebpageStreamerManager:
     # 3. Streaming has started. Output destination has changed.
     # 4. Streaming has started. URL and output destination have changed.
     def update(self, url, output_destination):
+        sleep_before_playing_bot_output_media_stream = False
         if url != self.url or output_destination != self.output_destination:
             if url:
                 if url != self.url:
                     self.start_or_update_webrtc_connection(url)
+                    # If we are shifting to a new output destination AND the page is set to a different url, then let's pause for a second
+                    # Otherwise it will display the old page for a bit
+                    if output_destination != self.output_destination and self.last_non_empty_url and self.last_non_empty_url != url:
+                        sleep_before_playing_bot_output_media_stream = True
                 if output_destination != self.output_destination and self.output_destination:
                     self.stop_bot_output_media_stream_callback()
-                    time.sleep(1) # Seems like there's sometimes a DOM glitch if we don't wait a bit. Not ideal.
+                    sleep_before_playing_bot_output_media_stream = True # Seems like there's sometimes a DOM glitch if we don't wait a bit. Not ideal.
                 # Tell the adapter to start rendering the bot output media stream in the webcam / screenshare
+                if sleep_before_playing_bot_output_media_stream:
+                    time.sleep(1)
                 self.play_bot_output_media_stream_callback(output_destination)
             if not url:
                 self.stop_bot_output_media_stream_callback()
 
         self.url = url
         self.output_destination = output_destination
+        if url:
+            self.last_non_empty_url = url
 
     def cleanup(self):
         try:
