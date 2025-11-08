@@ -135,9 +135,9 @@ class BotVideoOutputStream {
         if (!this.videoElement) {
             this.videoElement = document.createElement("video");
             this.videoElement.playsInline = true;
-            this.videoElement.muted = false;
         }
 
+        this.videoElement.muted = false;
         this.videoElement.src = videoUrl;
         this.videoElement.loop = false;
         this.videoElement.autoplay = true;
@@ -293,9 +293,9 @@ class BotVideoOutputStream {
             if (!this.videoElement) {
                 this.videoElement = document.createElement("video");
                 this.videoElement.playsInline = true;
-                this.videoElement.muted = false; // we route audio via Web Audio
             }
-
+            
+            this.videoElement.muted = true;
             // Attach the MediaStream to the video element
             this.videoElement.srcObject = mediaStream;
             this.videoElement.loop = false;
