@@ -867,6 +867,7 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
 class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
+
 @extend_schema_field(
     {
         "type": "object",
@@ -1063,7 +1064,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if url and not url.lower().startswith("https://"):
             raise serializers.ValidationError({"url": "URL must start with https://"})
 
-        if url:
+        # Validate that screenshare_url is a proper URL
+        screenshare_url = value.get("screenshare_url")
+        if screenshare_url and not screenshare_url.lower().startswith("https://"):
+            raise serializers.ValidationError({"screenshare_url": "URL must start with https://"})
+
+        if value["reserve_resources"]:
             meeting_url = self.initial_data.get("meeting_url")
             meeting_type = meeting_type_from_url(meeting_url)
             use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
@@ -1668,18 +1674,8 @@ class ParticipantEventSerializer(serializers.Serializer):
 
 
 class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
-    url = serializers.CharField(
-        required=False,
-        allow_null=False,
-        allow_blank=True,
-        help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off."
-    )
-    screenshare_url = serializers.CharField(
-        required=False,
-        allow_null=False,
-        allow_blank=True,
-        help_text="Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url. Set to \"\" to turn off."
-    )
+    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
+    screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Currently, you cannot provide both url and screenshare_url. Set to "" to turn off.')
 
     def validate_url(self, value):
         """Validate that url starts with https://"""
@@ -1707,18 +1703,16 @@ class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
         if unexpected_fields:
             raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
 
-
         """Validate that both url and screenshare_url are not provided with non-empty values"""
-        url = data.get('url')
-        screenshare_url = data.get('screenshare_url')
-        
+        url = data.get("url")
+        screenshare_url = data.get("screenshare_url")
+
         # Check if both have non-empty values
         if url and screenshare_url:
-            raise serializers.ValidationError(
-                "Cannot provide both url and screenshare_url. Please specify only one."
-            )
-        
+            raise serializers.ValidationError("Cannot provide both url and screenshare_url. Please specify only one.")
+
         return data
+
 
 class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
     """Serializer for updating transcription settings. Currently supports only updating Teams closed captions language."""
