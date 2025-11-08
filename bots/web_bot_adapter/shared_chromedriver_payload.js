@@ -30,7 +30,7 @@ class BotVideoOutputStream {
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        const sourceVideoStream = this.canvas.captureStream(30); // ~30 FPS
+        const sourceVideoStream = this.canvas.captureStream(10); // ~10 FPS
 
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
@@ -294,7 +294,7 @@ class BotVideoOutputStream {
                 this.videoElement = document.createElement("video");
                 this.videoElement.playsInline = true;
             }
-            
+
             this.videoElement.muted = true;
             // Attach the MediaStream to the video element
             this.videoElement.srcObject = mediaStream;
