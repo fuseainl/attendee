@@ -867,31 +867,6 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
 class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
-
-PATCH_BOT_VOICE_AGENT_SETTINGS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "url": {
-            "type": "string",
-            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Explicitly set to null to turn off.",
-        },
-        "screenshare_url": {
-            "type": "string",
-            "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url. Explcitly set to null to turn off.",
-        },
-    },
-    "additionalProperties": False,
-    "not": {
-        "required": ["url", "screenshare_url"],
-    },
-}
-
-
-@extend_schema_field(PATCH_BOT_VOICE_AGENT_SETTINGS_SCHEMA)
-class PatchBotVoiceAgentSettingsJSONField(serializers.JSONField):
-    pass
-
-
 @extend_schema_field(
     {
         "type": "object",
@@ -1693,28 +1668,57 @@ class ParticipantEventSerializer(serializers.Serializer):
 
 
 class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
-    voice_agent_settings = PatchBotVoiceAgentSettingsJSONField(
-        help_text="Voice agent settings to update.",
-        required=True,
-        source="*",
+    url = serializers.CharField(
+        required=False,
+        allow_null=False,
+        allow_blank=True,
+        help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off."
+    )
+    screenshare_url = serializers.CharField(
+        required=False,
+        allow_null=False,
+        allow_blank=True,
+        help_text="Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url. Set to \"\" to turn off."
     )
 
-    def validate_voice_agent_settings(self, value):
-        if value is None:
-            return value
-
-        try:
-            jsonschema.validate(instance=value, schema=PATCH_BOT_VOICE_AGENT_SETTINGS_SCHEMA)
-        except jsonschema.exceptions.ValidationError as e:
-            raise serializers.ValidationError(e.message)
-
-        # Validate that url is a proper URL
-        url = value.get("url")
-        if url and not url.lower().startswith("https://"):
-            raise serializers.ValidationError({"url": "URL must start with https://"})
-
+    def validate_url(self, value):
+        """Validate that url starts with https://"""
+        if value and not value.lower().startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
         return value
 
+    def validate_screenshare_url(self, value):
+        """Validate that screenshare_url starts with https://"""
+        if value and not value.lower().startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
+        return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+
+        """Validate that both url and screenshare_url are not provided with non-empty values"""
+        url = data.get('url')
+        screenshare_url = data.get('screenshare_url')
+        
+        # Check if both have non-empty values
+        if url and screenshare_url:
+            raise serializers.ValidationError(
+                "Cannot provide both url and screenshare_url. Please specify only one."
+            )
+        
+        return data
 
 class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
     """Serializer for updating transcription settings. Currently supports only updating Teams closed captions language."""
