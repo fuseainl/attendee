@@ -933,7 +933,6 @@ class BotController:
 
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
-            logger.info("Bot should launch webpage streamer, so starting webpage streamer manager")
             self.webpage_streamer_manager.update(url=self.bot_in_db.voice_agent_url(), output_destination=self.bot_in_db.voice_agent_video_output_destination())
         else:
             logger.info("Bot should not launch webpage streamer, so not starting webpage streamer manager")

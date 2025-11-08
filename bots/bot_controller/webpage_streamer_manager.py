@@ -45,16 +45,18 @@ class WebpageStreamerManager:
                     if output_destination != self.output_destination and self.last_non_empty_url and self.last_non_empty_url != url:
                         sleep_before_playing_bot_output_media_stream = True
                 if output_destination != self.output_destination and self.output_destination:
-                    logger.info(f"Stopping bot output media stream")
+                    logger.info("Stopping bot output media stream")
                     self.stop_bot_output_media_stream_callback()
-                    sleep_before_playing_bot_output_media_stream = True # Seems like there's sometimes a DOM glitch if we don't wait a bit. Not ideal.
+                    sleep_before_playing_bot_output_media_stream = True  # Seems like there's sometimes a DOM glitch if we don't wait a bit. Not ideal.
                 # Tell the adapter to start rendering the bot output media stream in the webcam / screenshare
                 if sleep_before_playing_bot_output_media_stream:
                     time.sleep(1)
-                logger.info(f"Playing bot output media stream to {output_destination}")
-                self.play_bot_output_media_stream_callback(output_destination)
+                only_change_was_url = url != self.url and output_destination == self.output_destination
+                if not only_change_was_url:
+                    logger.info(f"Playing bot output media stream to {output_destination}")
+                    self.play_bot_output_media_stream_callback(output_destination)
             if not url:
-                logger.info(f"Stopping bot output media stream because url is empty")
+                logger.info("Stopping bot output media stream because url is empty")
                 self.stop_bot_output_media_stream_callback()
 
         self.url = url
