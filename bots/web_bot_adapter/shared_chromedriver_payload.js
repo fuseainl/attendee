@@ -180,7 +180,10 @@ class BotVideoOutputStream {
     _startVideoDrawingLoop() {
         if (!this.videoElement) return;
 
-        const drawFrame = () => {
+        let lastDrawTime = 0;
+        const drawInterval = 1000 / 20; // ~20fps (60fps / 3)
+
+        const drawFrame = (timestamp) => {
             if (
                 !this.videoElement ||
                 this.videoElement.paused ||
@@ -190,21 +193,26 @@ class BotVideoOutputStream {
                 return;
             }
 
-            // Resize canvas on first valid frame
-            const vw = this.videoElement.videoWidth;
-            const vh = this.videoElement.videoHeight;
-            if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
-                this.canvas.width = vw;
-                this.canvas.height = vh;
-            }
+            // Only draw if enough time has passed (throttle to 1/3 of normal rate)
+            if (timestamp - lastDrawTime >= drawInterval) {
+                // Resize canvas on first valid frame
+                const vw = this.videoElement.videoWidth;
+                const vh = this.videoElement.videoHeight;
+                if (vw && vh && (this.canvas.width !== vw || this.canvas.height !== vh)) {
+                    this.canvas.width = vw;
+                    this.canvas.height = vh;
+                }
 
-            this.canvasCtx.drawImage(
-                this.videoElement,
-                0,
-                0,
-                this.canvas.width,
-                this.canvas.height
-            );
+                this.canvasCtx.drawImage(
+                    this.videoElement,
+                    0,
+                    0,
+                    this.canvas.width,
+                    this.canvas.height
+                );
+
+                lastDrawTime = timestamp;
+            }
 
             this.videoRafId = requestAnimationFrame(drawFrame);
         };
