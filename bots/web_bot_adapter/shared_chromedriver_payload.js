@@ -30,7 +30,7 @@ class BotVideoOutputStream {
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        const sourceVideoStream = this.canvas.captureStream(10); // ~10 FPS
+        const sourceVideoStream = this.canvas.captureStream(15); // ~15 FPS
 
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
@@ -181,7 +181,7 @@ class BotVideoOutputStream {
         if (!this.videoElement) return;
 
         let lastDrawTime = 0;
-        const drawInterval = 1000 / 20; // ~20fps (60fps / 3)
+        const drawInterval = 1000 / 15; // ~15fps (60fps / 4)
 
         const drawFrame = (timestamp) => {
             if (
