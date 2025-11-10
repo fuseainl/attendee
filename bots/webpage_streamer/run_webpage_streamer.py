@@ -6,6 +6,7 @@ This script allows you to run the webpage streaming functionality
 independently of the Django framework.
 """
 
+import argparse
 import logging
 import os
 import sys
@@ -24,7 +25,7 @@ def setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(sys.stdout)])
 
 
-def main():
+def main(video_frame_size):
     """Main function to run the webpage streamer."""
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ def main():
     logger.info("Starting WebpageStreamer as standalone script...")
 
     try:
-        webpage_streamer = WebpageStreamer()
+        webpage_streamer = WebpageStreamer(video_frame_size=video_frame_size)
         webpage_streamer.run()
     except KeyboardInterrupt:
         logger.info("Shutting down due to keyboard interrupt...")
@@ -42,4 +43,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run WebpageStreamer as standalone script")
+    parser.add_argument("--video-frame-size", type=str, default="1280x720", help="Video frame size in format WIDTHxHEIGHT (e.g., 1280x720)")
+    args = parser.parse_args()
+    video_frame_size_tuple = tuple(map(int, args.video_frame_size.split("x")))
+    main(video_frame_size=video_frame_size_tuple)

@@ -96,7 +96,7 @@ class BotPodCreator:
         ]
 
     def get_webpage_streamer_container(self):
-        args = ["python", "bots/webpage_streamer/run_webpage_streamer.py"]
+        args = ["python", "bots/webpage_streamer/run_webpage_streamer.py", "--video-frame-size", os.getenv("WEBPAGE_STREAMER_VIDEO_FRAME_SIZE", "1280x720")]
         return client.V1Container(
                 name="webpage-streamer",
                 image=self.image,

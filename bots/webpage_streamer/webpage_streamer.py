@@ -87,9 +87,10 @@ class AlsaLoopbackSink:
 class WebpageStreamer:
     def __init__(
         self,
+        video_frame_size,
     ):
         self.driver = None
-        self.video_frame_size = (1280, 720)
+        self.video_frame_size = video_frame_size
         self.display_var_for_recording = None
         self.display = None
         self.last_keepalive_time = None
@@ -120,6 +121,7 @@ class WebpageStreamer:
         options.add_argument("--remote-debugging-port=9222")
 
         logger.info("Chrome sandboxing is enabled")
+        logger.info(f"Video frame size: {self.video_frame_size}")
 
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
