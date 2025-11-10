@@ -759,13 +759,15 @@ class BotController:
             play_video_callback=self.adapter.send_video,
         )
 
-        self.webpage_streamer_manager = WebpageStreamerManager(
-            get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
-            start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
-            play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
-            stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
-            webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
-        )
+        self.webpage_streamer_manager = None
+        if self.bot_in_db.should_launch_webpage_streamer():
+            self.webpage_streamer_manager = WebpageStreamerManager(
+                get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
+                start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
+                play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
+                stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
+                webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
+            )
 
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
 
