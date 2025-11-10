@@ -30,7 +30,7 @@ class BotVideoOutputStream {
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        const sourceVideoStream = this.canvas.captureStream(15); // ~15 FPS
+        const sourceVideoStream = this.canvas.captureStream(30); // NEEDS to be 30 or Google Meet complains
 
         // This is our *source* video track; we will CLONE it for callers.
         const videoTracks = sourceVideoStream.getVideoTracks();
