@@ -1069,7 +1069,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if screenshare_url and not screenshare_url.lower().startswith("https://"):
             raise serializers.ValidationError({"screenshare_url": "URL must start with https://"})
 
-        if value["reserve_resources"]:
+        if value.get("reserve_resources"):
             meeting_url = self.initial_data.get("meeting_url")
             meeting_type = meeting_type_from_url(meeting_url)
             use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
