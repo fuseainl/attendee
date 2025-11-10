@@ -787,6 +787,10 @@ class UserManager {
       );
       this.newUsersListSynced(uniqueUsers);
     }
+
+    removeScreenshareUsers(users) {
+        return users.filter(user => !user.parentDeviceId);
+    }
     
     newUsersListSynced(newUsersListRaw) {
         const newUsersList = newUsersListRaw.map(user => {
@@ -856,12 +860,16 @@ class UserManager {
 
         const updatedUsers = Array.from(updatedUserIds).map(id => this.currentUsersMap.get(id));
 
-        if (newUsers.length > 0 || removedUsers.length > 0 || updatedUsers.length > 0) {
+        const newUsersToSend = this.removeScreenshareUsers(newUsers);
+        const removedUsersToSend = this.removeScreenshareUsers(removedUsers);
+        const updatedUsersToSend = this.removeScreenshareUsers(updatedUsers);
+
+        if (newUsersToSend.length > 0 || removedUsersToSend.length > 0 || updatedUsersToSend.length > 0) {
             this.ws.sendJson({
                 type: 'UsersUpdate',
-                newUsers: newUsers,
-                removedUsers: removedUsers,
-                updatedUsers: updatedUsers
+                newUsers: newUsersToSend,
+                removedUsers: removedUsersToSend,
+                updatedUsers: updatedUsersToSend
             });
         }
     }
