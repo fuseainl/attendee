@@ -1071,6 +1071,13 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if screenshare_url and not screenshare_url.lower().startswith("https://"):
             raise serializers.ValidationError({"screenshare_url": "URL must start with https://"})
 
+        if os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower() != "":
+            voice_agent_url_domain_allowlist = os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower().split(",")
+            if url and not any(url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
+                raise serializers.ValidationError({"url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
+            if screenshare_url and not any(screenshare_url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
+                raise serializers.ValidationError({"screenshare_url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
+
         if value.get("reserve_resources"):
             meeting_url = self.initial_data.get("meeting_url")
             meeting_type = meeting_type_from_url(meeting_url)
@@ -1712,6 +1719,13 @@ class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
         # Check if both have non-empty values
         if url and screenshare_url:
             raise serializers.ValidationError("Cannot provide both url and screenshare_url. Please specify only one.")
+
+        if os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower() != "":
+            voice_agent_url_domain_allowlist = os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower().split(",")
+            if url and not any(url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
+                raise serializers.ValidationError({"url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
+            if screenshare_url and not any(screenshare_url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
+                raise serializers.ValidationError({"screenshare_url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
 
         return data
 
