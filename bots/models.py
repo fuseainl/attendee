@@ -20,7 +20,6 @@ from django.utils.crypto import get_random_string
 
 
 from accounts.models import Organization, User, UserRole
-from bots.models import TranscriptionProviders
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -1636,7 +1635,6 @@ class TranscriptionProviders(models.IntegerChoices):
     OPENAI = 4, "OpenAI"
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
-
     ELEVENLABS = 7, "ElevenLabs"
     KYUTAI = 8, "Kyutai"
 
