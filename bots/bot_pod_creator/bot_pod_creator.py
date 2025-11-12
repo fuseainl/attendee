@@ -53,7 +53,6 @@ class BotPodCreator:
 
         pvc_template = client.V1PersistentVolumeClaimTemplate(
             metadata=client.V1ObjectMeta(
-                name="bot-persistent-storage",
                 labels={"app": self.app_name},
             ),
             spec=pvc_spec,
