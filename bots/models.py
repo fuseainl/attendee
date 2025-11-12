@@ -1727,7 +1727,7 @@ class TranscriptionSettings:
         """
         Determine if streaming should be used based on the transcription provider.
         Returns True for Deepgram with streaming enabled or Kyutai (streaming-only).
-        
+
         Args:
             provider: TranscriptionProviders enum value
         """
