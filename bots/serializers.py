@@ -47,6 +47,19 @@ from .models import (
 )
 
 
+def url_is_allowed_for_voice_agent(url):
+    # If url is empty, allow it
+    if not url:
+        return True
+
+    # If the environment variable is not set, allow all URLs
+    if not os.getenv("VOICE_AGENT_URL_PREFIX_ALLOWLIST"):
+        return True
+
+    voice_agent_url_prefix_allowlist = os.getenv("VOICE_AGENT_URL_PREFIX_ALLOWLIST").split(",")
+    return any(url.startswith(prefix) for prefix in voice_agent_url_prefix_allowlist)
+
+
 def get_openai_model_enum():
     """Get allowed OpenAI models including custom env var if set"""
     default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
@@ -1071,12 +1084,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if screenshare_url and not screenshare_url.lower().startswith("https://"):
             raise serializers.ValidationError({"screenshare_url": "URL must start with https://"})
 
-        if os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower() != "":
-            voice_agent_url_domain_allowlist = os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower().split(",")
-            if url and not any(url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
-                raise serializers.ValidationError({"url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
-            if screenshare_url and not any(screenshare_url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
-                raise serializers.ValidationError({"screenshare_url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
+        if not url_is_allowed_for_voice_agent(url):
+            raise serializers.ValidationError({"url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
+        if not url_is_allowed_for_voice_agent(screenshare_url):
+            raise serializers.ValidationError({"screenshare_url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
 
         if value.get("reserve_resources"):
             meeting_url = self.initial_data.get("meeting_url")
@@ -1720,12 +1731,10 @@ class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
         if url and screenshare_url:
             raise serializers.ValidationError("Cannot provide both url and screenshare_url. Please specify only one.")
 
-        if os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower() != "":
-            voice_agent_url_domain_allowlist = os.getenv("VOICE_AGENT_URL_DOMAIN_ALLOWLIST", "").lower().split(",")
-            if url and not any(url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
-                raise serializers.ValidationError({"url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
-            if screenshare_url and not any(screenshare_url.lower().startswith(domain) for domain in voice_agent_url_domain_allowlist):
-                raise serializers.ValidationError({"screenshare_url": "URL must be in the allowlist of domains. Please set the VOICE_AGENT_URL_DOMAIN_ALLOWLIST environment variable to the comma-separated list of domains."})
+        if not url_is_allowed_for_voice_agent(url):
+            raise serializers.ValidationError({"url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
+        if not url_is_allowed_for_voice_agent(screenshare_url):
+            raise serializers.ValidationError({"screenshare_url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
 
         return data
 
