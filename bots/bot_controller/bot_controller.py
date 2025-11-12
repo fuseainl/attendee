@@ -616,7 +616,7 @@ class BotController:
             return os.path.join(self.get_recording_storage_directory(), self.get_recording_filename())
 
     def get_recording_storage_directory(self):
-        if self.bot_in_db.reserve_additional_recording_storage():
+        if self.bot_in_db.reserve_additional_storage():
             return "/bot-persistent-storage"
         else:
             return "/tmp"
