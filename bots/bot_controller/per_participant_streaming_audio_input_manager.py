@@ -125,6 +125,7 @@ class PerParticipantStreamingAudioInputManager:
                 interim_results=True,
                 language=self.bot.transcription_settings.deepgram_language(),
                 sample_rate=self.sample_rate,
+                model=self.bot.transcription_settings.deepgram_model(),
                 callback=self.bot.transcription_settings.deepgram_callback(),
                 metadata=metadata_list,
                 redaction_settings=self.bot.transcription_settings.deepgram_redaction_settings(),
