@@ -33,15 +33,16 @@ class BotPodCreator:
         default_pod_image = f"nduncan{self.app_name}/{self.app_name}"
         self.image = f"{os.getenv('BOT_POD_IMAGE', default_pod_image)}:{self.app_version}"
 
-    def get_bot_persistent_storage_volume(self):
+    def get_bot_pod_volumes(self):
         """
         Use a generic ephemeral volume backed by PD so we can exceed
         the 10Gi Autopilot local ephemeral-storage cap.
 
         BOT_PERSISTENT_STORAGE_SIZE: e.g. "50Gi"
-        BOT_PERSISTENT_STORAGE_STORAGE_CLASS: e.g. "standard-rwo" or "premium-rwo";
-            if unset, the cluster default StorageClass is used.
         """
+        if not self.add_persistent_storage:
+            return []
+        
         size = os.getenv("BOT_PERSISTENT_STORAGE_SIZE", "50Gi")
 
         pvc_spec = client.V1PersistentVolumeClaimSpec(
@@ -58,14 +59,16 @@ class BotPodCreator:
             spec=pvc_spec,
         )
 
-        return client.V1Volume(
+        return [client.V1Volume(
             name="bot-persistent-storage",
             ephemeral=client.V1EphemeralVolumeSource(
                 volume_claim_template=pvc_template
             ),
-        )
+        ),]
 
     def get_bot_container_volume_mounts(self):
+        if not self.add_persistent_storage:
+            return []
         return [
             client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"),
         ]
@@ -231,6 +234,7 @@ class BotPodCreator:
         bot_name: Optional[str] = None,
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
+        add_persistent_storage: Optional[bool] = False,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -244,6 +248,7 @@ class BotPodCreator:
 
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
+        self.add_persistent_storage = add_persistent_storage
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
@@ -281,7 +286,7 @@ class BotPodCreator:
                 image_pull_secrets=self.get_pod_image_pull_secrets(),
                 termination_grace_period_seconds=60,
                 tolerations= self.get_pod_tolerations(),
-                volumes=[self.get_bot_persistent_storage_volume()]
+                volumes=self.get_bot_pod_volumes(),
             )
         )
 
