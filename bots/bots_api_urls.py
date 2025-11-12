@@ -85,6 +85,11 @@ urlpatterns = [
         name="bot-transcription-settings",
     ),
     path(
+        "bots/<str:object_id>/voice_agent_settings",
+        bots_api_views.VoiceAgentSettingsView.as_view(),
+        name="bot-voice-agent-settings",
+    ),
+    path(
         "bots/<str:object_id>/participant_events",
         bots_api_views.ParticipantEventsView.as_view(),
         name="bot-participant-events",

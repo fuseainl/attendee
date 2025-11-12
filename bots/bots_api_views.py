@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_bot
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -53,6 +53,7 @@ from .serializers import (
     ParticipantEventSerializer,
     ParticipantSerializer,
     PatchBotSerializer,
+    PatchBotVoiceAgentSettingsSerializer,
     RecordingSerializer,
     SpeechSerializer,
     TranscriptUtteranceSerializer,
@@ -1108,6 +1109,54 @@ class SendChatMessageView(APIView):
                 {"error": "Failed to create chat message request"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class VoiceAgentSettingsView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    @extend_schema(
+        operation_id="Update Voice Agent Settings",
+        summary="Update the voice agent settings for a bot",
+        description="Updates the voice agent settings for a bot.",
+        request=PatchBotVoiceAgentSettingsSerializer,
+        responses={
+            200: OpenApiResponse(description="Voice agent settings updated successfully"),
+            400: OpenApiResponse(description="Invalid input"),
+            404: OpenApiResponse(description="Bot not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def patch(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            bot_updated, error = patch_bot_voice_agent_settings(bot, request.data)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                logging.info(f"Patching voice agent settings for bot {bot.object_id}")
+                send_sync_command(bot, "sync_voice_agent_settings")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error patching voice agent settings for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to patch voice agent settings"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class TranscriptionSettingsView(APIView):

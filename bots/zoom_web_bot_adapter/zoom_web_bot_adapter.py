@@ -87,11 +87,13 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         return 8765
 
     def is_sent_video_still_playing(self):
-        return False
+        result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
+        logger.info(f"is_sent_video_still_playing result = {result}")
+        return result
 
     def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}. This is not supported for zoom web")
-        return
+        logger.info(f"send_video called with video_url = {video_url}")
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)})")
 
     def change_gallery_view_page(self, next_page: bool):
         self.driver.execute_script(f"window?.changeGalleryViewPage({json.dumps(next_page)})")
