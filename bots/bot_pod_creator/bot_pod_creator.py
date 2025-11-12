@@ -73,6 +73,13 @@ class BotPodCreator:
             client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"),
         ]
 
+    def get_bot_pod_security_context(self):
+        if not self.add_persistent_storage:
+            return None
+        return client.V1PodSecurityContext(
+            fs_group=1000,
+        )
+
     def get_bot_container_security_context(self):
 
         # It's annoying but if we want chrome sandboxing, we need to use Unconfined seccomp profile 
@@ -281,6 +288,7 @@ class BotPodCreator:
             ),
             spec=client.V1PodSpec(
                 containers=[self.get_bot_container()],
+                security_context=self.get_bot_pod_security_context(),
                 service_account_name=os.getenv("BOT_POD_SERVICE_ACCOUNT_NAME", "default"),
                 restart_policy="Never",
                 image_pull_secrets=self.get_pod_image_pull_secrets(),
