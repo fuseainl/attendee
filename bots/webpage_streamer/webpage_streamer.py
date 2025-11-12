@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__)
 
 import asyncio
 import os
-import sys
 import time
 
 import numpy as np

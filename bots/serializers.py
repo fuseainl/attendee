@@ -858,7 +858,6 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
             "default": False,
         },
     },
-    "oneOf": [{"required": ["url"]}, {"required": ["screenshare_url"]}, {"required": ["reserve_resources"]}],
     "additionalProperties": False,
 }
 
@@ -1058,6 +1057,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         # Set reserve resources to true if url or screenshare_url is provided
         if value.get("url") or value.get("screenshare_url"):
             value["reserve_resources"] = True
+
+        if value.get("url") and value.get("screenshare_url"):
+            raise serializers.ValidationError({"url": "You cannot provide both url and screenshare_url."})
 
         # Validate that url is a proper URL
         url = value.get("url")
