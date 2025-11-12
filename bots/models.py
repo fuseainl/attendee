@@ -18,7 +18,6 @@ from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
-
 from accounts.models import Organization, User, UserRole
 from bots.webhook_utils import trigger_webhook
 
