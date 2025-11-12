@@ -82,10 +82,9 @@ class BotController:
     UTTERANCE_TERMINATION_WAIT_TIME_SECONDS = 300
 
     def per_participant_audio_input_manager(self):
-        # Use streaming manager for Deepgram streaming or Kyutai
-        # (Kyutai is streaming-only)
+        # Use streaming manager for providers that support streaming
         provider = self.get_recording_transcription_provider()
-        if self.bot_in_db.transcription_settings.deepgram_use_streaming() or provider == TranscriptionProviders.KYUTAI:
+        if self.bot_in_db.transcription_settings.use_streaming(provider):
             return self.per_participant_streaming_audio_input_manager
         else:
             return self.per_participant_non_streaming_audio_input_manager

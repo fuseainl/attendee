@@ -61,8 +61,13 @@ class PerParticipantStreamingAudioInputManager:
 
         self.last_nonsilent_audio_time = {}
 
-        self.SILENCE_DURATION_LIMIT = 300  # 5 minutes of inactivity
-        # before finishing transcriber
+        # Set silence duration limit based on provider
+        # Deepgram has tight rate limits on concurrent streams, so we're more aggressive
+        # Kyutai and other providers can handle longer inactive connections
+        if transcription_provider == TranscriptionProviders.DEEPGRAM:
+            self.SILENCE_DURATION_LIMIT = 10  # seconds
+        else:
+            self.SILENCE_DURATION_LIMIT = 300  # 5 minutes of inactivity
 
         self.vad = webrtcvad.Vad()
         self.transcription_provider = transcription_provider
@@ -118,8 +123,9 @@ class PerParticipantStreamingAudioInputManager:
             return DeepgramStreamingTranscriber(
                 deepgram_api_key=self.deepgram_api_key,
                 interim_results=True,
+                language=self.bot.transcription_settings.deepgram_language(),
                 sample_rate=self.sample_rate,
-                callback=self.utterance_handler.handle_utterance,
+                callback=self.bot.transcription_settings.deepgram_callback(),
                 metadata=metadata_list,
                 redaction_settings=self.bot.transcription_settings.deepgram_redaction_settings(),
                 replace_settings=self.bot.transcription_settings.deepgram_replace_settings(),

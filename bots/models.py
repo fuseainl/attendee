@@ -18,7 +18,9 @@ from django.db.utils import IntegrityError
 from django.utils import timezone
 from django.utils.crypto import get_random_string
 
+
 from accounts.models import Organization, User, UserRole
+from bots.models import TranscriptionProviders
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -590,6 +592,17 @@ class TranscriptionSettings:
 
     def deepgram_use_streaming(self):
         return self.deepgram_callback() is not None
+
+    def use_streaming(self, provider):
+        """
+        Determine if streaming should be used based on the transcription provider.
+        Returns True for Deepgram with streaming enabled or Kyutai (streaming-only).
+        """
+        if provider == TranscriptionProviders.KYUTAI:
+            return True
+        if provider == TranscriptionProviders.DEEPGRAM and self.deepgram_use_streaming():
+            return True
+        return False
 
     def deepgram_model(self):
         model_from_settings = self._settings.get("deepgram", {}).get("model", None)
