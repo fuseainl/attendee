@@ -177,7 +177,7 @@ class WebpageStreamer:
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         finally:
-            sys.exit(0)
+            os._exit(0)
 
     def load_webapp(self):
         pcs = set()
