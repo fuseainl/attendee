@@ -281,7 +281,8 @@ class BotPodCreator:
                 restart_policy="Never",
                 image_pull_secrets=self.get_pod_image_pull_secrets(),
                 termination_grace_period_seconds=60,
-                tolerations= self.get_pod_tolerations()
+                tolerations= self.get_pod_tolerations(),
+                volumes=[self.get_bot_persistent_storage_volume()]
             )
         )
 
