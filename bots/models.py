@@ -832,6 +832,12 @@ class Bot(models.Model):
             recording_settings = {}
         return recording_settings.get("record_chat_messages_when_paused", False)
 
+    def reserve_additional_recording_storage(self):
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+        return recording_settings.get("reserve_additional_recording_storage", False)
+
     def record_async_transcription_audio_chunks(self):
         if not self.project.organization.is_async_transcription_enabled:
             return False
