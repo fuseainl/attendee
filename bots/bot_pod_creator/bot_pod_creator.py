@@ -41,7 +41,7 @@ class BotPodCreator:
         BOT_PERSISTENT_STORAGE_SIZE: e.g. "50Gi"
         """
         if not self.add_persistent_storage:
-            return []
+            return None
         
         size = os.getenv("BOT_PERSISTENT_STORAGE_SIZE", "50Gi")
 
@@ -68,7 +68,7 @@ class BotPodCreator:
 
     def get_bot_container_volume_mounts(self):
         if not self.add_persistent_storage:
-            return []
+            return None
         return [
             client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"),
         ]
