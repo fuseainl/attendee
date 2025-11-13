@@ -151,34 +151,34 @@
 
     return outStream;
   };
+
+  // Add microphone audio playback one second after DOM loads
+  window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(async () => {
+      try {
+        // Create and add audio element to the page
+        const microphoneAudio = document.createElement('audio');
+        microphoneAudio.id = 'microphoneAudioInjectedByAttendeeWebsiteStreamer';
+        microphoneAudio.autoplay = true;
+        microphoneAudio.muted = true;
+        document.body.appendChild(microphoneAudio);
+  
+        // Get microphone stream
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  
+        // Connect stream to audio element for playback
+        microphoneAudio.srcObject = stream;
+  
+        // Attempt to play the audio
+        microphoneAudio.play().then(() => {
+          console.log('Microphone audio playing');
+        }).catch(e => {
+          console.error('Autoplay prevented by browser:', e);
+          alert('Autoplay prevented by browser. Click to start audio.');
+        });
+      } catch (error) {
+        console.error('Error setting up microphone audio:', error);
+      }
+    }, 1000); // Wait 1 second after DOM loads
+  });
 })();
-
-// Add microphone audio playback one second after DOM loads
-window.addEventListener('DOMContentLoaded', () => {
-  setTimeout(async () => {
-    try {
-      // Create and add audio element to the page
-      const microphoneAudio = document.createElement('audio');
-      microphoneAudio.id = 'microphoneAudioInjectedByAttendeeWebsiteStreamer';
-      microphoneAudio.autoplay = true;
-      microphoneAudio.muted = true;
-      document.body.appendChild(microphoneAudio);
-
-      // Get microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Connect stream to audio element for playback
-      microphoneAudio.srcObject = stream;
-
-      // Attempt to play the audio
-      microphoneAudio.play().then(() => {
-        console.log('Microphone audio playing');
-      }).catch(e => {
-        console.error('Autoplay prevented by browser:', e);
-        alert('Autoplay prevented by browser. Click to start audio.');
-      });
-    } catch (error) {
-      console.error('Error setting up microphone audio:', error);
-    }
-  }, 1000); // Wait 1 second after DOM loads
-});
