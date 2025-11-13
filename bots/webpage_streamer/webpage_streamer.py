@@ -70,6 +70,7 @@ class LatestFrameTrack(VideoStreamTrack):
                 pass
         await super().stop()
 
+
 def audioframe_to_s16le_bytes(frame: AudioFrame, target_channels=2):
     """
     Convert aiortc AudioFrame to interleaved s16le bytes at 48k stereo.

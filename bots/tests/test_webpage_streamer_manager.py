@@ -12,7 +12,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.start_peer_connection_callback = MagicMock()
         self.play_bot_output_media_stream_callback = MagicMock()
         self.stop_bot_output_media_stream_callback = MagicMock()
-        self.on_message_that_webpage_streamer_started_callback = MagicMock()
+        self.on_message_that_webpage_streamer_connection_can_start_callback = MagicMock()
         self.webpage_streamer_service_hostname = "test-hostname"
 
         self.manager = WebpageStreamerManager(
@@ -20,7 +20,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
             start_peer_connection_callback=self.start_peer_connection_callback,
             play_bot_output_media_stream_callback=self.play_bot_output_media_stream_callback,
             stop_bot_output_media_stream_callback=self.stop_bot_output_media_stream_callback,
-            on_message_that_webpage_streamer_started_callback=self.on_message_that_webpage_streamer_started_callback,
+            on_message_that_webpage_streamer_connection_can_start_callback=self.on_message_that_webpage_streamer_connection_can_start_callback,
             webpage_streamer_service_hostname=self.webpage_streamer_service_hostname,
         )
 
@@ -36,7 +36,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.assertEqual(self.manager.webpage_streamer_service_hostname, self.webpage_streamer_service_hostname)
         self.assertEqual(self.manager.play_bot_output_media_stream_callback, self.play_bot_output_media_stream_callback)
         self.assertEqual(self.manager.stop_bot_output_media_stream_callback, self.stop_bot_output_media_stream_callback)
-        self.assertEqual(self.manager.on_message_that_webpage_streamer_started_callback, self.on_message_that_webpage_streamer_started_callback)
+        self.assertEqual(self.manager.on_message_that_webpage_streamer_connection_can_start_callback, self.on_message_that_webpage_streamer_connection_can_start_callback)
         self.assertFalse(self.manager.webrtc_connection_started)
         self.assertFalse(self.manager.webpage_streamer_has_started)
 
@@ -428,7 +428,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.assertIn("keepalive", call_args[0][0])
         # Should have marked streamer as started and called the callback
         self.assertTrue(self.manager.webpage_streamer_has_started)
-        self.on_message_that_webpage_streamer_started_callback.assert_called_once()
+        self.on_message_that_webpage_streamer_connection_can_start_callback.assert_called_once()
 
     @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
@@ -452,7 +452,7 @@ class TestWebpageStreamerManager(unittest.TestCase):
         self.assertEqual(mock_sleep.call_count, 2)
         mock_post.assert_called_once()
         # Callback should not be called since keepalive failed
-        self.on_message_that_webpage_streamer_started_callback.assert_not_called()
+        self.on_message_that_webpage_streamer_connection_can_start_callback.assert_not_called()
 
     @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
     @patch("bots.bot_controller.webpage_streamer_manager.requests.post")

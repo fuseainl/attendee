@@ -762,11 +762,12 @@ class BotController:
         self.webpage_streamer_manager = None
         if self.bot_in_db.should_launch_webpage_streamer():
             self.webpage_streamer_manager = WebpageStreamerManager(
+                is_bot_ready_for_webpage_streamer_callback=self.adapter.is_bot_ready_for_webpage_streamer,
                 get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
                 start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
                 play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
                 stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
-                on_message_that_webpage_streamer_started_callback=self.on_message_that_webpage_streamer_started,
+                on_message_that_webpage_streamer_connection_can_start_callback=self.on_message_that_webpage_streamer_connection_can_start,
                 webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             )
             self.webpage_streamer_manager.init()
@@ -937,10 +938,6 @@ class BotController:
 
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
-            if not BotEventManager.is_state_that_can_update_voice_agent_settings(self.bot_in_db.state):
-                logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot update voice agent settings")
-                return
-
             self.webpage_streamer_manager.update(url=self.bot_in_db.voice_agent_url(), output_destination=self.bot_in_db.voice_agent_video_output_destination())
         else:
             logger.info("Bot should not launch webpage streamer, so not starting webpage streamer manager")
@@ -1253,7 +1250,7 @@ class BotController:
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
 
-    def on_message_that_webpage_streamer_started(self):
+    def on_message_that_webpage_streamer_connection_can_start(self):
         GLib.idle_add(lambda: self.take_action_based_on_voice_agent_settings_in_db())
 
     def add_participant_event(self, event):
@@ -1679,13 +1676,6 @@ class BotController:
             # If there are any image media requests, this will start playing them
             # For now the only type of media request is an image, so this will start showing the bot's image
             self.take_action_based_on_image_media_requests_in_db()
-            return
-
-        if message.get("message") == BotAdapter.Messages.READY_TO_SHOW_WEBPAGE_STREAM:
-            logger.info("Received message that bot is ready to show webpage stream")
-            # If there are any webpage stream media requests, this will start playing them
-            # For now the only type of media request is a webpage stream, so this will start showing the bot's webpage stream
-            self.take_action_based_on_voice_agent_settings_in_db()
             return
 
         if message.get("message") == BotAdapter.Messages.BOT_RECORDING_PERMISSION_GRANTED:
