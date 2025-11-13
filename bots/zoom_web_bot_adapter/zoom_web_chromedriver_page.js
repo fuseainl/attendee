@@ -322,6 +322,7 @@ function startMeeting(signature) {
 
         if (permissionChange.allow === false)
         {
+            recordingPermissionGranted = false;
             window.ws.sendJson({
                 type: 'RecordingPermissionChange',
                 change: 'denied'
