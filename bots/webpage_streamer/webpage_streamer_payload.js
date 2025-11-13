@@ -24,11 +24,22 @@
 
       const remoteAudioStream = await new Promise(async (resolve, reject) => {
         let resolved = false;
+        
+        // Set a timeout to alert if remote mediastream is not received
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            const errorMsg = 'Failed to receive remote audio stream within 10 seconds';
+            alert(errorMsg);
+            reject(new Error(errorMsg));
+          }
+        }, 10000); // 10 second timeout
 
         pc.addEventListener("track", (event) => {
           if (resolved) return;
           if (event.track.kind === "audio") {
             resolved = true;
+            clearTimeout(timeout); // Clear the timeout since we got the track
             const stream =
               event.streams && event.streams[0]
                 ? event.streams[0]
