@@ -15,6 +15,7 @@ var recordingToken = zoomInitialData.joinToken || zoomInitialData.appPrivilegeTo
 var zakToken = zoomInitialData.zakToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var recordingPermissionGranted = false;
 
 class TranscriptMessageFinalizationManager {
     constructor() {
@@ -244,6 +245,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfJoinedUserIsHost(dataWithState);
     });
 
     ZoomMtg.inMeetingServiceListener('onUserLeave', function (data) {
@@ -311,10 +313,7 @@ function startMeeting(signature) {
         {
             ZoomMtg.mediaCapture({record: "start", success: (success) => {
                 console.log('mediaCapture success', success);
-                window.ws.sendJson({
-                    type: 'RecordingPermissionChange',
-                    change: 'granted'
-                });
+                onRecordingPermissionGranted();
             }, error: (error) => {
                 console.log('mediaCapture error', error);
             }});
@@ -425,10 +424,7 @@ function askForMediaCapturePermission() {
         // Attempt to start capture
         ZoomMtg.mediaCapture({record: "start", success: (success) => {
             // If it succeeds, great, we're done.
-            window.ws.sendJson({
-                type: 'RecordingPermissionChange',
-                change: 'granted'
-            });
+            onRecordingPermissionGranted();
 
         }, error: (error) => {
             // Also try to close the you need to ask for permission modal
@@ -447,6 +443,28 @@ function askForMediaCapturePermission() {
             }});
         }});
     }, 1000);
+}
+
+function requestPermissionToRecordIfJoinedUserIsHost(data) {
+    if (!data.isHost)
+        return;
+    if (recordingPermissionGranted)
+        return;
+
+    // Ask for permission
+    ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
+        console.log('mediaCapturePermission success', success);
+    }, error: (error) => {
+        console.log('mediaCapturePermission error', error);
+    }});
+}
+
+function onRecordingPermissionGranted() {
+    recordingPermissionGranted = true;
+    window.ws.sendJson({
+        type: 'RecordingPermissionChange',
+        change: 'granted'
+    });
 }
 
 window.askForMediaCapturePermission = askForMediaCapturePermission;
