@@ -16,6 +16,7 @@ var zakToken = zoomInitialData.zakToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
 var recordingPermissionGranted = false;
+var madeInitialRequestForRecordingPermission = false;
 
 class TranscriptMessageFinalizationManager {
     constructor() {
@@ -420,6 +421,7 @@ function closeRequestPermissionModal() {
 window.sendChatMessage = sendChatMessage;
 
 function askForMediaCapturePermission() {
+    madeInitialRequestForRecordingPermission = true;
     // We need to wait a second to ask for permission because of this issue:
     // https://devforum.zoom.us/t/error-in-mediacapturepermission-api-typeerror-cannot-read-properties-of-undefined-reading-caps/96683/6
     setTimeout(() => {
@@ -451,6 +453,8 @@ function requestPermissionToRecordIfUserIsHost(data) {
     if (!data.isHost)
         return;
     if (recordingPermissionGranted)
+        return;
+    if (!madeInitialRequestForRecordingPermission)
         return;
 
     setTimeout(() => {
