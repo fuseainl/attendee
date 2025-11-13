@@ -245,7 +245,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
-        requestPermissionToRecordIfJoinedUserIsHost(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
     ZoomMtg.inMeetingServiceListener('onUserLeave', function (data) {
@@ -302,6 +302,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
 
@@ -445,18 +446,26 @@ function askForMediaCapturePermission() {
     }, 1000);
 }
 
-function requestPermissionToRecordIfJoinedUserIsHost(data) {
+function requestPermissionToRecordIfUserIsHost(data) {
     if (!data.isHost)
         return;
     if (recordingPermissionGranted)
         return;
 
-    // Ask for permission
-    ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
-        console.log('mediaCapturePermission success', success);
-    }, error: (error) => {
-        console.log('mediaCapturePermission error', error);
-    }});
+    setTimeout(() => {
+        if (recordingPermissionGranted)
+            return;
+        window.ws?.sendJson({
+            type: 'RequestingRecordingPermissionAfterHostJoin',
+            userData: data
+        });
+        // Ask for permission
+        ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
+            console.log('mediaCapturePermission success', success);
+        }, error: (error) => {
+            console.log('mediaCapturePermission error', error);
+        }});
+    }, 1000);
 }
 
 function onRecordingPermissionGranted() {
