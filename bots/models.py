@@ -1668,6 +1668,7 @@ class Participant(models.Model):
 class ParticipantEventTypes(models.IntegerChoices):
     JOIN = 1, "Join"
     LEAVE = 2, "Leave"
+    UPDATE = 5, "Update"  # Leave space for possible speech start / stop events
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1675,6 +1676,7 @@ class ParticipantEventTypes(models.IntegerChoices):
         mapping = {
             cls.JOIN: "join",
             cls.LEAVE: "leave",
+            cls.UPDATE: "update",
         }
         return mapping.get(value)
 

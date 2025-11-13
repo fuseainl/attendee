@@ -167,6 +167,16 @@ class WebBotAdapter(BotAdapter):
             self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.JOIN, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
             return
 
+        if bool(user_before.get("isHost")) != bool(user.get("isHost")):
+            changes = {
+                "isHost": {
+                    "before": user_before.get("isHost"),
+                    "after": user.get("isHost"),
+                }
+            }
+            self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.UPDATE, "event_data": changes, "timestamp_ms": int(time.time() * 1000)})
+            return
+
     def process_video_frame(self, message):
         if self.recording_paused:
             return

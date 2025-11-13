@@ -42,6 +42,7 @@ from bots.models import (
     MeetingTypes,
     Participant,
     ParticipantEvent,
+    ParticipantEventTypes,
     RealtimeTriggerTypes,
     Recording,
     RecordingFormats,
@@ -1267,6 +1268,14 @@ class BotController:
                 "is_host": participant["participant_is_host"],
             },
         )
+
+        if event["event_type"] == ParticipantEventTypes.UPDATE:
+            if "isHost" in event["event_data"]:
+                participant.is_host = event["event_data"]["isHost"]["after"]
+                participant.save()
+                logger.info(f"Updated participant {participant.object_id} is host to {participant.is_host}")
+            # Don't save this event type in the database for now.
+            return
 
         participant_event = ParticipantEvent.objects.create(
             participant=participant,
