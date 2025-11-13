@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import datetime
 import hashlib
 import json
@@ -285,7 +286,7 @@ class WebBotAdapter(BotAdapter):
         if not settings.MASK_TRANSCRIPT_IN_LOGS:
             return json_data
 
-        json_data_masked = json_data.copy()
+        json_data_masked = copy.deepcopy(json_data)
         if json_data.get("caption") and json_data.get("caption").get("text"):
             json_data_masked["caption"]["text"] = hashlib.sha256(json_data.get("caption").get("text").encode("utf-8")).hexdigest()
         return json_data_masked
