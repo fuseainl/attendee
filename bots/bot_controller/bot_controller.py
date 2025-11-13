@@ -766,8 +766,10 @@ class BotController:
                 start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
                 play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
                 stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
+                on_message_that_webpage_streamer_started_callback=self.on_message_that_webpage_streamer_started,
                 webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             )
+            self.webpage_streamer_manager.init()
 
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
 
@@ -935,6 +937,10 @@ class BotController:
 
     def take_action_based_on_voice_agent_settings_in_db(self):
         if self.bot_in_db.should_launch_webpage_streamer():
+            if not BotEventManager.is_state_that_can_update_voice_agent_settings(self.bot_in_db.state):
+                logger.info(f"Bot {self.bot_in_db.object_id} is in state {BotStates.state_to_api_code(self.bot_in_db.state)} and cannot update voice agent settings")
+                return
+
             self.webpage_streamer_manager.update(url=self.bot_in_db.voice_agent_url(), output_destination=self.bot_in_db.voice_agent_video_output_destination())
         else:
             logger.info("Bot should not launch webpage streamer, so not starting webpage streamer manager")
@@ -1246,6 +1252,9 @@ class BotController:
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
+
+    def on_message_that_webpage_streamer_started(self):
+        GLib.idle_add(lambda: self.take_action_based_on_voice_agent_settings_in_db())
 
     def add_participant_event(self, event):
         logger.info(f"Adding participant event: {event}")
