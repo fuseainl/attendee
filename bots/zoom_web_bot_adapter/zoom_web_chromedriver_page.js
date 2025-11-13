@@ -454,11 +454,11 @@ function requestPermissionToRecordIfUserIsHost(data) {
         return;
     if (recordingPermissionGranted)
         return;
-    if (!madeInitialRequestForRecordingPermission)
-        return;
 
     setTimeout(() => {
         if (recordingPermissionGranted)
+            return;
+        if (!madeInitialRequestForRecordingPermission)
             return;
         window.ws?.sendJson({
             type: 'RequestingRecordingPermissionAfterHostJoin',
