@@ -1288,6 +1288,10 @@ class BotController:
         if participant.is_the_bot:
             return
 
+        # Don't send webhook for non join / leave events
+        if participant_event.event_type != ParticipantEventTypes.JOIN and participant_event.event_type != ParticipantEventTypes.LEAVE:
+            return
+
         trigger_webhook(
             webhook_trigger_type=WebhookTriggerTypes.PARTICIPANT_EVENTS_JOIN_LEAVE,
             bot=self.bot_in_db,
