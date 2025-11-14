@@ -1,5 +1,7 @@
 import asyncio
+import copy
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -9,6 +11,7 @@ from time import sleep
 
 import numpy as np
 import requests
+from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
 from websockets.sync.server import serve
@@ -164,6 +167,16 @@ class WebBotAdapter(BotAdapter):
             self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.JOIN, "event_data": {}, "timestamp_ms": int(time.time() * 1000)})
             return
 
+        if bool(user_before.get("isHost")) != bool(user.get("isHost")):
+            changes = {
+                "isHost": {
+                    "before": user_before.get("isHost"),
+                    "after": user.get("isHost"),
+                }
+            }
+            self.add_participant_event_callback({"participant_uuid": user["deviceId"], "event_type": ParticipantEventTypes.UPDATE, "event_data": changes, "timestamp_ms": int(time.time() * 1000)})
+            return
+
     def process_video_frame(self, message):
         if self.recording_paused:
             return
@@ -279,6 +292,15 @@ class WebBotAdapter(BotAdapter):
 
         self.upsert_chat_message_callback(json_data)
 
+    def mask_transcript_if_required(self, json_data):
+        if not settings.MASK_TRANSCRIPT_IN_LOGS:
+            return json_data
+
+        json_data_masked = copy.deepcopy(json_data)
+        if json_data.get("caption") and json_data.get("caption").get("text"):
+            json_data_masked["caption"]["text"] = hashlib.sha256(json_data.get("caption").get("text").encode("utf-8")).hexdigest()
+        return json_data_masked
+
     def handle_websocket(self, websocket):
         audio_format = None
 
@@ -289,7 +311,10 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
-                    logger.info("Received JSON message: %s", json_data)
+                    if json_data.get("type") == "CaptionUpdate":
+                        logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
+                    else:
+                        logger.info("Received JSON message: %s", json_data)
 
                     # Handle audio format information
                     if isinstance(json_data, dict):

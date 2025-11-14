@@ -15,6 +15,8 @@ var recordingToken = zoomInitialData.joinToken || zoomInitialData.appPrivilegeTo
 var zakToken = zoomInitialData.zakToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var recordingPermissionGranted = false;
+var madeInitialRequestForRecordingPermission = false;
 
 class TranscriptMessageFinalizationManager {
     constructor() {
@@ -244,6 +246,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
     ZoomMtg.inMeetingServiceListener('onUserLeave', function (data) {
@@ -300,6 +303,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
 
@@ -311,10 +315,7 @@ function startMeeting(signature) {
         {
             ZoomMtg.mediaCapture({record: "start", success: (success) => {
                 console.log('mediaCapture success', success);
-                window.ws.sendJson({
-                    type: 'RecordingPermissionChange',
-                    change: 'granted'
-                });
+                onRecordingPermissionGranted();
             }, error: (error) => {
                 console.log('mediaCapture error', error);
             }});
@@ -322,6 +323,7 @@ function startMeeting(signature) {
 
         if (permissionChange.allow === false)
         {
+            recordingPermissionGranted = false;
             window.ws.sendJson({
                 type: 'RecordingPermissionChange',
                 change: 'denied'
@@ -419,16 +421,14 @@ function closeRequestPermissionModal() {
 window.sendChatMessage = sendChatMessage;
 
 function askForMediaCapturePermission() {
+    madeInitialRequestForRecordingPermission = true;
     // We need to wait a second to ask for permission because of this issue:
     // https://devforum.zoom.us/t/error-in-mediacapturepermission-api-typeerror-cannot-read-properties-of-undefined-reading-caps/96683/6
     setTimeout(() => {
         // Attempt to start capture
         ZoomMtg.mediaCapture({record: "start", success: (success) => {
             // If it succeeds, great, we're done.
-            window.ws.sendJson({
-                type: 'RecordingPermissionChange',
-                change: 'granted'
-            });
+            onRecordingPermissionGranted();
 
         }, error: (error) => {
             // Also try to close the you need to ask for permission modal
@@ -447,6 +447,38 @@ function askForMediaCapturePermission() {
             }});
         }});
     }, 1000);
+}
+
+function requestPermissionToRecordIfUserIsHost(data) {
+    if (!data.isHost)
+        return;
+    if (recordingPermissionGranted)
+        return;
+
+    setTimeout(() => {
+        if (recordingPermissionGranted)
+            return;
+        if (!madeInitialRequestForRecordingPermission)
+            return;
+        window.ws?.sendJson({
+            type: 'RequestingRecordingPermissionAfterHostJoin',
+            userData: data
+        });
+        // Ask for permission
+        ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
+            console.log('mediaCapturePermission success', success);
+        }, error: (error) => {
+            console.log('mediaCapturePermission error', error);
+        }});
+    }, 1000);
+}
+
+function onRecordingPermissionGranted() {
+    recordingPermissionGranted = true;
+    window.ws.sendJson({
+        type: 'RecordingPermissionChange',
+        change: 'granted'
+    });
 }
 
 window.askForMediaCapturePermission = askForMediaCapturePermission;

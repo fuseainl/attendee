@@ -1,5 +1,6 @@
 import logging
 import queue
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -32,8 +33,25 @@ class PerParticipantNonStreamingAudioInputManager:
         self.SILENCE_DURATION_LIMIT = silence_duration_limit
         self.vad = webrtcvad.Vad()
 
+        self.reset_diagnostic_info()
+
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
         self.queue.put((speaker_id, chunk_time, chunk_bytes))
+        self.diagnostic_info["total_chunks_added"] += 1
+
+    def reset_diagnostic_info(self):
+        self.diagnostic_info = {
+            "total_chunks_added": 0,
+            "total_chunks_marked_as_silent_due_to_vad": 0,
+            "total_chunks_marked_as_silent_due_to_rms_being_small": 0,
+            "total_chunks_marked_as_silent_due_to_rms_being_zero": 0,
+        }
+        self.last_diagnostic_info_print_time = time.time()
+
+    def print_diagnostic_info(self):
+        if time.time() - self.last_diagnostic_info_print_time >= 30:
+            logger.info(f"PerParticipantNonStreamingAudioInputManager diagnostic info: {self.diagnostic_info}")
+            self.reset_diagnostic_info()
 
     def process_chunks(self):
         while not self.queue.empty():
@@ -42,6 +60,8 @@ class PerParticipantNonStreamingAudioInputManager:
 
         for speaker_id in list(self.first_nonsilent_audio_time.keys()):
             self.process_chunk(speaker_id, datetime.utcnow(), None)
+
+        self.print_diagnostic_info()
 
     # When the meeting ends, we need to flush all utterances. Do this by pretending that we received a chunk of silence at the end of the meeting.
     def flush_utterances(self):
@@ -53,9 +73,17 @@ class PerParticipantNonStreamingAudioInputManager:
             )
 
     def silence_detected(self, chunk_bytes):
-        if calculate_normalized_rms(chunk_bytes) < 0.01:
+        rms_value = calculate_normalized_rms(chunk_bytes)
+        if rms_value == 0:
+            self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_zero"] += 1
             return True
-        return not self.vad.is_speech(chunk_bytes, self.sample_rate)
+        if rms_value < 0.01:
+            self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_small"] += 1
+            return True
+        if not self.vad.is_speech(chunk_bytes, self.sample_rate):
+            self.diagnostic_info["total_chunks_marked_as_silent_due_to_vad"] += 1
+            return True
+        return False
 
     def process_chunk(self, speaker_id, chunk_time, chunk_bytes):
         audio_is_silent = self.silence_detected(chunk_bytes) if chunk_bytes else True

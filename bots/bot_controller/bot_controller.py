@@ -42,6 +42,7 @@ from bots.models import (
     MeetingTypes,
     Participant,
     ParticipantEvent,
+    ParticipantEventTypes,
     RealtimeTriggerTypes,
     Recording,
     RecordingFormats,
@@ -1274,6 +1275,14 @@ class BotController:
             },
         )
 
+        if event["event_type"] == ParticipantEventTypes.UPDATE:
+            if "isHost" in event["event_data"]:
+                participant.is_host = event["event_data"]["isHost"]["after"]
+                participant.save()
+                logger.info(f"Updated participant {participant.object_id} is host to {participant.is_host}")
+            # Don't save this event type in the database for now.
+            return
+
         participant_event = ParticipantEvent.objects.create(
             participant=participant,
             event_type=event["event_type"],
@@ -1283,6 +1292,10 @@ class BotController:
 
         # Don't send webhook for the bot itself
         if participant.is_the_bot:
+            return
+
+        # Don't send webhook for non join / leave events
+        if participant_event.event_type != ParticipantEventTypes.JOIN and participant_event.event_type != ParticipantEventTypes.LEAVE:
             return
 
         trigger_webhook(
