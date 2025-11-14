@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 
 from selenium.common.exceptions import TimeoutException
@@ -10,6 +9,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
 
+from .zoom_web_static_server import start_zoom_web_static_server
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,23 +19,18 @@ class ZoomWebUIMethods:
         self.driver = driver
 
     def attempt_to_join_meeting(self):
-        # Get the directory of the current file and construct path to HTML file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        html_file_path = os.path.join(current_dir, "zoom_web_chromedriver_page.html")
-        file_url = f"file://{html_file_path}"
+        # Serve the HTML from a tiny local HTTP
+        port = start_zoom_web_static_server()
+        http_url = f"http://127.0.0.1:{port}/zoom_web_chromedriver_page.html"
+        logger.info(f"Serving Zoom Web SDK HTML from {http_url}")
 
-        self.driver.get(file_url)
+        self.driver.get(http_url)
 
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
             {
-                "origin": file_url,
-                "permissions": [
-                    "geolocation",
-                    "audioCapture",
-                    "displayCapture",
-                    "videoCapture",
-                ],
+                "origin": f"http://127.0.0.1:{port}",
+                "permissions": ["geolocation", "audioCapture", "displayCapture", "videoCapture"],
             },
         )
 

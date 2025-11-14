@@ -15,6 +15,8 @@ var recordingToken = zoomInitialData.joinToken || zoomInitialData.appPrivilegeTo
 var zakToken = zoomInitialData.zakToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var recordingPermissionGranted = false;
+var madeInitialRequestForRecordingPermission = false;
 
 class TranscriptMessageFinalizationManager {
     constructor() {
@@ -59,6 +61,8 @@ function startMeeting(signature) {
 
   document.getElementById('zmmtg-root').style.display = 'block'
 
+    const defaultView = window.initialData.recordingView === 'gallery_view' ? 'gallery' : 'speaker';
+
     ZoomMtg.init({
         leaveUrl: leaveUrl,
         patchJsMedia: true,
@@ -66,6 +70,7 @@ function startMeeting(signature) {
         disableZoomLogo: true,
         disablePreview: true,
         enableWaitingRoomPreview: false,
+        defaultView: defaultView,
         //isSupportCC: true,
         //disableJoinAudio: true,
         //isSupportAV: false,
@@ -241,6 +246,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
     ZoomMtg.inMeetingServiceListener('onUserLeave', function (data) {
@@ -297,6 +303,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
 
@@ -308,10 +315,7 @@ function startMeeting(signature) {
         {
             ZoomMtg.mediaCapture({record: "start", success: (success) => {
                 console.log('mediaCapture success', success);
-                window.ws.sendJson({
-                    type: 'RecordingPermissionChange',
-                    change: 'granted'
-                });
+                onRecordingPermissionGranted();
             }, error: (error) => {
                 console.log('mediaCapture error', error);
             }});
@@ -319,6 +323,7 @@ function startMeeting(signature) {
 
         if (permissionChange.allow === false)
         {
+            recordingPermissionGranted = false;
             window.ws.sendJson({
                 type: 'RecordingPermissionChange',
                 change: 'denied'
@@ -354,6 +359,30 @@ function sendChatMessage(text, to_user_uuid ) {
             console.log('sendChatMessage error', error);
         }
     });
+}
+
+function changeGalleryViewPage(changeToNextPage) {
+    /*
+    HTML looks like this:
+    <button type="button" class="gallery-video-container__switch-button gallery-video-container__switch-button--back"><div class="gallery-video-container__arrow gallery-video-container__arrow--back"></div><div class="gallery-video-container__pagination">1/5</div></button>
+    <button type="button" class="gallery-video-container__switch-button" style="right: 0px;"><div class="gallery-video-container__arrow gallery-video-container__arrow--next"></div><div class="gallery-video-container__pagination">1/5</div></button>
+    */
+    try {
+        let button;
+        if (changeToNextPage) {
+            // Find the next button (the one without the --back modifier)
+            button = document.querySelector('.gallery-video-container__switch-button:not(.gallery-video-container__switch-button--back)');
+        } else {
+            // Find the back/previous button
+            button = document.querySelector('.gallery-video-container__switch-button--back');
+        }
+        
+        if (button) {
+            button.click();
+        }
+    } catch (error) {
+        // Do nothing if button cannot be identified
+    }
 }
 
 function closeRequestPermissionModal() {
@@ -392,31 +421,64 @@ function closeRequestPermissionModal() {
 window.sendChatMessage = sendChatMessage;
 
 function askForMediaCapturePermission() {
+    madeInitialRequestForRecordingPermission = true;
     // We need to wait a second to ask for permission because of this issue:
     // https://devforum.zoom.us/t/error-in-mediacapturepermission-api-typeerror-cannot-read-properties-of-undefined-reading-caps/96683/6
     setTimeout(() => {
         // Attempt to start capture
         ZoomMtg.mediaCapture({record: "start", success: (success) => {
             // If it succeeds, great, we're done.
-            window.ws.sendJson({
-                type: 'RecordingPermissionChange',
-                change: 'granted'
-            });
+            onRecordingPermissionGranted();
 
         }, error: (error) => {
+            // Also try to close the you need to ask for permission modal
+            setTimeout(() => {
+                closeRequestPermissionModal();
+            }, 500);
+
             // If it fails, we need to ask for permission
+            // If this line throws this error 
+            // https://devforum.zoom.us/t/web-sdk-typeerror-cannot-read-properties-of-undefined-reading-caps/122712
+            // it's because host was not present
             ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
                 console.log('mediaCapturePermission success', success);
             }, error: (error) => {
                 console.log('mediaCapturePermission error', error);
             }});
-
-            // Also try to close the you need to ask for permission modal
-            setTimeout(() => {
-                closeRequestPermissionModal();
-            }, 500);
         }});
     }, 1000);
+}
+
+function requestPermissionToRecordIfUserIsHost(data) {
+    if (!data.isHost)
+        return;
+    if (recordingPermissionGranted)
+        return;
+
+    setTimeout(() => {
+        if (recordingPermissionGranted)
+            return;
+        if (!madeInitialRequestForRecordingPermission)
+            return;
+        window.ws?.sendJson({
+            type: 'RequestingRecordingPermissionAfterHostJoin',
+            userData: data
+        });
+        // Ask for permission
+        ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
+            console.log('mediaCapturePermission success', success);
+        }, error: (error) => {
+            console.log('mediaCapturePermission error', error);
+        }});
+    }, 1000);
+}
+
+function onRecordingPermissionGranted() {
+    recordingPermissionGranted = true;
+    window.ws.sendJson({
+        type: 'RecordingPermissionChange',
+        change: 'granted'
+    });
 }
 
 window.askForMediaCapturePermission = askForMediaCapturePermission;

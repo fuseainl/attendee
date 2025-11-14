@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Callable
 
 from bots.google_meet_bot_adapter.google_meet_ui_methods import (
     GoogleMeetUIMethods,
@@ -14,10 +15,33 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self,
         *args,
         google_meet_closed_captions_language: str | None,
+        google_meet_bot_login_is_available: bool,
+        google_meet_bot_login_should_be_used: bool,
+        create_google_meet_bot_login_session_callback: Callable[[], dict],
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.google_meet_closed_captions_language = google_meet_closed_captions_language
+        self.google_meet_bot_login_is_available = google_meet_bot_login_is_available
+        self.google_meet_bot_login_should_be_used = google_meet_bot_login_should_be_used and google_meet_bot_login_is_available
+        self.create_google_meet_bot_login_session_callback = create_google_meet_bot_login_session_callback
+        self.google_meet_bot_login_session = None
+
+    def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
+        # If we don't have the ability to login, we can't retry
+        if not self.google_meet_bot_login_is_available:
+            logger.info("Meeting requires login, but Google meet bot login is not available, so we can't retry")
+            return False
+
+        # If we already tried to login, we can't retry
+        if self.google_meet_bot_login_should_be_used:
+            logger.info("Meeting requires login, but we already tried to login, so we can't retry")
+            return False
+
+        # Activate the flag that says, we are going to login this time and then retry
+        self.google_meet_bot_login_should_be_used = True
+        logger.info("Meeting requires login and Google meet bot login is available, so we will retry by logging in")
+        return True
 
     def get_chromedriver_payload_file_name(self):
         return "google_meet_bot_adapter/google_meet_chromedriver_payload.js"
@@ -42,3 +66,15 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
+
+    def add_subclass_specific_chrome_options(self, options):
+        if self.google_meet_bot_login_should_be_used:
+            options.add_argument("--guest")
+
+    def subclass_specific_before_driver_close(self):
+        if self.google_meet_bot_login_session:
+            logger.info("Navigating to the logout page to sign out of the Google account")
+            try:
+                self.driver.get("https://www.google.com/accounts/logout")
+            except Exception as e:
+                logger.info(f"Error navigating to the logout page to sign out of the Google account: {e}")

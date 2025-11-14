@@ -37,6 +37,7 @@ from .serializers import (
     CreateBotSerializer,
     PatchBotSerializer,
     PatchBotTranscriptionSettingsSerializer,
+    PatchBotVoiceAgentSettingsSerializer,
 )
 from .utils import transcription_provider_from_bot_creation_data
 
@@ -207,6 +208,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     recording_settings = serializer.validated_data["recording_settings"]
     debug_settings = serializer.validated_data["debug_settings"]
     automatic_leave_settings = serializer.validated_data["automatic_leave_settings"]
+    google_meet_settings = serializer.validated_data["google_meet_settings"]
     teams_settings = serializer.validated_data["teams_settings"]
     zoom_settings = serializer.validated_data["zoom_settings"]
     bot_image = serializer.validated_data["bot_image"]
@@ -235,6 +237,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "recording_settings": recording_settings,
         "debug_settings": debug_settings,
         "automatic_leave_settings": automatic_leave_settings,
+        "google_meet_settings": google_meet_settings,
         "teams_settings": teams_settings,
         "zoom_settings": zoom_settings,
         "websocket_settings": websocket_settings,
@@ -292,6 +295,40 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         error_id = str(uuid.uuid4())
         logger.error(f"Error creating bot (error_id={error_id}): {e}")
         return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
+
+
+def patch_bot_voice_agent_settings(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
+    # Check if bot is in a state that allows updating voice agent settings
+    if not BotEventManager.is_state_that_can_update_voice_agent_settings(bot.state):
+        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot update voice agent settings"}
+
+    # Check if bot launched a webpage streamer
+    if not bot.should_launch_webpage_streamer():
+        return None, {"error": "Voice agent resources were not reserved. You must create the bot with voice_agent_settings.reserve_resources set to true."}
+
+    # Validate the request data
+    serializer = PatchBotVoiceAgentSettingsSerializer(data=data)
+    if not serializer.is_valid():
+        return None, serializer.errors
+
+    validated_data = serializer.validated_data
+
+    # Update the bot in the DB. Handle concurrency conflict
+    # Only legal update is to update the teams closed captions language
+    try:
+        if "url" in validated_data:
+            bot.settings["voice_agent_settings"]["url"] = validated_data.get("url")
+            if "screenshare_url" in bot.settings["voice_agent_settings"]:
+                del bot.settings["voice_agent_settings"]["screenshare_url"]
+        if "screenshare_url" in validated_data:
+            bot.settings["voice_agent_settings"]["screenshare_url"] = validated_data.get("screenshare_url")
+            if "url" in bot.settings["voice_agent_settings"]:
+                del bot.settings["voice_agent_settings"]["url"]
+        bot.save()
+    except RecordModifiedError:
+        return None, {"error": "Version conflict. Please try again."}
+
+    return bot, None
 
 
 def patch_bot_transcription_settings(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:

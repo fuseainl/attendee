@@ -72,5 +72,6 @@ LOGGING = {
             "level": os.getenv("ATTENDEE_LOG_LEVEL", "INFO"),
             "propagate": False,
         },
+        "xmlschema": {"level": "WARNING", "handlers": ["console"], "propagate": False},
     },
 }

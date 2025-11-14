@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_bot
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
@@ -39,6 +39,7 @@ from .models import (
     Participant,
     ParticipantEvent,
     Recording,
+    RecordingViews,
     Utterance,
 )
 from .serializers import (
@@ -52,6 +53,7 @@ from .serializers import (
     ParticipantEventSerializer,
     ParticipantSerializer,
     PatchBotSerializer,
+    PatchBotVoiceAgentSettingsSerializer,
     RecordingSerializer,
     SpeechSerializer,
     TranscriptUtteranceSerializer,
@@ -1109,6 +1111,54 @@ class SendChatMessageView(APIView):
             )
 
 
+class VoiceAgentSettingsView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    @extend_schema(
+        operation_id="Update Voice Agent Settings",
+        summary="Update the voice agent settings for a bot",
+        description="Updates the voice agent settings for a bot.",
+        request=PatchBotVoiceAgentSettingsSerializer,
+        responses={
+            200: OpenApiResponse(description="Voice agent settings updated successfully"),
+            400: OpenApiResponse(description="Invalid input"),
+            404: OpenApiResponse(description="Bot not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def patch(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            bot_updated, error = patch_bot_voice_agent_settings(bot, request.data)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                logging.info(f"Patching voice agent settings for bot {bot.object_id}")
+                send_sync_command(bot, "sync_voice_agent_settings")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error patching voice agent settings for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to patch voice agent settings"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
 class TranscriptionSettingsView(APIView):
     authentication_classes = [ApiKeyAuthentication]
 
@@ -1166,6 +1216,51 @@ class AdmitFromWaitingRoomView(APIView):
                 logging.error(f"Error admitting from waiting room for bot {bot.object_id}: {str(e)}")
                 return Response(
                     {"error": "Failed to admit from waiting room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ChangeGalleryViewPageView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(exclude=True)
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            # This functionality is only supported for zoom bots
+            meeting_type = meeting_type_from_url(bot.meeting_url)
+            if meeting_type != MeetingTypes.ZOOM:
+                return Response({"error": "Changing gallery view page is not supported for this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
+            if not bot.use_zoom_web_adapter():
+                return Response({"error": "Changing gallery view page is only supported for Zoom Web SDK"}, status=status.HTTP_400_BAD_REQUEST)
+            if bot.recording_view() != RecordingViews.GALLERY_VIEW:
+                return Response({"error": "Changing gallery view page is only supported for when recording in gallery view"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if bot is in a state that allows changing the gallery view page
+            if not BotEventManager.is_state_that_can_change_gallery_view_page(bot.state):
+                return Response(
+                    {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot change the gallery view page"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            direction = request.data.get("direction", "next")
+            sync_command_to_send = "change_gallery_view_page_next" if direction == "next" else "change_gallery_view_page_previous"
+
+            # Call the utility method on the bot instance to change the gallery view page
+            try:
+                logging.info(f"Changing gallery view page for bot {bot.object_id} to {direction}")
+
+                send_sync_command(bot, sync_command_to_send)
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error changing gallery view page for bot {bot.object_id} to {direction}: {str(e)}")
+                return Response(
+                    {"error": f"Failed to change gallery view page for bot {bot.object_id} to {direction}"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 

@@ -34,6 +34,8 @@ from .models import (
     ChatMessage,
     Credentials,
     CreditTransaction,
+    GoogleMeetBotLogin,
+    GoogleMeetBotLoginGroup,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -95,6 +97,14 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=calendar_event.calendar.project, user=user).exists():
         raise PermissionDenied
     return calendar_event
+
+
+def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
+    google_meet_bot_login = get_object_or_404(GoogleMeetBotLogin, object_id=google_meet_bot_login_object_id, group__project__organization=user.organization)
+    # If you're an admin you can access any Google Meet bot login in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
+        raise PermissionDenied
+    return google_meet_bot_login
 
 
 def get_webhook_options_for_project(project):
@@ -383,6 +393,9 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Try to get existing zoom oauth app
         zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
 
+        # Try to get existing google meet bot login group
+        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=project).first()
+
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
 
@@ -408,6 +421,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context.update(
             {
                 "zoom_oauth_app": zoom_oauth_app,
+                "google_meet_bot_login_group": google_meet_bot_login_group,
                 "zoom_credentials": zoom_credentials.get_credentials() if zoom_credentials else None,
                 "zoom_credential_type": Credentials.CredentialTypes.ZOOM_OAUTH,
                 "deepgram_credentials": deepgram_credentials.get_credentials() if deepgram_credentials else None,
@@ -1234,3 +1248,56 @@ class ProjectAutopayView(AdminRequiredMixin, View):
         except Exception as e:
             logger.error(f"Error saving autopay settings: {e}")
             return HttpResponse("Error saving autopay settings", status=500)
+
+
+class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            # Get or create GoogleMeetBotLoginGroup for this project
+            google_meet_bot_login_group, created = GoogleMeetBotLoginGroup.objects.get_or_create(project=project)
+
+            # Extract fields from request
+            workspace_domain = request.POST.get("workspace_domain", "").strip()
+            email = request.POST.get("email", "").strip()
+            private_key = request.POST.get("private_key", "").strip()
+            cert = request.POST.get("cert", "").strip()
+
+            # Validate required fields
+            if not all([workspace_domain, email, private_key, cert]):
+                return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
+
+            # Create the GoogleMeetBotLogin
+            google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+                group=google_meet_bot_login_group,
+                workspace_domain=workspace_domain,
+                email=email,
+            )
+
+            # Set the encrypted credentials
+            credentials_data = {
+                "private_key": private_key,
+                "cert": cert,
+            }
+            google_meet_bot_login.set_credentials(credentials_data)
+
+            context = self.get_project_context(object_id, project)
+            context["google_meet_bot_login_group"] = google_meet_bot_login_group
+            return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error creating Google Meet bot login (error_id={error_id}): {e}")
+            return HttpResponse(f"Error creating Google Meet bot login. Error ID: {error_id}", status=400)
+
+
+class DeleteGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id, login_object_id):
+        google_meet_bot_login = get_google_meet_bot_login_for_user(user=request.user, google_meet_bot_login_object_id=login_object_id)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        google_meet_bot_login_group = google_meet_bot_login.group
+        google_meet_bot_login.delete()
+        context = self.get_project_context(object_id, project)
+        context["google_meet_bot_login_group"] = google_meet_bot_login_group
+        return render(request, "projects/partials/google_meet_bot_login_group.html", context)

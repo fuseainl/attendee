@@ -14,7 +14,7 @@ click-plugins==1.1.1
 click-repl==0.3.0
 cryptography==43.0.3
 dj-database-url==2.3.0
-Django==5.1.13
+Django==5.1.14
 django-allauth==65.1.0
 django-concurrency==2.6.0
 django-extensions==3.2.3
@@ -94,3 +94,4 @@ deepgram-sdk==4.3.0
 azure-identity==1.25.1
 azure-storage-blob==12.26.0
 python-json-logger==4.0.0
+pysaml2==7.5.4
