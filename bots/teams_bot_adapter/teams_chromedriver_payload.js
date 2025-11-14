@@ -2053,6 +2053,12 @@ const handleVideoTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
     const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    let handleAudioTrackDebugInfo = {
+        framesWithoutDominantSpeaker: 0,
+        framesWithDominantSpeaker: 0,
+        totalFrames: 0,
+    };
+    let timeSinceLastDebugInfoSend = 0;
 
     window.receiverManager.addReceiver(event.receiver);
     
@@ -2066,9 +2072,28 @@ const handleVideoTrack = async (event) => {
             const dominantSpeakerId = dominantSpeakerManager.getSpeakerIdForTimestampMsUsingSpeechIntervals(audioArrivalTime);
 
             // Send audio data through websocket
+            handleAudioTrackDebugInfo.totalFrames++;
             if (dominantSpeakerId) {
                 ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
+                handleAudioTrackDebugInfo.framesWithDominantSpeaker++;
             }
+            else
+            {
+                handleAudioTrackDebugInfo.framesWithoutDominantSpeaker++;
+            }
+        }
+
+        if (Date.now() - timeSinceLastDebugInfoSend >= 10000)  {
+            timeSinceLastDebugInfoSend = Date.now();
+            ws.sendJson({
+                type: 'HandleAudioTrackDebugInfo',
+                debugInfo: handleAudioTrackDebugInfo
+            });
+            handleAudioTrackDebugInfo = {
+                framesWithoutDominantSpeaker: 0,
+                framesWithDominantSpeaker: 0,
+                totalFrames: 0,
+            };
         }
     };
 
