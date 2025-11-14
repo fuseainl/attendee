@@ -2053,6 +2053,7 @@ const handleVideoTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
     const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    let trackIsNonSilent = false;
     let handleAudioTrackDebugInfo = {
         framesWithoutDominantSpeaker: 0,
         framesWithDominantSpeaker: 0,
@@ -2087,6 +2088,7 @@ const handleVideoTrack = async (event) => {
             timeSinceLastDebugInfoSend = Date.now();
             ws.sendJson({
                 type: 'HandleAudioTrackDebugInfo',
+                trackId: event.track.id,
                 debugInfo: handleAudioTrackDebugInfo
             });
             handleAudioTrackDebugInfo = {
@@ -2186,6 +2188,19 @@ const handleVideoTrack = async (event) => {
                   //    return;
                   //}
 
+                  if (!trackIsNonSilent && audioData.some(value => value !== 0)) {
+                    trackIsNonSilent = true;
+                    window.ws?.sendJson({
+                        type: 'WebRTCTrackIsNonSilent',
+                        trackId: event.track?.id,
+                    });
+                  }
+
+                  // Don't bother sending unless we've gotten some non-silent audio data in this track.
+                  if (!trackIsNonSilent) {
+                    return;
+                  }
+
                   // Add to queue with timestamp - the background thread will process it
                   audioDataQueue.push({
                     audioArrivalTime: Date.now(),
@@ -2258,19 +2273,25 @@ new RTCInterceptor({
 
         peerConnection.addEventListener('track', (event) => {
             console.log('New track:', {
-                trackId: event.track.id,
-                trackKind: event.track.kind,
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
                 streams: event.streams,
+            });
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
+                streams: event.streams?.map(stream => stream?.id),
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
-            if (event.track.kind === 'audio') {
+            if (event.track?.kind === 'audio') {
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
             }
-            if (event.track.kind === 'video') {
+            if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
             }
         });
