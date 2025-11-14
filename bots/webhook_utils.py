@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import uuid
+from functools import partial
 
 from django.db import transaction
 
@@ -56,7 +57,7 @@ def trigger_webhook(webhook_trigger_type, bot=None, calendar=None, zoom_oauth_co
 
         from bots.tasks.deliver_webhook_task import deliver_webhook
 
-        transaction.on_commit(lambda: deliver_webhook.delay(delivery_attempt.id))
+        transaction.on_commit(partial(deliver_webhook.delay, delivery_attempt.id))
 
     return len(delivery_attempts)
 
