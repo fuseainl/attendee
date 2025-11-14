@@ -2,6 +2,7 @@ import uuid
 from unittest.mock import patch
 
 from django.contrib.messages.storage.fallback import FallbackStorage
+from django.db import transaction
 from django.http import Http404, HttpRequest
 from django.http.request import QueryDict
 from django.test import TransactionTestCase
@@ -21,7 +22,6 @@ from bots.models import (
 from bots.projects_views import CreateWebhookView, DeleteWebhookView, ProjectWebhooksView
 from bots.tasks.deliver_webhook_task import deliver_webhook
 from bots.webhook_utils import sign_payload, verify_signature
-from django.db import transaction
 
 
 class WebhookSubscriptionTest(TransactionTestCase):
