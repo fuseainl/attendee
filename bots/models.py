@@ -1668,8 +1668,6 @@ class Participant(models.Model):
 class ParticipantEventTypes(models.IntegerChoices):
     JOIN = 1, "Join"
     LEAVE = 2, "Leave"
-    SPEECH_START = 3, "Speech Start"
-    SPEECH_STOP = 4, "Speech Stop"
     UPDATE = 5, "Update"  # Leave space for possible speech start / stop events
 
     @classmethod
@@ -1678,8 +1676,6 @@ class ParticipantEventTypes(models.IntegerChoices):
         mapping = {
             cls.JOIN: "join",
             cls.LEAVE: "leave",
-            cls.SPEECH_START: "speech_start",
-            cls.SPEECH_STOP: "speech_stop",
             cls.UPDATE: "update",
         }
         return mapping.get(value)

@@ -439,11 +439,14 @@ class DominantSpeakerManager {
 
         this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
 
+        // Not going to send this to server for now.
+        /*
         window.ws.sendJson({
             type: 'SpeechStart',
             participant_uuid: speakerId,
             timestamp: timestampMs
         });
+        */
     }
 
     addSpeechIntervalEnd(timestampMs, speakerId) {
@@ -452,11 +455,14 @@ class DominantSpeakerManager {
 
         this.speechIntervalsPerParticipant[speakerId].push({type: 'end', timestampMs: timestampMs});
 
+        // Not going to send this to server for now.
+        /*
         window.ws.sendJson({
             type: 'SpeechStop',
             participant_uuid: speakerId,
             timestamp: timestampMs
         });
+        */
     }
 
     addCaptionAudioTime(timestampMs, speakerId) {
