@@ -2088,7 +2088,7 @@ const handleVideoTrack = async (event) => {
             timeSinceLastDebugInfoSend = Date.now();
             ws.sendJson({
                 type: 'HandleAudioTrackDebugInfo',
-                trackId: event.track.id,
+                trackId: event.track?.id,
                 debugInfo: handleAudioTrackDebugInfo
             });
             handleAudioTrackDebugInfo = {
