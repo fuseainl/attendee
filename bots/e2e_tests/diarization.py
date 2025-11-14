@@ -14,7 +14,8 @@ import requests
 # Helpers / HTTP
 # ----------------------------
 
-#python diarization.py --api-key xx --base-url https://staging.attendee.dev --speaker1 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_1_trimmed.mp3 --speaker2 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_2_trimmed.mp3 --meeting-url xxx --speak-wait 10 --leave-after 310 --verbose
+# python diarization.py --api-key xx --base-url https://staging.attendee.dev --speaker1 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_1_trimmed.mp3 --speaker2 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_2_trimmed.mp3 --meeting-url xxx --speak-wait 10 --leave-after 310 --verbose
+
 
 class AttendeeClient:
     def __init__(self, base_url: str, api_key: str, timeout=30):
