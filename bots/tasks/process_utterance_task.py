@@ -240,6 +240,7 @@ def get_transcription_via_deepgram(utterance):
         encoding="linear16",  # for 16-bit PCM
         sample_rate=utterance.get_sample_rate(),
         redact=transcription_settings.deepgram_redaction_settings(),
+        replace=transcription_settings.deepgram_replace_settings(),
     )
 
     deepgram_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.DEEPGRAM).first()

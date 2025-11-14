@@ -24,6 +24,7 @@ class BotAdapter:
         JOINING_BREAKOUT_ROOM = "Joining breakout room"
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
+        READY_TO_SHOW_WEBPAGE_STREAM = "Ready to show webpage stream"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

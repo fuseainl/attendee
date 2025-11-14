@@ -66,6 +66,7 @@ class PerParticipantStreamingAudioInputManager:
                 sample_rate=self.sample_rate,
                 metadata=metadata_list,
                 redaction_settings=self.bot.transcription_settings.deepgram_redaction_settings(),
+                replace_settings=self.bot.transcription_settings.deepgram_replace_settings(),
             )
         else:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")

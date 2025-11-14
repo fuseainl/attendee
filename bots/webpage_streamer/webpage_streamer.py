@@ -6,7 +6,6 @@ logger = logging.getLogger(__name__)
 
 import asyncio
 import os
-import sys
 import time
 
 import numpy as np
@@ -87,9 +86,10 @@ class AlsaLoopbackSink:
 class WebpageStreamer:
     def __init__(
         self,
+        video_frame_size,
     ):
         self.driver = None
-        self.video_frame_size = (1280, 720)
+        self.video_frame_size = video_frame_size
         self.display_var_for_recording = None
         self.display = None
         self.last_keepalive_time = None
@@ -119,7 +119,13 @@ class WebpageStreamer:
         options.add_argument("--enable-blink-features=WebCodecs,WebRTC-InsertableStreams,-AutomationControlled")
         options.add_argument("--remote-debugging-port=9222")
 
-        logger.info("Chrome sandboxing is enabled")
+        if os.getenv("ENABLE_CHROME_SANDBOX_FOR_WEBPAGE_STREAMER", "true").lower() != "true":
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-setuid-sandbox")
+            logger.info("Chrome sandboxing is disabled")
+        else:
+            logger.info("Chrome sandboxing is enabled")
+        logger.info(f"Video frame size: {self.video_frame_size}")
 
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
 
@@ -175,7 +181,7 @@ class WebpageStreamer:
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         finally:
-            sys.exit(0)
+            os._exit(0)
 
     def load_webapp(self):
         pcs = set()

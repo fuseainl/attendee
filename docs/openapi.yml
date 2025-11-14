@@ -199,9 +199,10 @@ paths:
           description: Bot not found
     patch:
       operationId: Patch Bot
-      description: Updates a scheduled bot. Currently only the join_at field can be
-        updated, and only for bots in the scheduled state.
-      summary: Update a scheduled bot
+      description: Updates a bot. Currently only the join_at and metadata fields can
+        be updated. The join_at field can only be updated when the bot is in the scheduled
+        state. The metadata field can be updated at any time.
+      summary: Update a bot
       parameters:
       - in: header
         name: Authorization
@@ -251,7 +252,7 @@ paths:
                 $ref: '#/components/schemas/Bot'
           description: Bot updated successfully
         '400':
-          description: Invalid input or bot is not in scheduled state
+          description: Invalid input or bot cannot be updated
         '404':
           description: Bot not found
     delete:
@@ -1074,6 +1075,52 @@ paths:
           description: List of transcribed utterances
         '404':
           description: Bot not found
+  /api/v1/bots/{object_id}/voice_agent_settings:
+    patch:
+      operationId: Update Voice Agent Settings
+      description: Updates the voice agent settings for a bot.
+      summary: Update the voice agent settings for a bot
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Bot ID
+        required: true
+        examples:
+          BotIDExample:
+            value: bot_xxxxxxxxxxx
+            summary: Bot ID Example
+      tags:
+      - Bots
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedPatchBotVoiceAgentSettingsRequest'
+      security:
+      - {}
+      responses:
+        '200':
+          description: Voice agent settings updated successfully
+        '400':
+          description: Invalid input
+        '404':
+          description: Bot not found
   /api/v1/calendar_events:
     get:
       operationId: List Calendar Events
@@ -1540,7 +1587,7 @@ components:
         message:
           type: string
           minLength: 1
-          description: The message text to send. Does not support emojis currently.
+          description: The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.
       required:
       - message
     BotImageRequest:
@@ -1859,9 +1906,21 @@ components:
                 user's responses from the microphone. The bot will load this website
                 and stream its video and audio to the meeting. The audio from the
                 meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents
-                for further details.
-          required:
-          - url
+                for further details. The video will be displayed through the bot's
+                webcam. To display the video through screenshare, use the screenshare_url
+                parameter instead.
+            screenshare_url:
+              type: string
+              description: Behaves the same as url, but the video will be displayed
+                through screenshare instead of the bot's webcam. Currently, you cannot
+                provide both url and screenshare_url.
+            reserve_resources:
+              type: boolean
+              description: If you want to start a voice agent or stream a webpage
+                mid-meeting, but not at the start of the meeting, set this to true.
+                This will reserve resources for the voice agent. You cannot start
+                a voice agent mid-meeting if this is not set to true.
+              default: false
           additionalProperties: false
           description: Settings for the voice agent that the bot should load.
         transcription_settings:
@@ -1921,6 +1980,14 @@ components:
                     Automatically removes or masks sensitive information like PII,
                     PCI data, and numbers from transcripts. See here for details:
                     https://developers.deepgram.com/docs/redaction'
+                replace:
+                  type: array
+                  items:
+                    type: string
+                  description: 'Array of terms to find and replace in the transcript.
+                    Each string should be in the format ''term_to_find:replacement_term''
+                    (e.g., ''kpis:Key Performance Indicators''). See here for details:
+                    https://developers.deepgram.com/docs/find-and-replace'
               additionalProperties: false
             gladia:
               type: object
@@ -2190,6 +2257,30 @@ components:
             resolution: 1080p
             record_chat_messages_when_paused: false
           description: The settings for the bot's recording.
+        google_meet_settings:
+          type: object
+          properties:
+            use_login:
+              type: boolean
+              description: Whether to use Google Meet bot login credentials to sign
+                in before joining the meeting. Requires Google Meet bot login credentials
+                to be set for the project.
+              default: false
+            login_mode:
+              type: string
+              enum:
+              - always
+              - only_if_required
+              description: The mode to use for the Google Meet bot login. 'always'
+                means the bot will always login, 'only_if_required' means the bot
+                will only login if the meeting requires authentication.
+              default: always
+          required: []
+          additionalProperties: false
+          default:
+            use_login: false
+            login_mode: always
+          description: The Google Meet-specific settings for the bot.
         teams_settings:
           type: object
           properties:
@@ -2507,6 +2598,23 @@ components:
           type: string
           minLength: 1
           description: The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456
+    PatchedPatchBotVoiceAgentSettingsRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          description: URL of a website containing a voice agent that gets the user's
+            responses from the microphone. The bot will load this website and stream
+            its video and audio to the meeting. The audio from the meeting will be
+            sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents
+            for further details. The video will be displayed through the bot's webcam.
+            To display the video through screenshare, use the screenshare_url parameter
+            instead. Set to "" to turn off.
+        screenshare_url:
+          type: string
+          description: Behaves the same as url, but the video will be displayed through
+            screenshare instead of the bot's webcam. Currently, you cannot provide
+            both url and screenshare_url. Set to "" to turn off.
     PatchedPatchCalendarRequest:
       type: object
       properties:

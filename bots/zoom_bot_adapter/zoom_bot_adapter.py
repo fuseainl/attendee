@@ -426,12 +426,16 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
-        builder.SetReceiver(0)
-        builder.SetMessageType(zoom.SDKChatMessageType.To_All)
+        if to_user_uuid:
+            builder.SetReceiver(to_user_uuid)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
+        else:
+            builder.SetReceiver(0)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_All)
         msg = builder.Build()
         send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
         logger.info(f"send_chat_message_result = {send_chat_message_result}")
@@ -1113,3 +1117,16 @@ class ZoomBotAdapter(BotAdapter):
 
     def get_staged_bot_join_delay_seconds(self):
         return 0
+
+    # These webpage streaming functionality is not available for the zoom native adapter
+    def webpage_streamer_get_peer_connection_offer(self):
+        pass
+
+    def webpage_streamer_start_peer_connection(self, offer_response):
+        pass
+
+    def webpage_streamer_play_bot_output_media_stream(self, output_destination):
+        pass
+
+    def webpage_streamer_stop_bot_output_media_stream(self, output_destination):
+        pass

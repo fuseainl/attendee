@@ -197,6 +197,12 @@ SPECTACULAR_SETTINGS = {
 
 # publish with python manage.py spectacular --color --file docs/openapi.yml
 
+# Logging formatters - shared across environments
+LOG_FORMATTERS = {
+    "plain": {"format": "{levelname} {message}", "style": "{"},
+    "json": {"class": "attendee.logging.ISOJsonFormatter", "format": "%(timestamp)s %(name)s %(levelname)s %(message)s"},
+}
+
 # Set up django storage backend
 # Use s3 by default, but if the STORAGE_PROTOCOL env var is set to "azure", use azure storage
 STORAGE_PROTOCOL = os.getenv("STORAGE_PROTOCOL", "s3")
@@ -248,3 +254,4 @@ WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "at
 REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
 MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
+MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"

@@ -367,6 +367,7 @@ class GstreamerPipeline:
 
         if overlay_text:
             self.update_overlay_text(overlay_text)
+
     def pause_recording(self):
         """Pause the pipeline and start sending black frames and zero audio"""
         if self.pause_timer_id is not None:

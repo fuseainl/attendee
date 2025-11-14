@@ -47,6 +47,19 @@ from .models import (
 )
 
 
+def url_is_allowed_for_voice_agent(url):
+    # If url is empty, allow it
+    if not url:
+        return True
+
+    # If the environment variable is not set, allow all URLs
+    if not os.getenv("VOICE_AGENT_URL_PREFIX_ALLOWLIST"):
+        return True
+
+    voice_agent_url_prefix_allowlist = os.getenv("VOICE_AGENT_URL_PREFIX_ALLOWLIST").split(",")
+    return any(url.startswith(prefix) for prefix in voice_agent_url_prefix_allowlist)
+
+
 def get_openai_model_enum():
     """Get allowed OpenAI models including custom env var if set"""
     default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
@@ -254,6 +267,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "language": {"description": "The language code for transcription. Defaults to 'multi' if not specified, which selects the language automatically and can change the detected language in the middle of the audio. See here for available languages: https://developers.deepgram.com/docs/models-languages-overview.", "type": "string"},
                 "model": {"description": "The model to use for transcription. Defaults to 'nova-3' if not specified, which is the recommended model for most use cases. See here for details: https://developers.deepgram.com/docs/models-languages-overview", "type": "string"},
                 "redact": {"type": "array", "items": {"type": "string", "enum": ["pci", "pii", "numbers"]}, "uniqueItems": True, "description": "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts. See here for details: https://developers.deepgram.com/docs/redaction"},
+                "replace": {"type": "array", "items": {"type": "string"}, "description": "Array of terms to find and replace in the transcript. Each string should be in the format 'term_to_find:replacement_term' (e.g., 'kpis:Key Performance Indicators'). See here for details: https://developers.deepgram.com/docs/find-and-replace"},
             },
             "additionalProperties": False,
         },
@@ -371,6 +385,35 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
     "required": [],
     "additionalProperties": False,
 }
+
+
+def _validate_metadata_attribute(value):
+    if value is None:
+        return value
+
+    # Check if it's a dict
+    if not isinstance(value, dict):
+        raise serializers.ValidationError("Metadata must be an object not an array or other type")
+
+    # Make sure there is at least one key
+    if not value:
+        raise serializers.ValidationError("Metadata must have at least one key")
+
+    # Check if all values are strings
+    for key, val in value.items():
+        if not isinstance(val, str):
+            raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+
+    # Check if all keys are strings
+    for key in value.keys():
+        if not isinstance(key, str):
+            raise serializers.ValidationError("All keys in metadata must be strings")
+
+    # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
+    if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
+        raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
+
+    return value
 
 
 class BotValidationMixin:
@@ -551,6 +594,31 @@ class MetadataJSONField(serializers.JSONField):
     pass
 
 
+GOOGLE_MEET_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "use_login": {
+            "type": "boolean",
+            "description": "Whether to use Google Meet bot login credentials to sign in before joining the meeting. Requires Google Meet bot login credentials to be set for the project.",
+            "default": False,
+        },
+        "login_mode": {
+            "type": "string",
+            "enum": ["always", "only_if_required"],
+            "description": "The mode to use for the Google Meet bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
+            "default": "always",
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(GOOGLE_MEET_SETTINGS_SCHEMA)
+class GoogleMeetSettingsJSONField(serializers.JSONField):
+    pass
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -715,14 +783,16 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         help_text="The UUID of the user to send the message to. Required if 'to' is 'specific_user'.",
     )
     to = serializers.ChoiceField(choices=BotChatMessageToOptions.values, help_text="Who to send the message to.", default=BotChatMessageToOptions.EVERYONE)
-    message = serializers.CharField(help_text="The message text to send. Does not support emojis currently.")
+    message = serializers.CharField(help_text="The message text to send. Does not support emojis currently. For Microsoft Teams, you can use basic HTML tags to format the message including <p>, <br>, <b>, <i>, and <a>.")
 
     def validate(self, data):
         to_value = data.get("to")
         to_user_uuid = data.get("to_user_uuid")
 
         if to_value == BotChatMessageToOptions.SPECIFIC_USER and not to_user_uuid:
-            raise serializers.ValidationError({"to_user_uuid": "This field is required when sending to a specific user."})
+            raise serializers.ValidationError({"to_user_uuid": "This field is required when the 'to' value is 'specific_user'."})
+        if to_value != BotChatMessageToOptions.SPECIFIC_USER and to_user_uuid:
+            raise serializers.ValidationError({"to_user_uuid": "This field should only be provided when the 'to' value is 'specific_user'."})
 
         return data
 
@@ -784,19 +854,28 @@ class CallbackSettingsJSONField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-                "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details.",
-            },
+VOICE_AGENT_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
         },
-        "required": ["url"],
-        "additionalProperties": False,
-    }
-)
+        "screenshare_url": {
+            "type": "string",
+            "description": "Behaves the same as url, but the video will be displayed through screenshare instead of the bot's webcam. Currently, you cannot provide both url and screenshare_url.",
+        },
+        "reserve_resources": {
+            "type": "boolean",
+            "description": "If you want to start a voice agent or stream a webpage mid-meeting, but not at the start of the meeting, set this to true. This will reserve resources for the voice agent. You cannot start a voice agent mid-meeting if this is not set to true.",
+            "default": False,
+        },
+    },
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(VOICE_AGENT_SETTINGS_SCHEMA)
 class VoiceAgentSettingsJSONField(serializers.JSONField):
     pass
 
@@ -821,6 +900,7 @@ class VoiceAgentSettingsJSONField(serializers.JSONField):
 class ExternalMediaStorageSettingsJSONField(serializers.JSONField):
     pass
 
+
 class CreateAsyncTranscriptionSerializer(serializers.Serializer):
     transcription_settings = TranscriptionSettingsJSONField(help_text="The transcription settings to use for the async transcription.", required=True)
 
@@ -840,6 +920,7 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
             raise serializers.ValidationError({"transcription_settings": "Please specify a transcription provider."})
 
         return value
+
 
 class CreateSessionMixin(serializers.Serializer):
     deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
@@ -958,17 +1039,6 @@ class CreateSessionMixin(serializers.Serializer):
 
         return value
 
-    VOICE_AGENT_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "url": {
-                "type": "string",
-            },
-        },
-        "required": ["url"],
-        "additionalProperties": False,
-    }
-
     def validate_voice_agent_settings(self, value):
         if value is None:
             return value
@@ -977,16 +1047,33 @@ class CreateSessionMixin(serializers.Serializer):
             raise serializers.ValidationError("Voice agents are not enabled. Please set the ENABLE_VOICE_AGENTS environment variable to true to use voice agents.")
 
         try:
-            jsonschema.validate(instance=value, schema=self.VOICE_AGENT_SETTINGS_SCHEMA)
+            jsonschema.validate(instance=value, schema=VOICE_AGENT_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
+
+        # Set reserve resources to true if url or screenshare_url is provided
+        if value.get("url") or value.get("screenshare_url"):
+            value["reserve_resources"] = True
+
+        if value.get("url") and value.get("screenshare_url"):
+            raise serializers.ValidationError({"url": "You cannot provide both url and screenshare_url."})
 
         # Validate that url is a proper URL
         url = value.get("url")
         if url and not url.lower().startswith("https://"):
             raise serializers.ValidationError({"url": "URL must start with https://"})
 
-        if url:
+        # Validate that screenshare_url is a proper URL
+        screenshare_url = value.get("screenshare_url")
+        if screenshare_url and not screenshare_url.lower().startswith("https://"):
+            raise serializers.ValidationError({"screenshare_url": "URL must start with https://"})
+
+        if not url_is_allowed_for_voice_agent(url):
+            raise serializers.ValidationError({"url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
+        if not url_is_allowed_for_voice_agent(screenshare_url):
+            raise serializers.ValidationError({"screenshare_url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
+
+        if value.get("reserve_resources"):
             meeting_url = self.initial_data.get("meeting_url")
             meeting_type = meeting_type_from_url(meeting_url)
             use_zoom_web_adapter = self.initial_data.get("zoom_settings", {}).get("sdk", "native") == "web"
@@ -1172,6 +1259,32 @@ class CreateSessionMixin(serializers.Serializer):
 
         return value
 
+    google_meet_settings = GoogleMeetSettingsJSONField(
+        help_text="The Google Meet-specific settings for the bot.",
+        required=False,
+        default={"use_login": False, "login_mode": "always"},
+    )
+
+    def validate_google_meet_settings(self, value):
+        if value is None:
+            return value
+
+        # Define defaults
+        defaults = {"use_login": False, "login_mode": "always"}
+
+        try:
+            jsonschema.validate(instance=value, schema=GOOGLE_MEET_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # If at least one attribute is provided, apply defaults for any missing attributes
+        if value:
+            for key, default_value in defaults.items():
+                if key not in value:
+                    value[key] = default_value
+
+        return value
+
     teams_settings = TeamsSettingsJSONField(
         help_text="The Microsoft Teams-specific settings for the bot.",
         required=False,
@@ -1283,32 +1396,7 @@ class CreateSessionMixin(serializers.Serializer):
         return value
 
     def validate_metadata(self, value):
-        if value is None:
-            return value
-
-        # Check if it's a dict
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Metadata must be an object not an array or other type")
-
-        # Make sure there is at least one key
-        if not value:
-            raise serializers.ValidationError("Metadata must have at least one key")
-
-        # Check if all values are strings
-        for key, val in value.items():
-            if not isinstance(val, str):
-                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
-
-        # Check if all keys are strings
-        for key in value.keys():
-            if not isinstance(key, str):
-                raise serializers.ValidationError("All keys in metadata must be strings")
-
-        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
-        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
-            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
-
-        return value
+        return _validate_metadata_attribute(value)
 
     automatic_leave_settings = AutomaticLeaveSettingsJSONField(default=dict, required=False)
 
@@ -1694,6 +1782,52 @@ class ParticipantEventSerializer(serializers.Serializer):
         return ParticipantEventTypes.type_to_api_code(obj.event_type)
 
 
+class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
+    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
+    screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Currently, you cannot provide both url and screenshare_url. Set to "" to turn off.')
+
+    def validate_url(self, value):
+        """Validate that url starts with https://"""
+        if value and not value.lower().startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
+        return value
+
+    def validate_screenshare_url(self, value):
+        """Validate that screenshare_url starts with https://"""
+        if value and not value.lower().startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
+        return value
+
+    def validate(self, data):
+        """Validate that no unexpected fields are provided."""
+        # Get all the field names defined in this serializer
+        expected_fields = set(self.fields.keys())
+
+        # Get all the fields provided in the input data
+        provided_fields = set(self.initial_data.keys())
+
+        # Check for unexpected fields
+        unexpected_fields = provided_fields - expected_fields
+
+        if unexpected_fields:
+            raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
+
+        """Validate that both url and screenshare_url are not provided with non-empty values"""
+        url = data.get("url")
+        screenshare_url = data.get("screenshare_url")
+
+        # Check if both have non-empty values
+        if url and screenshare_url:
+            raise serializers.ValidationError("Cannot provide both url and screenshare_url. Please specify only one.")
+
+        if not url_is_allowed_for_voice_agent(url):
+            raise serializers.ValidationError({"url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
+        if not url_is_allowed_for_voice_agent(screenshare_url):
+            raise serializers.ValidationError({"screenshare_url": "URL is not allowed for voice agent. Please set the VOICE_AGENT_URL_PREFIX_ALLOWLIST environment variable to the comma-separated list of allowed URL prefixes."})
+
+        return data
+
+
 class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
     """Serializer for updating transcription settings. Currently supports only updating Teams closed captions language."""
 
@@ -1727,6 +1861,10 @@ class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
 class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
+    metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the bot", required=False)
+
+    def validate_metadata(self, value):
+        return _validate_metadata_attribute(value)
 
 
 @extend_schema_serializer(
@@ -1748,32 +1886,7 @@ class CreateCalendarSerializer(serializers.Serializer):
     deduplication_key = serializers.CharField(help_text="Optional key for deduplicating calendars. If a calendar with this key already exists in the project, the new calendar will not be created and an error will be returned.", required=False, default=None)
 
     def validate_metadata(self, value):
-        if value is None:
-            return value
-
-        # Check if it's a dict
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Metadata must be an object not an array or other type")
-
-        # Make sure there is at least one key
-        if not value:
-            raise serializers.ValidationError("Metadata must have at least one key")
-
-        # Check if all values are strings
-        for key, val in value.items():
-            if not isinstance(val, str):
-                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
-
-        # Check if all keys are strings
-        for key in value.keys():
-            if not isinstance(key, str):
-                raise serializers.ValidationError("All keys in metadata must be strings")
-
-        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
-        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
-            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
-
-        return value
+        return _validate_metadata_attribute(value)
 
     def validate_deduplication_key(self, value):
         if value is not None and len(value.strip()) == 0:
@@ -1893,32 +2006,7 @@ class PatchCalendarSerializer(serializers.Serializer):
         return value
 
     def validate_metadata(self, value):
-        if value is None:
-            return value
-
-        # Check if it's a dict
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Metadata must be an object not an array or other type")
-
-        # Make sure there is at least one key
-        if not value:
-            raise serializers.ValidationError("Metadata must have at least one key")
-
-        # Check if all values are strings
-        for key, val in value.items():
-            if not isinstance(val, str):
-                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
-
-        # Check if all keys are strings
-        for key in value.keys():
-            if not isinstance(key, str):
-                raise serializers.ValidationError("All keys in metadata must be strings")
-
-        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
-        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
-            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
-
-        return value
+        return _validate_metadata_attribute(value)
 
     def validate(self, data):
         """Validate that no unexpected fields are provided."""
@@ -2018,32 +2106,7 @@ class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the Zoom OAuth Connection", required=False, default=None)
 
     def validate_metadata(self, value):
-        if value is None:
-            return value
-
-        # Check if it's a dict
-        if not isinstance(value, dict):
-            raise serializers.ValidationError("Metadata must be an object not an array or other type")
-
-        # Make sure there is at least one key
-        if not value:
-            raise serializers.ValidationError("Metadata must have at least one key")
-
-        # Check if all values are strings
-        for key, val in value.items():
-            if not isinstance(val, str):
-                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
-
-        # Check if all keys are strings
-        for key in value.keys():
-            if not isinstance(key, str):
-                raise serializers.ValidationError("All keys in metadata must be strings")
-
-        # Make sure the total length of the stringified metadata is less than MAX_METADATA_LENGTH characters
-        if len(json.dumps(value)) > settings.MAX_METADATA_LENGTH:
-            raise serializers.ValidationError(f"Metadata must be less than {settings.MAX_METADATA_LENGTH} characters")
-
-        return value
+        return _validate_metadata_attribute(value)
 
     def validate(self, data):
         """Validate that no unexpected fields are provided."""

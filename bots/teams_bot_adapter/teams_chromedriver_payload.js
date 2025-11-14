@@ -63,7 +63,7 @@ class StyleManager {
 
     waitForChatInputAndSendReadyMessage() {
         const checkForChatInput = () => {
-            const chatInput = document.querySelector('[aria-label="Type a message"]');
+            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
             if (chatInput) {
                 // Chat input is now available, send the ready message
                 window.ws.sendJson({
@@ -803,11 +803,20 @@ The tracks have a streamId that looks like this mainVideo-39016. The SDP has tha
 class ChatMessageManager {
     constructor(ws) {
         this.ws = ws;
+        this.chatMessages = {};
     }
 
     // The more sophisticated approach gets blocked by trusted html csp
     stripHtml(html) {
         return html.replace(/<[^>]*>/g, '');
+    }
+
+    // Teams client sometimes sends duplicate updates, this filters them out.
+    isNewOrUpdatedChatMessage(chatMessage) {
+        const currentMessage = this.chatMessages[chatMessage.clientMessageId];
+        if (!currentMessage)
+            return true;
+        return currentMessage.content !== chatMessage.content || currentMessage.originalArrivalTime !== chatMessage.originalArrivalTime || currentMessage.from !== chatMessage.from;
     }
 
     handleChatMessage(chatMessage) {
@@ -820,6 +829,10 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            if (!this.isNewOrUpdatedChatMessage(chatMessage))
+                return;
+
+            this.chatMessages[chatMessage.clientMessageId] = chatMessage;
 
             const timestamp_ms = new Date(chatMessage.originalArrivalTime).getTime();
             this.ws.sendJson({
@@ -2250,7 +2263,7 @@ function turnOnMicAndCamera() {
 }
 
 function turnOffMicAndCamera() {
-    // Click microphone button to turn it on
+    // Click microphone button to turn it off
     const microphoneButton = document.querySelector('button[aria-label="Mute mic"]');
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it off");
@@ -2259,7 +2272,7 @@ function turnOffMicAndCamera() {
         console.log("Microphone off button not found");
     }
 
-    // Click camera button to turn it on
+    // Click camera button to turn it off
     const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
     if (cameraButton) {
         console.log("Clicking the camera button to turn it off");
@@ -2269,428 +2282,107 @@ function turnOffMicAndCamera() {
     }
 }
 
-const _getUserMedia = navigator.mediaDevices.getUserMedia;
-
-class BotOutputManager {
-    constructor() {
-        
-        // For outputting video
-        this.botOutputVideoElement = null;
-        this.videoSource = null;
-        this.botOutputVideoElementCaptureStream = null;
-
-        // For outputting image
-        this.botOutputCanvasElement = null;
-        this.botOutputCanvasElementCaptureStream = null;
-        
-        // For outputting audio
-        this.audioContextForBotOutput = null;
-        this.gainNode = null;
-        this.destination = null;
-        this.botOutputAudioTrack = null;
-
-        // For outputting a stream
-        this.botOutputMediaStream = null;
-        this.botOutputPeerConnection = null;
+function turnOffCamera() {
+    // Click camera button to turn it off
+    const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
+    if (cameraButton) {
+        console.log("Clicking the camera button to turn it off");
+        cameraButton.click();
+    } else {
+        console.log("Camera off button not found");
     }
+}
 
-    playMediaStream(stream) {
-        if (this.botOutputMediaStream) {
-            this.botOutputMediaStream.disconnect();
-        }
-        this.botOutputMediaStream = stream;
+const turnOnMicArialLabel = "Unmute mic"
+const turnOnScreenshareButtonId = "screenshare-button"
+const turnOnScreenshareButtonAlternateId = "share-button"
+const turnOffMicArialLabel = "Turn off microphone"
+const turnOffScreenshareAriaLabel = "Stop sharing"
 
-        turnOffMicAndCamera();
-
-        // after 1000 ms
-        setTimeout(() => {
-            turnOnMicAndCamera();
-        }, 1000);
-    }
-
-    async getBotOutputPeerConnectionOffer() {
-        try
-        {
-            // 2) Create the RTCPeerConnection
-            this.botOutputPeerConnection = new RTCPeerConnection();
-
-            // 3) Receive the server's *video* and *audio*
-            const ms = new MediaStream();
-            this.botOutputPeerConnection.ontrack = (ev) => {
-                ms.addTrack(ev.track);
-                // If we've received both video and audio, play the stream
-                if (ms.getVideoTracks().length > 0 && ms.getAudioTracks().length > 0) {
-                    botOutputManager.playMediaStream(ms);
-                }
-            };
-
-            // We still want to receive the server's video
-            this.botOutputPeerConnection.addTransceiver('video', { direction: 'recvonly' });
-
-            // ❗ Instead of recvonly audio, we now **send** our mic upstream:
-            const meetingAudioStream = window.styleManager.getMeetingAudioStream();
-            for (const track of meetingAudioStream.getAudioTracks()) {
-                this.botOutputPeerConnection.addTrack(track, meetingAudioStream);
-            }
-
-            // Create/POST offer → set remote answer
-            const offer = await this.botOutputPeerConnection.createOffer();
-            await this.botOutputPeerConnection.setLocalDescription(offer);
-            return { sdp: this.botOutputPeerConnection.localDescription.sdp, type: this.botOutputPeerConnection.localDescription.type };
-        }
-        catch (e) {
-            return { error: e.message };
-        }
-    }
-
-    async startBotOutputPeerConnection(offerResponse) {
-        await this.botOutputPeerConnection.setRemoteDescription(offerResponse);
-
-        // Start latency measurement for the bot output peer connection
-        this.startLatencyMeter(this.botOutputPeerConnection, "bot-output");
-    }
-
-    startLatencyMeter(pc, label="rx") {
-        setInterval(async () => {
-            const stats = await pc.getStats();
-            let rtt_ms = 0, jb_a_ms = 0, jb_v_ms = 0, dec_v_ms = 0;
-
-            stats.forEach(r => {
-                if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
-                    rtt_ms = (r.currentRoundTripTime || 0) * 1000;
-                }
-                if (r.type === 'inbound-rtp' && r.kind === 'audio') {
-                    const d = (r.jitterBufferDelay || 0);
-                    const n = (r.jitterBufferEmittedCount || 1);
-                    jb_a_ms = (d / n) * 1000;
-                }
-                if (r.type === 'inbound-rtp' && r.kind === 'video') {
-                    const d = (r.jitterBufferDelay || 0);
-                    const n = (r.jitterBufferEmittedCount || 1);
-                    jb_v_ms = (d / n) * 1000;
-                    dec_v_ms = ((r.totalDecodeTime || 0) / (r.framesDecoded || 1)) * 1000;
-                }
-            });
-
-            const est_audio_owd = (rtt_ms / 2) + jb_a_ms;
-            const est_video_owd = (rtt_ms / 2) + jb_v_ms + dec_v_ms;
-
-            const logStatement = `[${label}] est one-way: audio≈${est_audio_owd|0}ms, video≈${est_video_owd|0}ms  (rtt=${rtt_ms|0}, jb_a=${jb_a_ms|0}, jb_v=${jb_v_ms|0}, dec_v=${dec_v_ms|0})`;
-            console.log(logStatement);
-            window.ws.sendJson({
-                type: 'BOT_OUTPUT_PEER_CONNECTION_STATS',
-                logStatement: logStatement
-            });
-        }, 60000);
-    }
-
-    displayImage(imageBytes) {
-        try {
-            // Wait for the image to be loaded onto the canvas
-            return this.writeImageToBotOutputCanvas(imageBytes)
-                .then(() => {
-                // If the stream is already broadcasting, don't do anything
-                if (this.botOutputCanvasElementCaptureStream)
-                {
-                    console.log("Stream already broadcasting, skipping");
-                    return;
-                }
-
-                // Now that the image is loaded, capture the stream and turn on camera
-                this.botOutputCanvasElementCaptureStream = this.botOutputCanvasElement.captureStream(1);
-                // Wait for 3 seconds before turning on camera, this is necessary for teams only
-                setTimeout(turnOnCamera, 3000);
-            })
-            .catch(error => {
-                console.error('Error in botOutputManager.displayImage:', error);
-            });
-        } catch (error) {
-            console.error('Error in botOutputManager.displayImage:', error);
-        }
-    }
-
-    writeImageToBotOutputCanvas(imageBytes) {
-        if (!this.botOutputCanvasElement) {
-            // Create a new canvas element with fixed dimensions
-            this.botOutputCanvasElement = document.createElement('canvas');
-            this.botOutputCanvasElement.width = 1280; // Fixed width
-            this.botOutputCanvasElement.height = 640; // Fixed height
-        }
-        
-        return new Promise((resolve, reject) => {
-            // Create an Image object to load the PNG
-            const img = new Image();
-            
-            // Convert the image bytes to a data URL
-            const blob = new Blob([imageBytes], { type: 'image/png' });
-            const url = URL.createObjectURL(blob);
-            
-            // Draw the image on the canvas when it loads
-            img.onload = () => {
-                // Revoke the URL immediately after image is loaded
-                URL.revokeObjectURL(url);
-                
-                const canvas = this.botOutputCanvasElement;
-                const ctx = canvas.getContext('2d');
-                
-                // Clear the canvas
-                ctx.fillStyle = 'black';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                // Calculate aspect ratios
-                const imgAspect = img.width / img.height;
-                const canvasAspect = canvas.width / canvas.height;
-                
-                // Calculate dimensions to fit image within canvas with letterboxing
-                let renderWidth, renderHeight, offsetX, offsetY;
-                
-                if (imgAspect > canvasAspect) {
-                    // Image is wider than canvas (horizontal letterboxing)
-                    renderWidth = canvas.width;
-                    renderHeight = canvas.width / imgAspect;
-                    offsetX = 0;
-                    offsetY = (canvas.height - renderHeight) / 2;
-                } else {
-                    // Image is taller than canvas (vertical letterboxing)
-                    renderHeight = canvas.height;
-                    renderWidth = canvas.height * imgAspect;
-                    offsetX = (canvas.width - renderWidth) / 2;
-                    offsetY = 0;
-                }
-                
-                this.imageDrawParams = {
-                    img: img,
-                    offsetX: offsetX,
-                    offsetY: offsetY,
-                    width: renderWidth,
-                    height: renderHeight
-                };
-
-                // Clear any existing draw interval
-                if (this.drawInterval) {
-                    clearInterval(this.drawInterval);
-                }
-
-                ctx.drawImage(
-                    this.imageDrawParams.img,
-                    this.imageDrawParams.offsetX,
-                    this.imageDrawParams.offsetY,
-                    this.imageDrawParams.width,
-                    this.imageDrawParams.height
-                );
-
-                // Set up interval to redraw the image every 1 second
-                this.drawInterval = setInterval(() => {
-                    ctx.drawImage(
-                        this.imageDrawParams.img,
-                        this.imageDrawParams.offsetX,
-                        this.imageDrawParams.offsetY,
-                        this.imageDrawParams.width,
-                        this.imageDrawParams.height
-                    );
-                }, 1000);
-                
-                // Resolve the promise now that image is loaded
-                resolve();
-            };
-            
-            // Handle image loading errors
-            img.onerror = (error) => {
-                URL.revokeObjectURL(url);
-                reject(new Error('Failed to load image'));
-            };
-            
-            // Set the image source to start loading
-            img.src = url;
+function turnOnMicAndScreenshare() {
+    // Click microphone button to turn it on
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`);
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it on");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone button not found");
+        window.ws.sendJson({
+            turnOnMicAndScreenshareError: "Microphone button not found in turnOnMicAndScreenshare"
         });
     }
 
-
-    initializeBotOutputAudioTrack() {
-        if (this.botOutputAudioTrack) {
-            return;
-        }
-
-        // Create AudioContext and nodes
-        this.audioContextForBotOutput = new AudioContext();
-        this.gainNode = this.audioContextForBotOutput.createGain();
-        this.destination = this.audioContextForBotOutput.createMediaStreamDestination();
-
-        // Set initial gain
-        this.gainNode.gain.value = 1.0;
-
-        // Connect gain node to both destinations
-        this.gainNode.connect(this.destination);
-        this.gainNode.connect(this.audioContextForBotOutput.destination);  // For local monitoring
-
-        this.botOutputAudioTrack = this.destination.stream.getAudioTracks()[0];
-        
-        // Initialize audio queue for continuous playback
-        this.audioQueue = [];
-        this.nextPlayTime = 0;
-        this.isPlaying = false;
-        this.sampleRate = 44100; // Default sample rate
-        this.numChannels = 1;    // Default channels
-        this.turnOffMicTimeout = null;
+    // Click screenshare button to turn it on
+    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it on");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare button not found");
+        window.ws.sendJson({
+            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
+        });
     }
-
-    playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
-        turnOnMic();
-
-        // Make sure audio context is initialized
-        this.initializeBotOutputAudioTrack();
-        
-        // Update properties if they've changed
-        if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
-            this.sampleRate = sampleRate;
-            this.numChannels = numChannels;
-        }
-        
-        // Convert Int16 PCM data to Float32 with proper scaling
-        let audioData;
-        if (pcmData instanceof Float32Array) {
-            audioData = pcmData;
-        } else {
-            // Create a Float32Array of the same length
-            audioData = new Float32Array(pcmData.length);
-            // Scale Int16 values (-32768 to 32767) to Float32 range (-1.0 to 1.0)
-            for (let i = 0; i < pcmData.length; i++) {
-                // Division by 32768.0 scales the range correctly
-                audioData[i] = pcmData[i] / 32768.0;
-            }
-        }
-        
-        // Add to queue with timing information
-        const chunk = {
-            data: audioData,
-            duration: audioData.length / (numChannels * sampleRate)
-        };
-        
-        this.audioQueue.push(chunk);
-        
-        // Start playing if not already
-        if (!this.isPlaying) {
-            this.processAudioQueue();
-        }
-    }
-    
-    processAudioQueue() {
-        if (this.audioQueue.length === 0) {
-            this.isPlaying = false;
-
-            if (this.turnOffMicTimeout) {
-                clearTimeout(this.turnOffMicTimeout);
-                this.turnOffMicTimeout = null;
-            }
-            
-            // Delay turning off the mic by 2 second and check if queue is still empty
-            this.turnOffMicTimeout = setTimeout(() => {
-                // Only turn off mic if the queue is still empty
-                if (this.audioQueue.length === 0)
-                    turnOffMic();
-            }, 2000);
-            
-            return;
-        }
-        
-        this.isPlaying = true;
-        
-        // Get current time and next play time
-        const currentTime = this.audioContextForBotOutput.currentTime;
-        this.nextPlayTime = Math.max(currentTime, this.nextPlayTime);
-        
-        // Get next chunk
-        const chunk = this.audioQueue.shift();
-        
-        // Create buffer for this chunk
-        const audioBuffer = this.audioContextForBotOutput.createBuffer(
-            this.numChannels,
-            chunk.data.length / this.numChannels,
-            this.sampleRate
-        );
-        
-        // Fill the buffer
-        if (this.numChannels === 1) {
-            const channelData = audioBuffer.getChannelData(0);
-            channelData.set(chunk.data);
-        } else {
-            for (let channel = 0; channel < this.numChannels; channel++) {
-                const channelData = audioBuffer.getChannelData(channel);
-                for (let i = 0; i < chunk.data.length / this.numChannels; i++) {
-                    channelData[i] = chunk.data[i * this.numChannels + channel];
-                }
-            }
-        }
-        
-        // Create source and schedule it
-        const source = this.audioContextForBotOutput.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.gainNode);
-        
-        // Schedule precisely
-        source.start(this.nextPlayTime);
-        this.nextPlayTime += chunk.duration;
-        
-        // Schedule the next chunk processing
-        const timeUntilNextProcess = (this.nextPlayTime - currentTime) * 1000 * 0.8;
-        setTimeout(() => this.processAudioQueue(), Math.max(0, timeUntilNextProcess));
-    }
-
 }
 
-const botOutputManager = new BotOutputManager();
+function turnOffMicAndScreenshare() {
+    // Click microphone button to turn it off
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`);
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it off");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone off button not found");
+    }
+
+    // Click screenshare button to turn it off
+    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it off");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare off button not found");
+    }
+}
+
+
+function turnOnScreenshare() {
+    // Click screenshare button to turn it on
+    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it on");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare button not found");
+        window.ws.sendJson({
+            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
+        });
+    }
+}
+
+function turnOffScreenshare() {
+    // Click screenshare button to turn it off
+    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it off");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare off button not found");
+    }
+}
+
+// BotOutputManager is defined in shared_chromedriver_payload.js
+
+botOutputManager = new BotOutputManager({
+    turnOnWebcam: turnOnCamera,
+    turnOffWebcam: turnOffCamera,
+    turnOnScreenshare: turnOnScreenshare,
+    turnOffScreenshare: turnOffScreenshare,
+    turnOnMic: turnOnMic,
+    turnOffMic: turnOffMic,
+});
+
 window.botOutputManager = botOutputManager;
-
-navigator.mediaDevices.getUserMedia = function(constraints) {
-    return _getUserMedia.call(navigator.mediaDevices, constraints)
-      .then(originalStream => {
-        realConsole?.log("Intercepted getUserMedia:", constraints);
-  
-        // Stop any original tracks so we don't actually capture real mic/cam
-        originalStream.getTracks().forEach(t => t.stop());
-  
-        // Create a new MediaStream to return
-        const newStream = new MediaStream();
-  
-        // Video sending not supported yet
-        /* 
-        if (constraints.video && botOutputVideoElementCaptureStream) {
-            console.log("Adding video track", botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-        }
-        */
-        if (constraints.video && botOutputManager.botOutputMediaStream) {
-            console.log("Adding botOutputMediaStream", botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputManager.botOutputMediaStream.getVideoTracks()[0]);
-        }
-
-        if (constraints.video && botOutputManager.botOutputCanvasElementCaptureStream) {
-            realConsole?.log("Adding canvas track", botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-        }
-
-        if (constraints.audio) {  // Only create once
-            botOutputManager.initializeBotOutputAudioTrack();
-            newStream.addTrack(botOutputManager.botOutputAudioTrack);
-        }  
-  
-        if (botOutputManager.botOutputMediaStream) {
-            // connect the botOutputMediaStream stream to the audio context
-            if (botOutputManager.botOutputMediaStream.getAudioTracks().length > 0) {
-                botOutputManager.initializeBotOutputAudioTrack();
-                const botOutputMediaStreamSource = botOutputManager.audioContextForBotOutput.createMediaStreamSource(botOutputManager.botOutputMediaStream);
-                botOutputMediaStreamSource.connect(botOutputManager.gainNode);
-                console.log("Connected botOutputMediaStream audio track to audio context");
-            }
-        }
-
-        return newStream;
-      })
-      .catch(err => {
-        console.error("Error in custom getUserMedia override:", err);
-        throw err;
-      });
-  };
 
 (function () {
     const _bind = Function.prototype.bind;

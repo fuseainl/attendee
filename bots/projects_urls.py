@@ -165,6 +165,16 @@ urlpatterns = [
         projects_views.ProjectCalendarEventDetailView.as_view(),
         name="project-calendar-event-detail",
     ),
+    path(
+        "<str:object_id>/settings/google-meet-bot-login/create/",
+        projects_views.CreateGoogleMeetBotLoginView.as_view(),
+        name="create-google-meet-bot-login",
+    ),
+    path(
+        "<str:object_id>/settings/google-meet-bot-login/<str:login_object_id>/delete/",
+        projects_views.DeleteGoogleMeetBotLoginView.as_view(),
+        name="delete-google-meet-bot-login",
+    ),
     # Don't put anything after this, it will redirect to the dashboard
     path(
         "<str:object_id>/",
