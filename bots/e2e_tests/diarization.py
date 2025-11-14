@@ -14,6 +14,7 @@ import requests
 # Helpers / HTTP
 # ----------------------------
 
+#python diarization.py --api-key xx --base-url https://staging.attendee.dev --speaker1 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_1_trimmed.mp3 --speaker2 /home/nduncan/Downloads/speech_datasets/two_people_talking_ten_min/speaker_2_trimmed.mp3 --meeting-url xxx --speak-wait 10 --leave-after 310 --verbose
 
 class AttendeeClient:
     def __init__(self, base_url: str, api_key: str, timeout=30):
@@ -58,7 +59,8 @@ class AttendeeClient:
             if r.status_code in (200, 202, 204):
                 return
             # Some instances may return 404 if leave endpoint is not present
-        except requests.RequestException:
+        except requests.RequestException as e:
+            print(f"Error telling bot {bot_id} to leave: {e}")
             pass
 
         # Fallback: DELETE bot (if supported)
@@ -250,8 +252,8 @@ def main():
     speaker1_utterances = [utterance["transcription"]["transcript"] for utterance in transcript if utterance.get("speaker_name") == bot1_name]
     speaker2_utterances = [utterance["transcription"]["transcript"] for utterance in transcript if utterance.get("speaker_name") == bot2_name]
 
-    print(f"Speaker 1 utterances: {speaker1_utterances}")
-    print(f"Speaker 2 utterances: {speaker2_utterances}")
+    print(f"Speaker 1 utterances: {' '.join(speaker1_utterances)}")
+    print(f"Speaker 2 utterances: {' '.join(speaker2_utterances)}")
 
     # Get a list of participant events for the meeting from the recorder bot
     participant_events = client.get_participant_events(recorder_id)
