@@ -43,7 +43,8 @@ class PerParticipantNonStreamingAudioInputManager:
         self.diagnostic_info = {
             "total_chunks_added": 0,
             "total_chunks_marked_as_silent_due_to_vad": 0,
-            "total_chunks_marked_as_silent_due_to_rms": 0,
+            "total_chunks_marked_as_silent_due_to_rms_being_small": 0,
+            "total_chunks_marked_as_silent_due_to_rms_being_zero": 0,
         }
         self.last_diagnostic_info_print_time = time.time()
 
@@ -72,8 +73,12 @@ class PerParticipantNonStreamingAudioInputManager:
             )
 
     def silence_detected(self, chunk_bytes):
-        if calculate_normalized_rms(chunk_bytes) < 0.01:
-            self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms"] += 1
+        rms_value = calculate_normalized_rms(chunk_bytes)
+        if rms_value == 0:
+            self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_zero"] += 1
+            return True
+        if rms_value < 0.01:
+            self.diagnostic_info["total_chunks_marked_as_silent_due_to_rms_being_small"] += 1
             return True
         if not self.vad.is_speech(chunk_bytes, self.sample_rate):
             self.diagnostic_info["total_chunks_marked_as_silent_due_to_vad"] += 1
