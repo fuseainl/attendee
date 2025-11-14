@@ -1653,6 +1653,11 @@ class ReceiverManager {
 
             if (contributingSources.length > 0 && !isActive) {
                 this.receiverMap.set(receiver, true);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverActive",
+                    receiverTrackId: receiver.track?.id
+                });
             }
 
             if (!isActive)
@@ -1689,6 +1694,11 @@ class ReceiverManager {
     addReceiver(receiver) {
         if (!receiver || this.receiverMap.has(receiver)) return;
         realConsole?.log('ReceiverManager is adding receiver', receiver);
+        window.ws?.sendJson({
+            type: 'ReceiverManagerUpdate',
+            update: "addReceiver",
+            receiverTrackId: receiver.track?.id
+        });
         this.receiverMap.set(receiver, false);
     }
 }
