@@ -2,6 +2,7 @@ import uuid
 from unittest.mock import patch
 
 from django.contrib.messages.storage.fallback import FallbackStorage
+from django.db import transaction
 from django.http import Http404, HttpRequest
 from django.http.request import QueryDict
 from django.test import TransactionTestCase
@@ -453,3 +454,53 @@ class WebhookDeliveryTest(TransactionTestCase):
         # Test that triggering a webhook for a transcript update does go through, since it uses the project-level webhook
         num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 1)
+
+    @patch("bots.tasks.deliver_webhook_task.deliver_webhook")
+    def test_trigger_webhook_uses_distinct_attempt_ids_for_multiple_subscriptions(self, mock_deliver):
+        """
+        Triggering webhooks for multiple subscriptions should schedule tasks
+        with distinct WebhookDeliveryAttempt IDs.
+
+        With the buggy lambda (lambda: deliver_webhook.delay(delivery_attempt.id)),
+        both on_commit callbacks end up using the last delivery_attempt.id.
+        """
+
+        from bots.webhook_utils import trigger_webhook
+
+        # Make sure we have two project-level webhook subscriptions for the same trigger
+        WebhookSubscription.objects.all().delete()
+        WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook1",
+            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE],
+        )
+        WebhookSubscription.objects.create(
+            project=self.project,
+            url="https://example.com/webhook2",
+            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE],
+        )
+
+        # Clear any existing delivery attempts
+        WebhookDeliveryAttempt.objects.all().delete()
+
+        # Run inside an explicit transaction so transaction.on_commit defers execution
+        with transaction.atomic():
+            trigger_webhook(
+                webhook_trigger_type=WebhookTriggerTypes.BOT_STATE_CHANGE,
+                bot=self.bot,
+                payload={"test": "closure_bug"},
+            )
+
+        # After the transaction commits, on_commit callbacks should have fired
+        self.assertEqual(WebhookDeliveryAttempt.objects.count(), 2)
+        self.assertEqual(mock_deliver.delay.call_count, 2)
+
+        # IDs that were actually passed to deliver_webhook.delay(...)
+        attempt_ids_called = [call.args[0] for call in mock_deliver.delay.call_args_list]
+
+        # IDs of the delivery attempts we created
+        attempt_ids_in_db = list(WebhookDeliveryAttempt.objects.values_list("id", flat=True))
+
+        # With correct code, the sets match (two distinct IDs).
+        # With the buggy lambda, attempt_ids_called will contain the same ID twice.
+        self.assertEqual(set(attempt_ids_called), set(attempt_ids_in_db))
