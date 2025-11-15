@@ -54,7 +54,9 @@ class PerParticipantNonStreamingAudioInputManager:
             if self.should_print_diagnostic_info:
                 logger.info(f"PerParticipantNonStreamingAudioInputManager diagnostic info: {self.diagnostic_info}")
             self.reset_diagnostic_info()
-
+# also log utts sent
+# fig otu why we had two audio format changes. is that normal?
+# also check bot cpu usage
     def process_chunks(self):
         while not self.queue.empty():
             speaker_id, chunk_time, chunk_bytes = self.queue.get()
