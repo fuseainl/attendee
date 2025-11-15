@@ -17,7 +17,7 @@ def calculate_normalized_rms(audio_bytes):
 
 
 class PerParticipantNonStreamingAudioInputManager:
-    def __init__(self, *, save_audio_chunk_callback, get_participant_callback, sample_rate, utterance_size_limit, silence_duration_limit):
+    def __init__(self, *, save_audio_chunk_callback, get_participant_callback, sample_rate, utterance_size_limit, silence_duration_limit, should_print_diagnostic_info):
         self.queue = queue.Queue()
 
         self.save_audio_chunk_callback = save_audio_chunk_callback
@@ -33,6 +33,7 @@ class PerParticipantNonStreamingAudioInputManager:
         self.SILENCE_DURATION_LIMIT = silence_duration_limit
         self.vad = webrtcvad.Vad()
 
+        self.should_print_diagnostic_info = should_print_diagnostic_info
         self.reset_diagnostic_info()
 
     def add_chunk(self, speaker_id, chunk_time, chunk_bytes):
@@ -45,12 +46,15 @@ class PerParticipantNonStreamingAudioInputManager:
             "total_chunks_marked_as_silent_due_to_vad": 0,
             "total_chunks_marked_as_silent_due_to_rms_being_small": 0,
             "total_chunks_marked_as_silent_due_to_rms_being_zero": 0,
+            "total_audio_chunks_sent": 0,
+            "total_audio_chunks_not_sent_because_participant_not_found": 0,
         }
         self.last_diagnostic_info_print_time = time.time()
 
     def print_diagnostic_info(self):
         if time.time() - self.last_diagnostic_info_print_time >= 30:
-            logger.info(f"PerParticipantNonStreamingAudioInputManager diagnostic info: {self.diagnostic_info}")
+            if self.should_print_diagnostic_info:
+                logger.info(f"PerParticipantNonStreamingAudioInputManager diagnostic info: {self.diagnostic_info}")
             self.reset_diagnostic_info()
 
     def process_chunks(self):
@@ -132,8 +136,10 @@ class PerParticipantNonStreamingAudioInputManager:
                         "sample_rate": self.sample_rate,
                     }
                 )
+                self.diagnostic_info["total_audio_chunks_sent"] += 1
             else:
                 logger.warning(f"Participant {speaker_id} not found")
+                self.diagnostic_info["total_audio_chunks_not_sent_because_participant_not_found"] += 1
             # Clear the buffer
             self.utterances[speaker_id] = bytearray()
             del self.first_nonsilent_audio_time[speaker_id]

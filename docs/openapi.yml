@@ -2249,6 +2249,12 @@ components:
               description: Whether to record chat messages even when the recording
                 is paused. Defaults to false.
               default: false
+            reserve_additional_storage:
+              type: boolean
+              description: Whether to reserve extra space to store the recording.
+                Only needed when the bot will record video for longer than 6 hours.
+                Defaults to false.
+              default: false
           additionalProperties: false
           required: []
           default:
@@ -2256,6 +2262,7 @@ components:
             view: speaker_view
             resolution: 1080p
             record_chat_messages_when_paused: false
+            reserve_additional_storage: false
           description: The settings for the bot's recording.
         google_meet_settings:
           type: object

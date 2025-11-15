@@ -614,7 +614,13 @@ class BotController:
         elif not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video:
             return None
         else:
-            return os.path.join("/tmp", self.get_recording_filename())
+            return os.path.join(self.get_recording_storage_directory(), self.get_recording_filename())
+
+    def get_recording_storage_directory(self):
+        if self.bot_in_db.reserve_additional_storage():
+            return "/bot-persistent-storage"
+        else:
+            return "/tmp"
 
     def should_create_gstreamer_pipeline(self):
         # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a gstreamer pipeline
@@ -687,6 +693,7 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
             silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+            should_print_diagnostic_info=self.should_capture_audio_chunks(),
         )
 
         self.per_participant_streaming_audio_input_manager = PerParticipantStreamingAudioInputManager(
