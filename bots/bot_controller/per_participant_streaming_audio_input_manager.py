@@ -77,7 +77,7 @@ class PerParticipantStreamingAudioInputManager:
         self.project = bot.project
         self.bot = bot
         self.deepgram_api_key = self.get_deepgram_api_key()
-        self.kyutai_server_url, self.kyutai_api_key = self.get_kyutai_server_url()
+        self.kyutai_server_url, self.kyutai_api_key = self.get_kyutai_server_url_and_api_key()
 
         # Create utterance handler for providers that need it (like Kyutai)
         self.utterance_handler = DefaultUtteranceHandler(bot=bot, get_participant_callback=get_participant_callback, sample_rate=sample_rate)
@@ -95,7 +95,7 @@ class PerParticipantStreamingAudioInputManager:
         deepgram_credentials = deepgram_credentials_record.get_credentials()
         return deepgram_credentials["api_key"]
 
-    def get_kyutai_server_url(self):
+    def get_kyutai_server_url_and_api_key(self):
         # First try to get from transcription settings (preferred)
         server_url = self.bot.transcription_settings.kyutai_server_url()
         api_key = self.bot.transcription_settings.kyutai_api_key()

@@ -26,7 +26,7 @@ def is_retryable_failure(failure_data):
 
 def get_transcription(utterance):
     try:
-        # Regular transcription providers that support post-processing
+        # Regular transcription providers that support async transcription
         if utterance.transcription_provider == TranscriptionProviders.DEEPGRAM:
             transcription, failure_data = get_transcription_via_deepgram(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.GLADIA:
