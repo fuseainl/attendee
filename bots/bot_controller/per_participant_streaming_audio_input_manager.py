@@ -139,7 +139,6 @@ class PerParticipantStreamingAudioInputManager:
                 sample_rate=self.sample_rate,
                 metadata=metadata,
                 interim_results=True,
-                model=self.bot.transcription_settings.kyutai_model(),
                 api_key=self.kyutai_api_key,
                 save_utterance_callback=kyutai_save_utterance_callback,
             )

@@ -122,7 +122,6 @@ class KyutaiStreamingTranscriber:
         sample_rate,
         metadata=None,
         interim_results=True,
-        model=None,
         api_key=None,
         save_utterance_callback=None,
         max_retry_time=300,
@@ -137,7 +136,6 @@ class KyutaiStreamingTranscriber:
             sample_rate: Audio sample rate (Kyutai uses 24000 Hz)
             metadata: Optional metadata to send with the connection
             interim_results: Whether to receive interim results
-            model: Model name to use (optional)
             api_key: API key for authentication (optional)
             save_utterance_callback: Callback function for saving utterances
                       (receives transcript text)
@@ -150,7 +148,6 @@ class KyutaiStreamingTranscriber:
         self.sample_rate = sample_rate
         self.metadata = metadata or {}
         self.interim_results = interim_results
-        self.model = model
         self.api_key = api_key
         self.save_utterance_callback = save_utterance_callback
         self.max_retry_time = max_retry_time

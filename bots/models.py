@@ -614,9 +614,6 @@ class TranscriptionSettings:
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
 
-    def kyutai_model(self):
-        return self._settings.get("kyutai", {}).get("model", None)
-
     def kyutai_server_url(self):
         return self._settings.get("kyutai", {}).get("server_url", None)
 
