@@ -133,7 +133,7 @@ class PerParticipantStreamingAudioInputManager:
             )
         elif self.transcription_provider == TranscriptionProviders.KYUTAI:
 
-            def kyutai_callback(transcript_text, transcriber_metadata=None):
+            def kyutai_save_utterance_callback(transcript_text, transcriber_metadata=None):
                 # Extract duration_ms and timestamp_ms from transcriber metadata
                 duration_ms = transcriber_metadata.get("duration_ms", 0) if transcriber_metadata else 0
 
@@ -147,7 +147,7 @@ class PerParticipantStreamingAudioInputManager:
                 interim_results=True,
                 model=self.bot.transcription_settings.kyutai_model(),
                 api_key=self.kyutai_api_key,
-                callback=kyutai_callback,
+                save_utterance_callback=kyutai_save_utterance_callback,
             )
         else:
             raise Exception(f"Unsupported transcription provider: {self.transcription_provider}")

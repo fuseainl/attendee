@@ -124,7 +124,7 @@ class KyutaiStreamingTranscriber:
         interim_results=True,
         model=None,
         api_key=None,
-        callback=None,
+        save_utterance_callback=None,
         max_retry_time=300,
         debug_logging=False,
     ):
@@ -139,7 +139,7 @@ class KyutaiStreamingTranscriber:
             interim_results: Whether to receive interim results
             model: Model name to use (optional)
             api_key: API key for authentication (optional)
-            callback: Callback function for utterances
+            save_utterance_callback: Callback function for saving utterances
                       (receives transcript text)
             max_retry_time: Maximum time in seconds to keep retrying
                 connection (default: 300s / 5 minutes)
@@ -152,7 +152,7 @@ class KyutaiStreamingTranscriber:
         self.interim_results = interim_results
         self.model = model
         self.api_key = api_key
-        self.callback = callback
+        self.save_utterance_callback = save_utterance_callback
         self.max_retry_time = max_retry_time
         self.debug_logging = debug_logging
 
@@ -666,7 +666,7 @@ class KyutaiStreamingTranscriber:
 
     def _emit_current_utterance(self):
         """Emit the current transcript as an utterance and clear it."""
-        if self.current_transcript and self.callback:
+        if self.current_transcript and self.save_utterance_callback:
             # Convert list of word objects to text efficiently
             transcript_text = " ".join([w["text"] for w in self.current_transcript])
 
@@ -720,9 +720,9 @@ class KyutaiStreamingTranscriber:
             # This ensures DB writes happen in chronological order
             def run_callback():
                 try:
-                    self.callback(transcript_text, metadata)
+                    self.save_utterance_callback(transcript_text, metadata)
                 except Exception as e:
-                    logger.error(f"Error in callback: {e}", exc_info=True)
+                    logger.error(f"Error in save_utterance_callback: {e}", exc_info=True)
 
             # Ensure consumer thread is running (lazy init for Celery workers)
             _ensure_callback_consumer_started()
