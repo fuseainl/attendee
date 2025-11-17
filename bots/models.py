@@ -620,9 +620,6 @@ class TranscriptionSettings:
     def kyutai_server_url(self):
         return self._settings.get("kyutai", {}).get("server_url", None)
 
-    def kyutai_api_key(self):
-        return self._settings.get("kyutai", {}).get("api_key", None)
-
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
 

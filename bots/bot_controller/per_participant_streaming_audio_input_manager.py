@@ -96,24 +96,18 @@ class PerParticipantStreamingAudioInputManager:
         return deepgram_credentials["api_key"]
 
     def get_kyutai_server_url_and_api_key(self):
-        # First try to get from transcription settings (preferred)
-        server_url = self.bot.transcription_settings.kyutai_server_url()
-        api_key = self.bot.transcription_settings.kyutai_api_key()
+        kyutai_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.KYUTAI).first()
+        if not kyutai_credentials_record:
+            return None, None
 
-        # Fall back to project credentials if not in settings
-        if not server_url:
-            kyutai_credentials_record = self.project.credentials.filter(credential_type=Credentials.CredentialTypes.KYUTAI).first()
-            if not kyutai_credentials_record:
-                return None, None
+        kyutai_credentials = kyutai_credentials_record.get_credentials()
+        if not kyutai_credentials:
+            return None, None
 
-            kyutai_credentials = kyutai_credentials_record.get_credentials()
-            server_url = kyutai_credentials.get("server_url", "ws://127.0.0.1:8012/api/asr-streaming")
-            api_key = kyutai_credentials.get("api_key", None)
+        api_key = kyutai_credentials.get("api_key", None) or "public_token"
 
-        # Use "public_token" as default if no API key is provided
-        # This matches the default behavior of the reference implementation
-        if not api_key:
-            api_key = "public_token"
+        # Use server_url from transcription settings if available, otherwise use the one from project credentials
+        server_url = self.bot.transcription_settings.kyutai_server_url() or kyutai_credentials.get("server_url", "ws://127.0.0.1:8012/api/asr-streaming")
 
         return server_url, api_key
 

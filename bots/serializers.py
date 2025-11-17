@@ -388,10 +388,6 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": ("The WebSocket URL of the Kyutai STT server (e.g., 'wss://your-domain.com/api/asr-streaming'). Must start with ws:// or wss://. If not provided, will use the server_url from project credentials."),
                 },
-                "api_key": {
-                    "type": "string",
-                    "description": ("Optional API key for authenticating with the Kyutai server. If not provided, will use the api_key from project credentials, or no authentication if not configured."),
-                },
             },
             "required": [],
             "additionalProperties": False,
