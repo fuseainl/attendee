@@ -33,6 +33,53 @@ class BotPodCreator:
         default_pod_image = f"nduncan{self.app_name}/{self.app_name}"
         self.image = f"{os.getenv('BOT_POD_IMAGE', default_pod_image)}:{self.app_version}"
 
+    def get_bot_pod_volumes(self):
+        """
+        Use a generic ephemeral volume backed by PD so we can exceed
+        the 10Gi Autopilot local ephemeral-storage cap.
+
+        BOT_PERSISTENT_STORAGE_SIZE: e.g. "50Gi"
+        """
+        if not self.add_persistent_storage:
+            return None
+        
+        size = os.getenv("BOT_PERSISTENT_STORAGE_SIZE", "50Gi")
+
+        pvc_spec = client.V1PersistentVolumeClaimSpec(
+            access_modes=["ReadWriteOnce"],
+            resources=client.V1ResourceRequirements(
+                requests={"storage": size}
+            ),
+        )
+
+        pvc_template = client.V1PersistentVolumeClaimTemplate(
+            metadata=client.V1ObjectMeta(
+                labels={"app": self.app_name},
+            ),
+            spec=pvc_spec,
+        )
+
+        return [client.V1Volume(
+            name="bot-persistent-storage",
+            ephemeral=client.V1EphemeralVolumeSource(
+                volume_claim_template=pvc_template
+            ),
+        ),]
+
+    def get_bot_container_volume_mounts(self):
+        if not self.add_persistent_storage:
+            return None
+        return [
+            client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"),
+        ]
+
+    def get_bot_pod_security_context(self):
+        if not self.add_persistent_storage:
+            return None
+        return client.V1PodSecurityContext(
+            fs_group=1000,
+        )
+
     def get_bot_container_security_context(self):
 
         # It's annoying but if we want chrome sandboxing, we need to use Unconfined seccomp profile 
@@ -96,7 +143,7 @@ class BotPodCreator:
         ]
 
     def get_webpage_streamer_container(self):
-        args = ["python", "bots/webpage_streamer/run_webpage_streamer.py"]
+        args = ["python", "bots/webpage_streamer/run_webpage_streamer.py", "--video-frame-size", os.getenv("WEBPAGE_STREAMER_VIDEO_FRAME_SIZE", "1280x720")]
         return client.V1Container(
                 name="webpage-streamer",
                 image=self.image,
@@ -113,7 +160,9 @@ class BotPodCreator:
                         "ephemeral-storage": os.getenv("WEBPAGE_STREAMING_EPHEMERAL_STORAGE_LIMIT", "0.5Gi")
                     }
                 ),
-                env=[],
+                env=[
+                    client.V1EnvVar(name="ENABLE_CHROME_SANDBOX_FOR_WEBPAGE_STREAMER", value=os.getenv("ENABLE_CHROME_SANDBOX_FOR_WEBPAGE_STREAMER", "true")),
+                ],
                 security_context = self.get_webpage_streamer_container_security_context(),
                 volume_mounts=self.get_webpage_streamer_volume_mounts()
             )  
@@ -156,7 +205,8 @@ class BotPodCreator:
                             )
                         ],
                         env=[],
-                        security_context = self.get_bot_container_security_context()
+                        security_context = self.get_bot_container_security_context(),
+                        volume_mounts=self.get_bot_container_volume_mounts(),
                     )
 
     def get_pod_tolerations(self):
@@ -191,6 +241,7 @@ class BotPodCreator:
         bot_name: Optional[str] = None,
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
+        add_persistent_storage: Optional[bool] = False,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -204,6 +255,7 @@ class BotPodCreator:
 
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
+        self.add_persistent_storage = add_persistent_storage
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
@@ -236,11 +288,13 @@ class BotPodCreator:
             ),
             spec=client.V1PodSpec(
                 containers=[self.get_bot_container()],
+                security_context=self.get_bot_pod_security_context(),
                 service_account_name=os.getenv("BOT_POD_SERVICE_ACCOUNT_NAME", "default"),
                 restart_policy="Never",
                 image_pull_secrets=self.get_pod_image_pull_secrets(),
                 termination_grace_period_seconds=60,
-                tolerations= self.get_pod_tolerations()
+                tolerations= self.get_pod_tolerations(),
+                volumes=self.get_bot_pod_volumes(),
             )
         )
 
