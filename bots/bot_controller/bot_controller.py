@@ -83,8 +83,17 @@ class BotController:
     # Default wait time for utterance termination (5 minutes)
     UTTERANCE_TERMINATION_WAIT_TIME_SECONDS = 300
 
+    def use_streaming_transcription(self):
+        provider = self.get_recording_transcription_provider()
+        if provider == TranscriptionProviders.KYUTAI:
+            return True
+        if provider == TranscriptionProviders.DEEPGRAM:
+            return self.bot_in_db.transcription_settings.deepgram_use_streaming()
+        return False
+
     def per_participant_audio_input_manager(self):
-        if self.bot_in_db.transcription_settings.deepgram_use_streaming():
+        # Use streaming manager for providers that support streaming
+        if self.use_streaming_transcription():
             return self.per_participant_streaming_audio_input_manager
         else:
             return self.per_participant_non_streaming_audio_input_manager
