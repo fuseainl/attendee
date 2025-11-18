@@ -273,8 +273,8 @@ class BotPodCreator:
         ]
 
     def apply_spec_to_bot_pod(self, bot_pod: client.V1Pod) -> dict:
-        bot_pod_dict = self.api_client.sanitize_for_serialization(bot_pod)
-        return apply_json6902_patch(bot_pod_dict, self.bot_pod_spec)
+        bot_pod_spec_data = self.api_client.sanitize_for_serialization(bot_pod)
+        return apply_json6902_patch(bot_pod_spec_data, self.bot_pod_spec)
 
     def create_bot_pod(
         self,
@@ -346,7 +346,7 @@ class BotPodCreator:
             )
         )
 
-        bot_pod_dict = self.apply_spec_to_bot_pod(bot_pod)
+        bot_pod_spec_data = self.apply_spec_to_bot_pod(bot_pod)
 
         if add_webpage_streamer:
             # Create specific labels for the webpage streamer pod
@@ -376,7 +376,7 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod_dict
+                body=bot_pod_spec_data
             )
 
             if add_webpage_streamer:
