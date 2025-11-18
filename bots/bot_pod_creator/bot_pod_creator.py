@@ -302,7 +302,8 @@ class BotPodCreator:
         # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
         if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
             raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
-        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") # Fetch bot pod spec from environment variable
+        # Fetch bot pod spec from environment variable, falling back to default if not defined
+        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") or os.getenv(f"BOT_POD_SPEC_{BotPodSpecType.DEFAULT}")
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
