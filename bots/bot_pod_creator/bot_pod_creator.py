@@ -1,14 +1,48 @@
+import json
 import logging
 import os
 import uuid
 from typing import Dict, Optional
 
+import jsonpatch
 from django.conf import settings
 from kubernetes import client, config
 
 logger = logging.getLogger(__name__)
 
 # fmt: off
+
+def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
+    """
+    Apply a JSON6902 (RFC 6902) patch to a JSON object.
+
+    Args:
+        json_to_patch: The JSON object to patch
+        patch_str: The JSON6902 patch string
+    """
+    if not patch_str:
+        return json_to_patch
+
+    try:
+        patch_ops = json.loads(patch_str)
+    except json.JSONDecodeError as e:
+        logger.error("patch_str is not valid JSON: %s", e)
+        return json_to_patch
+
+    if not isinstance(patch_ops, list):
+        logger.error(
+            "patch_str must be a JSON array of JSON6902 operations; got %r",
+            type(patch_ops),
+        )
+        return json_to_patch
+
+    try:
+        patch = jsonpatch.JsonPatch(patch_ops)
+        patched = patch.apply(json_to_patch, in_place=False)
+        return patched
+    except Exception as e:
+        logger.error("Failed to apply patch: %s", e)
+        return json_to_patch
 
 class BotPodCreator:
     def __init__(self):
@@ -18,6 +52,7 @@ class BotPodCreator:
             config.load_kube_config()
         
         self.v1 = client.CoreV1Api()
+        self.api_client = client.ApiClient()
         self.namespace = settings.BOT_POD_NAMESPACE
         self.webpage_streamer_namespace = settings.WEBPAGE_STREAMER_POD_NAMESPACE
         
@@ -235,6 +270,11 @@ class BotPodCreator:
             )
         ]
 
+    def apply_spec_to_bot_pod(self, bot_pod: client.V1Pod) -> dict:
+        bot_pod_dict = self.api_client.sanitize_for_serialization(bot_pod)
+        patch_str = os.getenv("BOT_POD_SPEC")
+        return apply_json6902_patch(bot_pod_dict, patch_str)
+
     def create_bot_pod(
         self,
         bot_id: int,
@@ -298,6 +338,8 @@ class BotPodCreator:
             )
         )
 
+        bot_pod_dict = self.apply_spec_to_bot_pod(bot_pod)
+
         if add_webpage_streamer:
             # Create specific labels for the webpage streamer pod
             webpage_streamer_labels = {
@@ -326,7 +368,7 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod
+                body=bot_pod_dict
             )
 
             if add_webpage_streamer:
