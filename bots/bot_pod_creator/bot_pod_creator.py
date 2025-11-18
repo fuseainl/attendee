@@ -8,6 +8,8 @@ import jsonpatch
 from django.conf import settings
 from kubernetes import client, config
 
+from .bot_pod_spec import BotPodSpecType
+
 logger = logging.getLogger(__name__)
 
 # fmt: off
@@ -272,8 +274,7 @@ class BotPodCreator:
 
     def apply_spec_to_bot_pod(self, bot_pod: client.V1Pod) -> dict:
         bot_pod_dict = self.api_client.sanitize_for_serialization(bot_pod)
-        patch_str = os.getenv("BOT_POD_SPEC")
-        return apply_json6902_patch(bot_pod_dict, patch_str)
+        return apply_json6902_patch(bot_pod_dict, self.bot_pod_spec)
 
     def create_bot_pod(
         self,
@@ -282,6 +283,7 @@ class BotPodCreator:
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
         add_persistent_storage: Optional[bool] = False,
+        bot_pod_spec_type: Optional[BotPodSpecType] = BotPodSpecType.DEFAULT,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -296,6 +298,11 @@ class BotPodCreator:
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
         self.add_persistent_storage = add_persistent_storage
+
+        # Out of caution ensure bot_pod_spec_type is purely alphabetical
+        if not bot_pod_spec_type.isalpha():
+            raise ValueError(f"bot_pod_spec_type must be purely alphabetical: {bot_pod_spec_type}")
+        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") # Fetch bot pod spec from environment variable
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
