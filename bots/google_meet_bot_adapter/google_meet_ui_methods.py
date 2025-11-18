@@ -515,9 +515,9 @@ class GoogleMeetUIMethods:
 
         # Wait for the URL to include https://myaccount.google.com, this indicates that we have logged in successfully
         start_waiting_at = time.time()
-        while "https://myaccount.google.com" not in self.driver.current_url:
+        while "https://mail.google.com" not in self.driver.current_url:
             time.sleep(1)
-            logger.info(f"Current URL: {self.driver.current_url}")
+            logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
                 # We'll raise an exception if it's not logged in after 120 seconds
                 raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
