@@ -2,7 +2,7 @@ import logging
 
 from rest_framework import serializers
 
-from .serializers import BotSerializer
+from .serializers import BotSerializer, CreateBotSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,12 @@ class ZoomRTMSJSONField(serializers.JSONField):
     pass
 
 
-class CreateAppSessionSerializer(BotSerializer):
+class CreateAppSessionSerializer(CreateBotSerializer):
+    # Remove inherited required fields that don't apply to app sessions
+    meeting_url = None
+    bot_name = None
+    join_at = None
+
     zoom_rtms = ZoomRTMSJSONField(help_text="Zoom RTMS configuration containing meeting UUID, stream ID, and server URLs", required=True)
 
     ZOOM_RTMS_SCHEMA = {
@@ -53,6 +58,9 @@ class CreateAppSessionSerializer(BotSerializer):
         "additionalProperties": False,
     }
 
+    class Meta(BotSerializer.Meta):
+        fields = [field for field in BotSerializer.Meta.fields if field not in ["name", "meeting_url", "join_at"]] + ["zoom_rtms"]
+
     def validate_zoom_rtms(self, value):
         if value is None:
             raise serializers.ValidationError("zoom_rtms is required")
@@ -64,7 +72,17 @@ class CreateAppSessionSerializer(BotSerializer):
 
         return value
 
+    def validate_transcription_settings(self, value):
+        if value is None:
+            value = {"meeting_closed_captions": {}}
+        return super().validate_transcription_settings(value)
+
 
 class AppSessionSerializer(BotSerializer):
+    # Remove inherited required fields that don't apply to app sessions
+    meeting_url = None
+    bot_name = None
+    join_at = None
+
     class Meta(BotSerializer.Meta):
-        fields = [field for field in BotSerializer.Meta.fields if field not in ["name", "meeting_url"]] + ["zoom_rtms_stream_id"]
+        fields = [field for field in BotSerializer.Meta.fields if field not in ["name", "meeting_url", "join_at"]] + ["zoom_rtms_stream_id"]

@@ -11,8 +11,10 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .app_session_api_utils import create_app_session
+from .app_session_serializers import AppSessionSerializer, CreateAppSessionSerializer
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_app_session, send_sync_command
+from .bots_api_utils import BotCreationSource, send_sync_command
 from .launch_bot_utils import launch_bot
 from .models import (
     Bot,
@@ -22,11 +24,9 @@ from .models import (
     Recording,
     SessionTypes,
 )
-from .serializers import (
-    AppSessionSerializer,
-    CreateAppSessionSerializer,
-    RecordingSerializer,
-)
+from .serializers import RecordingSerializer
+
+logger = logging.getLogger(__name__)
 
 TokenHeaderParameter = [
     OpenApiParameter(

@@ -3,10 +3,12 @@ import logging
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
-from .bots_api_utils import create_webhook_subscriptions
+from .app_session_serializers import (
+    CreateAppSessionSerializer,
+)
+from .bots_api_utils import BotCreationSource, create_webhook_subscriptions
 from .models import (
     Bot,
-    BotCreationSource,
     BotEventManager,
     BotEventTypes,
     BotStates,
@@ -14,9 +16,6 @@ from .models import (
     Recording,
     SessionTypes,
     TranscriptionTypes,
-)
-from .serializers import (
-    CreateAppSessionSerializer,
 )
 from .utils import transcription_provider_from_bot_creation_data
 
