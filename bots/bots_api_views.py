@@ -110,18 +110,6 @@ NewlyCreatedBotExample = OpenApiExample(
     description="Example response when creating a new bot",
 )
 
-NewlyCreatedAppSessionExample = OpenApiExample(
-    "New app session",
-    value={
-        "id": "app_sess_weIAju4OXNZkDTpZ",
-        "zoom_rtms_stream_id": "1234567890",
-        "state": "joining",
-        "events": [{"type": "join_requested", "created_at": "2024-01-18T12:34:56Z"}],
-        "transcription_state": "not_started",
-        "recording_state": "not_started",
-    },
-)
-
 
 @extend_schema(exclude=True)
 class NotFoundView(APIView):
