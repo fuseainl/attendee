@@ -13,14 +13,12 @@ from django.urls import reverse
 
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
-    AppSession,
     Bot,
     BotChatMessageRequest,
     BotEventManager,
     BotEventTypes,
     BotMediaRequest,
     BotMediaRequestMediaTypes,
-    BotSession,
     BotStates,
     CalendarEvent,
     Credentials,
@@ -36,7 +34,6 @@ from .models import (
     WebhookTriggerTypes,
 )
 from .serializers import (
-    CreateAppSessionSerializer,
     CreateBotSerializer,
     PatchBotSerializer,
     PatchBotTranscriptionSettingsSerializer,
@@ -251,7 +248,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
 
     try:
         with transaction.atomic():
-            bot = BotSession.objects.create(
+            bot = Bot.objects.create(
                 project=project,
                 meeting_url=meeting_url,
                 name=bot_name,
@@ -298,86 +295,6 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         error_id = str(uuid.uuid4())
         logger.error(f"Error creating bot (error_id={error_id}): {e}")
         return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
-
-
-def create_app_session(data: dict, source: BotCreationSource, project: Project) -> tuple[Bot | None, dict | None]:
-    # Given them a small grace period before we start rejecting requests
-    if project.organization.out_of_credits():
-        logger.error(f"Organization {project.organization.id} has insufficient credits. Please add credits in the Account -> Billing page.")
-        return None, {"error": "Organization has run out of credits. Please add more credits in the Account -> Billing page."}
-
-    serializer = CreateAppSessionSerializer(data=data)
-    if not serializer.is_valid():
-        return None, serializer.errors
-
-    transcription_settings = serializer.validated_data["transcription_settings"]
-    rtmp_settings = serializer.validated_data["rtmp_settings"]
-    recording_settings = serializer.validated_data["recording_settings"]
-    debug_settings = serializer.validated_data["debug_settings"]
-    automatic_leave_settings = serializer.validated_data["automatic_leave_settings"]
-    teams_settings = serializer.validated_data["teams_settings"]
-    zoom_settings = serializer.validated_data["zoom_settings"]
-
-    metadata = serializer.validated_data["metadata"]
-    websocket_settings = serializer.validated_data["websocket_settings"]
-    deduplication_key = serializer.validated_data["deduplication_key"]
-    webhook_subscriptions = serializer.validated_data["webhooks"]
-    callback_settings = serializer.validated_data["callback_settings"]
-    zoom_rtms = serializer.validated_data["zoom_rtms"]
-    initial_state = BotStates.READY
-
-    settings = {
-        "transcription_settings": transcription_settings,
-        "rtmp_settings": rtmp_settings,
-        "recording_settings": recording_settings,
-        "debug_settings": debug_settings,
-        "automatic_leave_settings": automatic_leave_settings,
-        "teams_settings": teams_settings,
-        "zoom_settings": zoom_settings,
-        "websocket_settings": websocket_settings,
-        "callback_settings": callback_settings,
-        "zoom_rtms": zoom_rtms,
-    }
-
-    try:
-        with transaction.atomic():
-            app_session = AppSession.objects.create(
-                project=project,
-                settings=settings,
-                metadata=metadata,
-                deduplication_key=deduplication_key,
-                state=initial_state,
-                zoom_rtms_stream_id=zoom_rtms.get("rtms_stream_id"),
-                meeting_url="app_session",
-                name="App Session",
-            )
-
-            Recording.objects.create(
-                bot=app_session,
-                recording_type=app_session.recording_type(),
-                transcription_type=TranscriptionTypes.NON_REALTIME,
-                transcription_provider=transcription_provider_from_bot_creation_data(serializer.validated_data),
-                is_default_recording=True,
-            )
-
-            # Create bot-level webhook subscriptions if provided
-            if webhook_subscriptions:
-                create_webhook_subscriptions(webhook_subscriptions, project, app_session)
-
-            BotEventManager.create_event(bot=app_session, event_type=BotEventTypes.APP_SESSION_CONNECTION_REQUESTED, event_metadata={"source": source})
-
-            return app_session, None
-
-    except ValidationError as e:
-        logger.error(f"ValidationError creating app session: {e}")
-        return None, {"error": e.messages[0]}
-    except Exception as e:
-        if isinstance(e, IntegrityError) and "unique_bot_deduplication_key" in str(e):
-            logger.error(f"IntegrityError due to unique_bot_deduplication_key constraint violation creating app session: {e}")
-            return None, {"error": "Deduplication key already in use. A app session in a non-terminal state with this deduplication key already exists. Please use a different deduplication key or wait for that app session to terminate."}
-
-        logger.error(f"Error creating app session: {e}")
-        return None, {"error": str(e)}
 
 
 def patch_bot_voice_agent_settings(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:

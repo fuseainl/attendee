@@ -514,6 +514,8 @@ class RecordingViews(models.TextChoices):
     SPEAKER_VIEW_NO_SIDEBAR = "speaker_view_no_sidebar"
 
 
+# Session type = BOT means you are connecting as a meeting bot (virtual participant)
+# Session type = APP_SESSION means you are connecting as an app (Zoom RTMS, Google Meet Media API)
 class SessionTypes(models.IntegerChoices):
     BOT = 1, "Bot"
     APP_SESSION = 2, "App Session"
@@ -671,7 +673,7 @@ class Bot(models.Model):
     calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
 
     zoom_rtms_stream_id = models.CharField(max_length=255, null=True, blank=True)
-    session_type = models.IntegerField(choices=SessionTypes.choices, default=SessionTypes.BOT, null=False)
+    session_type = models.IntegerField(choices=SessionTypes.choices, default=SessionTypes.BOT, db_default=SessionTypes.BOT, null=False)
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -922,11 +924,17 @@ class Bot(models.Model):
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()
 
+    def object_id_prefix(self):
+        if self.session_type == SessionTypes.BOT:
+            return "bot_"
+        else:
+            return "app_"
+
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
             random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+            self.object_id = f"{self.object_id_prefix()}{random_string}"
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -955,40 +963,6 @@ class Bot(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["project", "deduplication_key"], name="unique_bot_deduplication_key", condition=~models.Q(state__in=BotStates.post_meeting_states())),
         ]
-
-
-class BotSessionManager(models.Manager):
-    def get_queryset(self):
-        return super().get_queryset().filter(session_type=SessionTypes.BOT)
-
-
-class BotSession(Bot):
-    OBJECT_ID_PREFIX = "bot_"
-    objects = BotSessionManager()
-
-    def save(self, *args, **kwargs):
-        self.session_type = SessionTypes.BOT
-        super().save(*args, **kwargs)
-
-    class Meta:
-        proxy = True
-
-
-class AppSessionManager(models.Manager):
-    def get_queryset(self):
-        return super().get_queryset().filter(session_type=SessionTypes.APP_SESSION)
-
-
-class AppSession(Bot):
-    objects = AppSessionManager()
-    OBJECT_ID_PREFIX = "app_sess_"
-
-    def save(self, *args, **kwargs):
-        self.session_type = SessionTypes.APP_SESSION
-        super().save(*args, **kwargs)
-
-    class Meta:
-        proxy = True
 
 
 class CreditTransaction(models.Model):

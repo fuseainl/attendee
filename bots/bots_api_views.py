@@ -18,11 +18,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_app_session, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_bot
 from .meeting_url_utils import meeting_type_from_url
 from .models import (
-    AppSession,
     AsyncTranscription,
     AsyncTranscriptionStates,
     Bot,
@@ -44,13 +43,11 @@ from .models import (
     Utterance,
 )
 from .serializers import (
-    AppSessionSerializer,
     AsyncTranscriptionSerializer,
     BotChatMessageRequestSerializer,
     BotImageSerializer,
     BotSerializer,
     ChatMessageSerializer,
-    CreateAppSessionSerializer,
     CreateAsyncTranscriptionSerializer,
     CreateBotSerializer,
     ParticipantEventSerializer,
@@ -271,37 +268,6 @@ class BotListCreateView(GenericAPIView):
             launch_bot(bot)
 
         return Response(BotSerializer(bot).data, status=status.HTTP_201_CREATED)
-
-
-class AppSessionCreateView(APIView):
-    authentication_classes = [ApiKeyAuthentication]
-
-    @extend_schema(
-        operation_id="Create App Session",
-        summary="Create a new app session",
-        description="After being created, the app session will connect to the specified media stream.",
-        request=CreateAppSessionSerializer,
-        responses={
-            201: OpenApiResponse(
-                response=AppSessionSerializer,
-                description="App session created successfully",
-                examples=[NewlyCreatedAppSessionExample],
-            ),
-            400: OpenApiResponse(description="Invalid input"),
-        },
-        parameters=TokenHeaderParameter,
-        tags=["App Sessions"],
-    )
-    def post(self, request):
-        app_session, error = create_app_session(data=request.data, source=BotCreationSource.API, project=request.auth.project)
-        if error:
-            return Response(error, status=status.HTTP_400_BAD_REQUEST)
-
-        # If this is a scheduled bot, we don't want to launch it yet.
-        if app_session.state == BotStates.CONNECTING:
-            launch_bot(app_session)
-
-        return Response(AppSessionSerializer(app_session).data, status=status.HTTP_201_CREATED)
 
 
 class SpeechView(APIView):
@@ -702,88 +668,6 @@ class BotLeaveView(APIView):
             return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
-class AppSessionEndView(APIView):
-    authentication_classes = [ApiKeyAuthentication]
-
-    @extend_schema(
-        operation_id="End App Session",
-        summary="End an app session",
-        description="Causes the app session to end.",
-        responses={
-            200: OpenApiResponse(
-                response=AppSessionSerializer,
-                description="Successfully requested to end app session",
-            ),
-            404: OpenApiResponse(description="App session not found"),
-        },
-        tags=["App Sessions"],
-    )
-    def post(self, request):
-        try:
-            rtms_stream_id = request.data.get("zoom_rtms").get("rtms_stream_id")
-            app_session = AppSession.objects.get(zoom_rtms_stream_id=rtms_stream_id, project=request.auth.project)
-
-            BotEventManager.create_event(app_session, BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED)
-
-            send_sync_command(app_session)
-
-            return Response(AppSessionSerializer(app_session).data, status=status.HTTP_200_OK)
-        except ValidationError as e:
-            logging.error(f"Error ending app session: {str(e)} (app_session_id={app_session.object_id})")
-            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
-        except AppSession.DoesNotExist:
-            return Response({"error": "App session not found"}, status=status.HTTP_404_NOT_FOUND)
-
-
-class AppSessionMediaView(APIView):
-    authentication_classes = [ApiKeyAuthentication]
-
-    @extend_schema(
-        operation_id="Get App Session Media",
-        summary="Get the media for an app session",
-        description="Returns a short-lived S3 URL for the media of the app session.",
-        responses={
-            200: OpenApiResponse(
-                response=RecordingSerializer,
-                description="Short-lived S3 URL for the recording",
-            )
-        },
-        parameters=[
-            *TokenHeaderParameter,
-            OpenApiParameter(
-                name="object_id",
-                type=str,
-                location=OpenApiParameter.PATH,
-                description="App Session ID",
-                examples=[OpenApiExample("App Session ID Example", value="app_session_xxxxxxxxxxx")],
-            ),
-        ],
-        tags=["App Sessions"],
-    )
-    def get(self, request, object_id):
-        try:
-            app_session = AppSession.objects.get(object_id=object_id, project=request.auth.project)
-
-            recording = Recording.objects.filter(bot=app_session, is_default_recording=True).first()
-            if not recording:
-                return Response(
-                    {"error": "No media found for app session"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            recording_file = recording.file
-            if not recording_file:
-                return Response(
-                    {"error": "No media file found for app session"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            return Response(RecordingSerializer(recording).data)
-
-        except AppSession.DoesNotExist:
-            return Response({"error": "App session not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class RecordingView(APIView):

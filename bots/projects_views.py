@@ -22,12 +22,10 @@ from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscr
 from .launch_bot_utils import launch_bot
 from .models import (
     ApiKey,
-    AppSession,
     Bot,
     BotEvent,
     BotEventSubTypes,
     BotEventTypes,
-    BotSession,
     BotStates,
     Calendar,
     CalendarEvent,
@@ -484,9 +482,9 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         # Choose model based on session type
         session_type = self.get_session_type()
         if session_type == "app_sessions":
-            queryset = AppSession.objects.filter(project=project)
+            queryset = Bot.objects.filter(project=project, session_type=SessionTypes.APP_SESSION)
         else:
-            queryset = BotSession.objects.filter(project=project)
+            queryset = Bot.objects.filter(project=project, session_type=SessionTypes.BOT)
 
         # Apply date filters if provided
         start_date = self.request.GET.get("start_date")

@@ -938,11 +938,27 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         return value
 
 
-class CreateSessionMixin(serializers.Serializer):
-    deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
-
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Valid meeting URL",
+            value={
+                "meeting_url": "https://zoom.us/j/123?pwd=456",
+                "bot_name": "My Bot",
+            },
+            description="Example of a valid Zoom meeting URL",
+        )
+    ]
+)
+class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
+    meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456")
+    bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
+    bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
     metadata = MetadataJSONField(help_text="JSON object containing metadata to associate with the bot", required=False, default=None)
-
+    bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
+    join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
+    calendar_event_id = serializers.CharField(help_text="The ID of the calendar event the bot should join.", required=False, default=None)
+    deduplication_key = serializers.CharField(help_text="Optional key for deduplicating bots. If a bot with this key already exists in a non-terminal state, the new bot will not be created and an error will be returned.", required=False, default=None)
     webhooks = WebhooksJSONField(
         help_text="List of webhook subscriptions to create for this bot. Each item should have 'url' and 'triggers' fields.",
         required=False,
@@ -1464,96 +1480,14 @@ class CreateSessionMixin(serializers.Serializer):
         return data
 
 
-@extend_schema_serializer(
-    examples=[
-        OpenApiExample(
-            "Valid meeting URL",
-            value={
-                "meeting_url": "https://zoom.us/j/123?pwd=456",
-                "bot_name": "My Bot",
-            },
-            description="Example of a valid Zoom meeting URL",
-        )
-    ]
-)
-class CreateBotSerializer(BotValidationMixin, CreateSessionMixin, serializers.Serializer):
-    meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456")
-    bot_name = serializers.CharField(help_text="The name of the bot to create, e.g. 'My Bot'")
-    bot_chat_message = BotChatMessageRequestSerializer(help_text="The chat message the bot sends after it joins the meeting", required=False, default=None)
-    bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
-    join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False, default=None)
-    calendar_event_id = serializers.CharField(help_text="The ID of the calendar event the bot should join.", required=False, default=None)
-
-
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "meeting_uuid": {
-                "type": "string",
-                "description": "The UUID of the Zoom meeting",
-            },
-            "rtms_stream_id": {
-                "type": "string",
-                "description": "The RTMS stream ID for the Zoom meeting",
-            },
-            "server_urls": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "List of server URLs for the RTMS connection",
-            },
-        },
-        "required": ["meeting_uuid", "rtms_stream_id", "server_urls"],
-        "additionalProperties": False,
-    }
-)
-class ZoomRTMSJSONField(serializers.JSONField):
-    pass
-
-
-@extend_schema_serializer(
-    examples=[
-        OpenApiExample(
-            "Create App Session",
-            value={"zoom_rtms": {"meeting_uuid": "abc123def456", "rtms_stream_id": "stream_789", "server_urls": ["wss://rtms1.zoom.us", "wss://rtms2.zoom.us"]}, "transcription_settings": {"deepgram": {"language": "en"}}, "recording_settings": {"format": "mp4", "view": "speaker_view", "resolution": "1080p"}},
-            description="Example of creating an app session with Zoom RTMS configuration",
-        )
-    ]
-)
-class CreateAppSessionSerializer(CreateSessionMixin, serializers.Serializer):
-    zoom_rtms = ZoomRTMSJSONField(help_text="Zoom RTMS configuration containing meeting UUID, stream ID, and server URLs", required=True)
-
-    ZOOM_RTMS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "meeting_uuid": {"type": "string"},
-            "rtms_stream_id": {"type": "string"},
-            "server_urls": {"type": "string"},
-            "operator_id": {"type": "string"},
-        },
-        "required": ["meeting_uuid", "rtms_stream_id", "server_urls"],
-        "additionalProperties": False,
-    }
-
-    def validate_zoom_rtms(self, value):
-        if value is None:
-            raise serializers.ValidationError("zoom_rtms is required")
-
-        try:
-            jsonschema.validate(instance=value, schema=self.ZOOM_RTMS_SCHEMA)
-        except jsonschema.exceptions.ValidationError as e:
-            raise serializers.ValidationError(e.message)
-
-        return value
-
-
-class SessionMixin(serializers.Serializer):
+class BotSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="object_id")
     metadata = serializers.SerializerMethodField()
     state = serializers.SerializerMethodField()
     events = serializers.SerializerMethodField()
     transcription_state = serializers.SerializerMethodField()
     recording_state = serializers.SerializerMethodField()
+    join_at = serializers.DateTimeField()
     deduplication_key = serializers.CharField()
 
     @extend_schema_field(
@@ -1620,10 +1554,6 @@ class SessionMixin(serializers.Serializer):
 
         return RecordingStates.state_to_api_code(default_recording.state)
 
-
-class BotSerializer(SessionMixin, serializers.ModelSerializer):
-    join_at = serializers.DateTimeField()
-
     class Meta:
         model = Bot
         fields = [
@@ -1635,25 +1565,6 @@ class BotSerializer(SessionMixin, serializers.ModelSerializer):
             "transcription_state",
             "recording_state",
             "join_at",
-            "deduplication_key",
-        ]
-        read_only_fields = fields
-
-
-class AppSessionSerializer(SessionMixin, serializers.ModelSerializer):
-    zoom_rtms_stream_id = serializers.CharField()
-
-    class Meta:
-        model = Bot
-        fields = [
-            "id",
-            "metadata",
-            "meeting_url",
-            "state",
-            "events",
-            "transcription_state",
-            "recording_state",
-            "zoom_rtms_stream_id",
             "deduplication_key",
         ]
         read_only_fields = fields
