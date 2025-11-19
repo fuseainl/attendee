@@ -190,6 +190,8 @@ class ZoomBotAdapter(BotAdapter):
         self.current_image_to_send = None
         self.recording_is_paused = False
 
+        self.ready_to_send_chat_messages = False
+
     def pause_recording(self):
         self.recording_is_paused = True
         if not self.raw_recording_active:
@@ -524,7 +526,7 @@ class ZoomBotAdapter(BotAdapter):
             logger.info(f"AllowParticipantsToChat({allow_participants_to_chat}) returned {allow_participants_to_chat_result}")
 
     def is_ready_to_send_chat_messages(self):
-        return self.joined_at is not None and self.chat_ctrl is not None
+        return self.ready_to_send_chat_messages
 
     def on_join(self):
         # Reset breakout room transition flag
@@ -550,6 +552,7 @@ class ZoomBotAdapter(BotAdapter):
         self.chat_ctrl = self.meeting_service.GetMeetingChatController()
         self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
         self.chat_ctrl.SetEvent(self.chat_ctrl_event)
+        self.ready_to_send_chat_messages = True
         self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
 
         # Breakout room controller
