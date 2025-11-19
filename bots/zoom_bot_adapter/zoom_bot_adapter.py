@@ -523,6 +523,9 @@ class ZoomBotAdapter(BotAdapter):
             allow_participants_to_chat_result = self.participants_ctrl.AllowParticipantsToChat(allow_participants_to_chat)
             logger.info(f"AllowParticipantsToChat({allow_participants_to_chat}) returned {allow_participants_to_chat_result}")
 
+    def is_ready_to_send_chat_messages(self):
+        return self.joined_at is not None
+
     def on_join(self):
         # Reset breakout room transition flag
         self.is_joining_or_leaving_breakout_room = False

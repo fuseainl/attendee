@@ -824,6 +824,9 @@ class WebBotAdapter(BotAdapter):
                 self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_MAX_UPTIME})
                 return
 
+    def is_ready_to_send_chat_messages(self):
+        return self.ready_to_send_chat_messages
+
     def webpage_streamer_get_peer_connection_offer(self):
         return self.driver.execute_script("return window.botOutputManager.getBotOutputPeerConnectionOffer();")
 
