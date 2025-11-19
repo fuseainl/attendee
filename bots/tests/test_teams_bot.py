@@ -6,7 +6,7 @@ from django.db import connection
 from django.test import TransactionTestCase
 
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import UiTeamsBlockingUsException
 
 
@@ -235,3 +235,104 @@ class TestTeamsBot(TransactionTestCase):
                 self.assertEqual(last_bot_event.metadata.get("error"), "Internal error during main loop processing")
                 self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
                 print("last_bot_event for attendee internal error", last_bot_event.__dict__)
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_chat_message_delayed_until_adapter_ready(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Test that a chat message request is not sent immediately if the adapter is not ready,
+        but is sent once the adapter becomes ready.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create a chat message request in the ENQUEUED state
+        chat_message_request = BotChatMessageRequest.objects.create(
+            bot=self.bot,
+            message="Test message",
+            to=BotChatMessageToOptions.EVERYONE,
+        )
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join
+            time.sleep(3)
+
+            # Mock send_chat_message to track calls
+            with patch.object(controller.adapter, "send_chat_message") as mock_send_chat_message:
+                # Initially, the adapter is not ready to send chat messages
+                controller.adapter.ready_to_send_chat_messages = False
+
+                # Trigger sync_chat_message_requests
+                controller.take_action_based_on_chat_message_requests_in_db()
+
+                # Verify that send_chat_message was NOT called because adapter is not ready
+                self.assertEqual(mock_send_chat_message.call_count, 0, "send_chat_message should not be called when adapter is not ready")
+
+                # Verify that the chat message request is still in ENQUEUED state
+                chat_message_request.refresh_from_db()
+                self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.ENQUEUED, "Chat message should remain in ENQUEUED state when adapter is not ready")
+
+                # Wait 2 seconds
+                time.sleep(2)
+
+                # Now simulate the adapter becoming ready
+                controller.adapter.ready_to_send_chat_messages = True
+
+                # Simulate the READY_TO_SEND_CHAT_MESSAGE callback
+                controller.adapter.send_message_callback({"message": controller.adapter.Messages.READY_TO_SEND_CHAT_MESSAGE})
+
+                # Wait for the message to be processed
+                time.sleep(1)
+
+                # Verify that send_chat_message WAS called after adapter became ready
+                self.assertEqual(mock_send_chat_message.call_count, 1, "send_chat_message should be called once after adapter becomes ready")
+
+                # Verify the arguments passed to send_chat_message
+                call_args = mock_send_chat_message.call_args
+                self.assertEqual(call_args.kwargs["text"], "Test message")
+                self.assertEqual(call_args.kwargs["to_user_uuid"], None)
+
+                # Verify that the chat message request is now in SENT state
+                chat_message_request.refresh_from_db()
+                self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.SENT, "Chat message should be in SENT state after being sent")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(2)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
