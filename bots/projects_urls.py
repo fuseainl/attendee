@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import projects_views
+from .models import SessionTypes
 
 app_name = "bots"
 
@@ -17,12 +18,12 @@ urlpatterns = [
     ),
     path(
         "<str:object_id>/bots",
-        projects_views.ProjectBotsView.as_view(session_type="bot_sessions"),
+        projects_views.ProjectBotsView.as_view(session_type=SessionTypes.BOT),
         name="project-bots",
     ),
     path(
         "<str:object_id>/app_sessions",
-        projects_views.ProjectBotsView.as_view(session_type="app_sessions"),
+        projects_views.ProjectBotsView.as_view(session_type=SessionTypes.APP_SESSION),
         name="project-app-sessions",
     ),
     path(

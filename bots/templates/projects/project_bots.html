@@ -60,12 +60,12 @@
 
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        {% if session_type == "bot_sessions" %}
+        {% if session_type == SessionTypes.BOT %}
             <h2>Bots</h2>
             <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createBotModal">
                 <i class="bi bi-plus-circle me-1"></i> Create Bot
             </button>
-        {% elif session_type == "app_sessions" %}
+        {% elif session_type == SessionTypes.APP_SESSION %}
             <h2>App Sessions</h2>
         {% endif %}
     </div>
@@ -123,9 +123,9 @@
                     
                     <div class="col-md-2 d-flex align-items-end filter-item">
                         <button type="submit" class="btn btn-sm btn-primary me-2">Apply</button>
-                        {% if session_type == "app_sessions" %}
+                        {% if session_type == SessionTypes.APP_SESSION %}
                         <a href="{% url 'bots:project-app-sessions' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
-                        {% else %}
+                        {% elif session_type == SessionTypes.BOT %}
                         <a href="{% url 'bots:project-bots' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
                         {% endif %}
                     </div>
@@ -140,8 +140,8 @@
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Name</th>
-                        {% if session_type == "bot_sessions" %}
+                        {% if session_type == SessionTypes.BOT %}
+                            <th>Name</th>
                             <th>Meeting URL</th>
                         {% endif %}
                         <th>Status</th>
@@ -153,7 +153,7 @@
                 <tbody>
                     {% for bot in bots %}
                     <tr class="clickable-row"
-                        {% if session_type == "app_sessions" %}
+                        {% if session_type == SessionTypes.APP_SESSION %}
                         hx-get="{% url 'projects:project-app-session-detail' project.object_id bot.object_id %}"
                         {% else %}
                         hx-get="{% url 'projects:project-bot-detail' project.object_id bot.object_id %}"
@@ -163,8 +163,8 @@
                         hx-swap="outerHTML"
                         hx-push-url="true">
                         <td><small>{{ bot.object_id }}</small></td>
-                        <td><small class="bot-name">{{ bot.name }}</small></td>
-                        {% if session_type == "bot_sessions" %}
+                        {% if session_type == SessionTypes.BOT %}
+                            <td><small class="bot-name">{{ bot.name }}</small></td>
                             <td><span class="meeting-url" title="{{ bot.meeting_url }}">{{ bot.meeting_url }}</span></td>
                         {% endif %}
                         <td>
@@ -206,13 +206,13 @@
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-2"></i>
                 {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.search %}
-                    {% if session_type == "app_sessions" %}
+                    {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found matching the current filters.
                     {% else %}
                         No bots found matching the current filters.
                     {% endif %}
                 {% else %}
-                    {% if session_type == "app_sessions" %}
+                    {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found. Use the API to create app sessions for this project.
                     {% else %}
                         No bots found. Use the API to create bots for this project.

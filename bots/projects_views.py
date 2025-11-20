@@ -481,7 +481,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
 
         # Choose model based on session type
         session_type = self.get_session_type()
-        if session_type == "app_sessions":
+        if session_type == SessionTypes.APP_SESSION:
             queryset = Bot.objects.filter(project=project, session_type=SessionTypes.APP_SESSION)
         else:
             queryset = Bot.objects.filter(project=project, session_type=SessionTypes.BOT)
