@@ -425,6 +425,13 @@ class RTMSClient:
                 # When we request video (or transcript), include media_params just
                 # like your working JS example does.
                 if media_type == 32:
+                    if self.adapter.video_frame_size == (1280, 720):
+                        video_resolution_for_media_params = 2
+                    elif self.adapter.video_frame_size == (1920, 1080):
+                        video_resolution_for_media_params = 3
+                    else:
+                        raise ValueError(f"Unsupported video frame size: {self.adapter.video_frame_size}")
+
                     handshake["media_params"] = {
                         "audio": {
                             "content_type": 1,
@@ -436,7 +443,7 @@ class RTMSClient:
                         },
                         "video": {
                             "codec": 7,  # H264
-                            "resolution": 2,  # HD
+                            "resolution": video_resolution_for_media_params,  # HD
                             "fps": 15,
                         },
                     }
@@ -586,7 +593,7 @@ class RTMSClient:
         text = content.get("data", "")
         user_id = content.get("user_id") or content.get("userId")
         user_name = content.get("user_name") or content.get("userName")
-        caption_id = str(user_id) + '.' + str(content.get('timestamp')) # Timestamp + user id should uniquely identify a caption
+        caption_id = str(user_id) + "." + str(content.get("timestamp"))  # Timestamp + user id should uniquely identify a caption
 
         event = {
             "type": "transcriptUpdate",
