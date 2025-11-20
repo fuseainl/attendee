@@ -490,7 +490,7 @@ class RTMSClient:
                             "msg_type": 13,  # KEEP_ALIVE_RESP
                             "timestamp": msg.get("timestamp"),
                         }
-                        logger.debug("Responding to media KEEP_ALIVE_REQ: %s", resp)
+                        logger.info("Responding to media KEEP_ALIVE_REQ: %s", resp)
                         await ws.send(json.dumps(resp))
 
                     # Audio data
@@ -511,6 +511,7 @@ class RTMSClient:
 
         except Exception:
             logger.exception("Media socket error")
+            self.adapter.handle_fatal_media_socket_error()
         finally:
             logger.info("Media socket closed")
 
@@ -833,6 +834,10 @@ class ZoomRTMSAdapter(BotAdapter):
 
     def get_participant(self, participant_id):
         return self._participant_cache.get(participant_id)
+
+    def handle_fatal_media_socket_error(self):
+        logger.info("handle_fatal_media_socket_error called")
+        self.send_message_callback({"message": self.Messages.APP_SESSION_DISCONNECT_REQUESTED})
 
     def handle_rtms_json_message(self, json_data):
         logger.info("handle_rtms_json_message called with json_data: %s", json_data)
