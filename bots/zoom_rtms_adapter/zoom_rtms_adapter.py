@@ -315,7 +315,7 @@ class RTMSClient:
                         continue
 
                     msg_type = msg.get("msg_type")
-                    logger.debug("Signaling message: %s", msg)
+                    logger.info("Signaling message: %s", msg)
 
                     # Handshake response
                     if msg_type == 2 and msg.get("status_code") == 0:  # SIGNALING_HAND_SHAKE_RESP
@@ -326,6 +326,14 @@ class RTMSClient:
                             or server_urls.get("audio")
                             or server_urls.get("video")
                         )
+
+                        # Subscribe to in-meeting events on the signaling socket
+                        try:
+                            await self._subscribe_in_meeting_events()
+                        except Exception:
+                            logger.exception("Error subscribing to in-meeting events")
+
+                        # Then connect to the media websocket (as before)
                         if media_url:
                             logger.info("Connecting to media WebSocket at %s", media_url)
                             asyncio.create_task(self._connect_media(media_url))
@@ -350,6 +358,35 @@ class RTMSClient:
             logger.exception("Signaling socket error")
         finally:
             logger.info("Signaling socket closed")
+
+    async def _subscribe_in_meeting_events(self) -> None:
+        """
+        Subscribe to in-meeting events on the signaling connection:
+
+          - event_type 2: active speaker change
+          - event_type 3: participant join
+          - event_type 4: participant leave
+        """
+        if self.signaling_ws is None:
+            logger.warning("Cannot subscribe to in-meeting events: signaling_ws is None")
+            return
+
+        sub_msg = {
+            "msg_type": 5,
+            "events": [
+                {"event_type": 2, "subscribe": True},  # active speaker change
+                {"event_type": 3, "subscribe": True},  # participant join
+                {"event_type": 4, "subscribe": True},  # participant leave
+            ],
+        }
+
+        try:
+            await self.signaling_ws.send(json.dumps(sub_msg))
+            logger.info(
+                "Subscribed to in-meeting events (event_type 2/3/4: active speaker / join / leave)"
+            )
+        except Exception:
+            logger.exception("Failed to subscribe to in-meeting events")
 
     async def _connect_media(self, media_url: str) -> None:
         if self._closing.is_set():
