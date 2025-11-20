@@ -582,19 +582,20 @@ class RTMSClient:
             "caption_id": "abc123"  # optional
           }
         """
+        logger.info("RTMS transcriptUpdate RAW: %s", content)
         text = content.get("data", "")
         user_id = content.get("user_id") or content.get("userId")
         user_name = content.get("user_name") or content.get("userName")
-        caption_id = content.get("caption_id") or content.get("captionId") or content.get("id")
+        caption_id = str(user_id) + '.' + str(content.get('timestamp')) # Timestamp + user id should uniquely identify a caption
 
         event = {
             "type": "transcriptUpdate",
             "user": {
-                "userId": user_id,
+                "id": user_id,
                 "name": user_name,
             },
             "text": text,
-            "id": caption_id,
+            "caption_id": caption_id,
         }
         self.adapter.post_rtms_event(event)
 
@@ -848,9 +849,8 @@ class ZoomRTMSAdapter(BotAdapter):
             # {'user': {'userId': 16778240, 'name': 'Noah Duncan'},
             #  'text': 'Hello, how are you?', 'type': 'transcriptUpdate'}
 
-            user_obj = json_data.get("user") or {}
-            device_id = user_obj.get("userId") or user_obj.get("user_id")
-            caption_id = json_data.get("id") or json_data.get("captionId") or json_data.get("caption_id")
+            device_id = json_data.get("user").get("id")
+            caption_id = json_data.get("caption_id")
 
             itemConverted = {
                 "deviceId": device_id,
