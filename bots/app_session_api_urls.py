@@ -25,6 +25,3 @@ urlpatterns = [
         name="app-session-participant-events",
     ),
 ]
-
-# catch any other paths and return a 404 json response - must be last
-urlpatterns += [path("<path:any>", bots_api_views.NotFoundView.as_view())]
