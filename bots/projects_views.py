@@ -479,12 +479,8 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
-        # Choose model based on session type
-        session_type = self.get_session_type()
-        if session_type == SessionTypes.APP_SESSION:
-            queryset = Bot.objects.filter(project=project, session_type=SessionTypes.APP_SESSION)
-        else:
-            queryset = Bot.objects.filter(project=project, session_type=SessionTypes.BOT)
+        # Filter based on session type
+        queryset = Bot.objects.filter(project=project, session_type=self.get_session_type())
 
         # Apply date filters if provided
         start_date = self.request.GET.get("start_date")
@@ -543,8 +539,9 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
 
-        # Add BotStates for the template
+        # Add BotStates and SessionTypes for the template
         context["BotStates"] = BotStates
+        context["SessionTypes"] = SessionTypes
 
         # Add session type to context
         context["session_type"] = self.get_session_type()
