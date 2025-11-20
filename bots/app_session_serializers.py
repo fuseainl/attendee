@@ -77,6 +77,13 @@ class CreateAppSessionSerializer(CreateBotSerializer):
             value = {"meeting_closed_captions": {}}
         return super().validate_transcription_settings(value)
 
+    def validate_recording_settings(self, value):
+        if value is None:
+            value = {}
+        value["resolution"] = "720p"
+        # Currently, we burn too much CPU with 1080p, so we'll only support 720p. Hopefully the RTMS Python SDK will let us support 1080p.        
+        return super().validate_recording_settings(value)
+
 
 class AppSessionSerializer(BotSerializer):
     # Remove inherited required fields that don't apply to app sessions
