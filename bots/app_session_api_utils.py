@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -91,5 +92,6 @@ def create_app_session(data: dict, source: BotCreationSource, project: Project) 
             logger.error(f"IntegrityError due to unique_bot_deduplication_key constraint violation creating app session: {e}")
             return None, {"error": "Deduplication key already in use. A app session in a non-terminal state with this deduplication key already exists. Please use a different deduplication key or wait for that app session to terminate."}
 
-        logger.error(f"Error creating app session: {e}")
-        return None, {"error": str(e)}
+        error_id = str(uuid.uuid4())
+        logger.error(f"Error creating app session (error_id={error_id}): {e}")
+        return None, {"error": f"An error occurred while creating the app session. Error ID: {error_id}"}
