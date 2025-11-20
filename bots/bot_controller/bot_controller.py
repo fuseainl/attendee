@@ -390,19 +390,11 @@ class BotController:
         elif meeting_type == MeetingTypes.TEAMS:
             return 48000
 
-    def get_video_format(self):
-        meeting_type = self.get_meeting_type()
-        if meeting_type == MeetingTypes.ZOOM:
-            if self.is_rtms_meeting():
-                return GstreamerPipeline.VIDEO_FORMAT_H264
-
-        return GstreamerPipeline.VIDEO_FORMAT_I420
-
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
             if self.is_rtms_meeting():
-                return GstreamerPipeline.AUDIO_FORMAT_PCM_16KHZ
+                return RTMSGstreamerPipeline.AUDIO_FORMAT_PCM_16KHZ
             elif self.bot_in_db.use_zoom_web_adapter():
                 return GstreamerPipeline.AUDIO_FORMAT_FLOAT
             else:
@@ -792,7 +784,6 @@ class BotController:
                 on_new_sample_callback=self.on_new_sample_from_gstreamer_pipeline,
                 video_frame_size=self.bot_in_db.recording_dimensions(),
                 audio_format=self.get_audio_format(),
-                video_format=self.get_video_format(),
                 output_format=self.get_gstreamer_output_format(),
                 sink_type=self.get_gstreamer_sink_type(),
                 file_location=self.get_recording_file_location(),

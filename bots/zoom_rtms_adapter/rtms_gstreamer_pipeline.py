@@ -31,7 +31,6 @@ class RTMSGstreamerPipeline:
         *,
         on_new_sample_callback,
         video_frame_size,
-        video_format,
         audio_format,
         output_format,
         sink_type,
@@ -39,7 +38,7 @@ class RTMSGstreamerPipeline:
     ):
         self.on_new_sample_callback = on_new_sample_callback
         self.video_frame_size = video_frame_size
-        self.video_format = video_format
+        self.video_format = self.VIDEO_FORMAT_H264
         self.audio_format = audio_format
         self.output_format = output_format
         self.sink_type = sink_type
