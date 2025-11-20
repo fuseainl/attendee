@@ -711,7 +711,8 @@ class Bot(models.Model):
     @property
     def bot_pod_spec_type(self) -> BotPodSpecType:
         # If join_at is greater than SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS seconds into the future, use the scheduled pod spec
-        if self.join_at and self.join_at - timedelta(seconds=os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120)) > timezone.now():
+        scheduled_bot_pod_spec_margin_seconds = int(os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120))
+        if self.join_at and self.join_at - timedelta(seconds=scheduled_bot_pod_spec_margin_seconds) > timezone.now():
             return BotPodSpecType.SCHEDULED
         return BotPodSpecType.DEFAULT
 
