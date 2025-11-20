@@ -1817,6 +1817,13 @@ class BotController:
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_CONNECTED)
             return
 
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_DISCONNECT_REQUESTED:
+            logger.info("Received message that app session disconnect requested")
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED)
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.disconnect()
+            return
+
         if message.get("message") == BotAdapter.Messages.APP_SESSION_DISCONNECTED:
             logger.info("Received message that app session disconnected")
             self.flush_utterances()

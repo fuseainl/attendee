@@ -28,6 +28,7 @@ class BotAdapter:
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"
+        APP_SESSION_DISCONNECT_REQUESTED = "App session disconnect requested"
         APP_SESSION_DISCONNECTED = "App session disconnected"
 
     class BOT_RECORDING_PERMISSION_DENIED_REASON:

@@ -345,6 +345,10 @@ class RTMSClient:
                     elif msg_type == 6 and (msg.get("event", {}).get("event_type") == 3 or msg.get("event", {}).get("event_type") == 4):
                         await self._handle_participant_join_or_leave(msg)
 
+                    # Stream state update
+                    elif msg_type == 8:
+                        await self._handle_stream_state_update(msg)
+
                     # Session state update
                     elif msg_type == 9:
                         await self._handle_session_state_update(msg)
@@ -529,6 +533,14 @@ class RTMSClient:
             "type": "activeSpeakerChange",
             "user_id": user_id,
             "user_name": user_name,
+        }
+        self.adapter.post_rtms_event(event)
+
+    async def _handle_stream_state_update(self, content: dict) -> None:
+        state = content.get("state")
+        event = {
+            "type": "streamUpdate",
+            "state": state,
         }
         self.adapter.post_rtms_event(event)
 
@@ -891,6 +903,12 @@ class ZoomRTMSAdapter(BotAdapter):
             self.active_speaker_id = user_id
             self.active_speaker_name = user_name
             logger.info("RTMS activeSpeakerChange: %s", json_data)
+
+        elif json_data.get("type") == "streamUpdate":
+            state = json_data.get("state")
+            if state == 4:
+                logger.info("RTMS streamUpdate: Ended")
+                self.send_message_callback({"message": self.Messages.APP_SESSION_DISCONNECT_REQUESTED})
 
     # ------------------------------------------------------------- control API
 
