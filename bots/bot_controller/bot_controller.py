@@ -711,9 +711,6 @@ class BotController:
         if not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video and not self.pipeline_configuration.rtmp_stream_audio and not self.pipeline_configuration.rtmp_stream_video:
             return False
 
-        if self.bot_in_db.zoom_rtms_stream_id:
-            return False
-
         return not self.should_create_gstreamer_pipeline()
 
     def connect_to_redis(self):
