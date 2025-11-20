@@ -1,14 +1,13 @@
+import asyncio
 import base64
+import hashlib
+import hmac
 import json
-import os
+import logging
+import ssl
 import threading
 import time
 from datetime import datetime
-import logging
-import asyncio
-import ssl
-import hmac
-import hashlib
 
 import gi
 
@@ -139,19 +138,12 @@ def extract_join_info(join_payload: dict):
 
     if isinstance(server_urls, dict):
         # If Zoom ever returns a dict of URLs, pick reasonable default.
-        signaling_url = (
-            server_urls.get("signaling")
-            or server_urls.get("all")
-            or next(iter(server_urls.values()), None)
-        )
+        signaling_url = server_urls.get("signaling") or server_urls.get("all") or next(iter(server_urls.values()), None)
     else:
         signaling_url = server_urls
 
     if not (meeting_uuid and stream_id and signaling_url):
-        raise ValueError(
-            f"join_payload missing required fields. "
-            f"meeting_uuid={meeting_uuid}, rtms_stream_id={stream_id}, server_urls={server_urls}"
-        )
+        raise ValueError(f"join_payload missing required fields. meeting_uuid={meeting_uuid}, rtms_stream_id={stream_id}, server_urls={server_urls}")
 
     return meeting_uuid, stream_id, signaling_url
 
@@ -321,11 +313,7 @@ class RTMSClient:
                     if msg_type == 2 and msg.get("status_code") == 0:  # SIGNALING_HAND_SHAKE_RESP
                         media_server = msg.get("media_server", {})
                         server_urls = media_server.get("server_urls", {})
-                        media_url = (
-                            server_urls.get("all")
-                            or server_urls.get("audio")
-                            or server_urls.get("video")
-                        )
+                        media_url = server_urls.get("all") or server_urls.get("audio") or server_urls.get("video")
 
                         # Subscribe to in-meeting events on the signaling socket
                         try:
@@ -338,9 +326,7 @@ class RTMSClient:
                             logger.info("Connecting to media WebSocket at %s", media_url)
                             asyncio.create_task(self._connect_media(media_url))
                         else:
-                            logger.warning(
-                                "No media_url found in signaling handshake response: %s", msg
-                            )
+                            logger.warning("No media_url found in signaling handshake response: %s", msg)
 
                     # Keep-alive
                     elif msg_type == 12:  # KEEP_ALIVE_REQ
@@ -391,9 +377,7 @@ class RTMSClient:
 
         try:
             await self.signaling_ws.send(json.dumps(sub_msg))
-            logger.info(
-                "Subscribed to in-meeting events (event_type 2/3/4: active speaker / join / leave)"
-            )
+            logger.info("Subscribed to in-meeting events (event_type 2/3/4: active speaker / join / leave)")
         except Exception:
             logger.exception("Failed to subscribe to in-meeting events")
 
@@ -426,7 +410,7 @@ class RTMSClient:
                 if self.use_video or self.use_transcript:
                     media_type = 32  # AUDIO+VIDEO+TRANSCRIPT (as in JS example)
                 else:
-                    media_type = 1   # AUDIO only
+                    media_type = 1  # AUDIO only
 
                 handshake = {
                     "msg_type": 3,  # DATA_HAND_SHAKE_REQ
@@ -451,8 +435,8 @@ class RTMSClient:
                             "send_rate": 100,
                         },
                         "video": {
-                            "codec": 7,      # H264
-                            "resolution": 2, # HD
+                            "codec": 7,  # H264
+                            "resolution": 2,  # HD
                             "fps": 15,
                         },
                     }
@@ -549,7 +533,6 @@ class RTMSClient:
         }
         self.adapter.post_rtms_event(event)
 
-
     async def _handle_audio(self, content: dict) -> None:
         data_b64 = content.get("data")
         if not data_b64:
@@ -577,16 +560,8 @@ class RTMSClient:
             logger.exception("Error base64-decoding video frame")
             return
 
-        user_id = (
-            content.get("user_id")
-            or content.get("userId")
-            or -1
-        )
-        user_name = (
-            content.get("user_name")
-            or content.get("userName")
-            or ""
-        )
+        user_id = content.get("user_id") or content.get("userId") or -1
+        user_name = content.get("user_name") or content.get("userName") or ""
 
         self.adapter._on_video_frame(frame, user_name, int(user_id))
 
@@ -608,19 +583,9 @@ class RTMSClient:
           }
         """
         text = content.get("data", "")
-        user_id = (
-            content.get("user_id")
-            or content.get("userId")
-        )
-        user_name = (
-            content.get("user_name")
-            or content.get("userName")
-        )
-        caption_id = (
-            content.get("caption_id")
-            or content.get("captionId")
-            or content.get("id")
-        )
+        user_id = content.get("user_id") or content.get("userId")
+        user_name = content.get("user_name") or content.get("userName")
+        caption_id = content.get("caption_id") or content.get("captionId") or content.get("id")
 
         event = {
             "type": "transcriptUpdate",
@@ -688,9 +653,7 @@ class ZoomRTMSAdapter(BotAdapter):
         self.first_buffer_timestamp_ms = None
 
         self.last_audio_frame_speaker_name = None
-        self.black_frame = make_black_h264_annexb(
-            self.video_frame_size[0], self.video_frame_size[1]
-        )
+        self.black_frame = make_black_h264_annexb(self.video_frame_size[0], self.video_frame_size[1])
 
         self.black_frame_timer_id = None
         self.connected_at = None
@@ -713,7 +676,7 @@ class ZoomRTMSAdapter(BotAdapter):
                     name_to_render = "Paused"
                 else:
                     name_to_render = self.active_speaker_name or ""
-                
+
                 self._on_video_frame(self.black_frame, name_to_render, -1)
                 logger.info("Sent black frame for name: %s", name_to_render)
 
@@ -750,9 +713,7 @@ class ZoomRTMSAdapter(BotAdapter):
                 logger.info("Received keyframe")
             else:
                 if self.waiting_for_keyframe:
-                    logger.info(
-                        "Received video frame but not a keyframe. Waiting for keyframe..."
-                    )
+                    logger.info("Received video frame but not a keyframe. Waiting for keyframe...")
                     return
 
         self.last_video_received_at = time.time()
@@ -888,15 +849,8 @@ class ZoomRTMSAdapter(BotAdapter):
             #  'text': 'Hello, how are you?', 'type': 'transcriptUpdate'}
 
             user_obj = json_data.get("user") or {}
-            device_id = (
-                user_obj.get("userId")
-                or user_obj.get("user_id")
-            )
-            caption_id = (
-                json_data.get("id")
-                or json_data.get("captionId")
-                or json_data.get("caption_id")
-            )
+            device_id = user_obj.get("userId") or user_obj.get("user_id")
+            caption_id = json_data.get("id") or json_data.get("captionId") or json_data.get("caption_id")
 
             itemConverted = {
                 "deviceId": device_id,
@@ -965,9 +919,7 @@ class ZoomRTMSAdapter(BotAdapter):
         return False
 
     def send_video(self, video_url):
-        logger.info(
-            "send_video called with video_url = %s. This is not supported for zoom", video_url
-        )
+        logger.info("send_video called with video_url = %s. This is not supported for zoom", video_url)
         return
 
     def get_first_buffer_timestamp_ms_offset(self):

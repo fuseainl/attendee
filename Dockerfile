@@ -88,18 +88,6 @@ RUN apt-get update && apt-get install -y libavdevice-dev && pip uninstall -y av 
 # Install gstreamer
 RUN apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgirepository1.0-dev --fix-missing
 
-# --- Node.js 22.15.0 (pinned) ---
-ENV NODE_VERSION=22.15.0
-# Using official tarball + checksum verification; extracts into /usr/local (puts node/npm in PATH)
-RUN set -eux; \
-    ARCH_NODE="x64"; \
-    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH_NODE}.tar.xz"; \
-    curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"; \
-    grep " node-v${NODE_VERSION}-linux-${ARCH_NODE}.tar.xz\$" SHASUMS256.txt | sha256sum -c -; \
-    tar -xJf "node-v${NODE_VERSION}-linux-${ARCH_NODE}.tar.xz" -C /usr/local --strip-components=1 --no-same-owner; \
-    rm -f "node-v${NODE_VERSION}-linux-${ARCH_NODE}.tar.xz" SHASUMS256.txt; \
-    corepack enable
-
 # Alias python3 to python
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
@@ -134,13 +122,6 @@ RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
 
 # Switch to non-root AFTER copies to avoid permission flakiness
 USER app
-
-# Install node deps in the target directory
-WORKDIR /$project/bots/zoom_rtms_adapter/zoom_rtms_node_app
-RUN npm install
-
-# Go back to your project root
-WORKDIR /$project
 
 # Use tini + entrypoint; CMD can be overridden by compose
 ENTRYPOINT ["/tini","--","/usr/local/bin/entrypoint.sh"]
