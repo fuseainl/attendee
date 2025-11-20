@@ -215,6 +215,7 @@ class RTMSClient:
         finally:
             logger.info("RTMSClient.run exiting")
             self._closing.set()
+            self.adapter.handle_rtms_exit()
 
     def request_shutdown(self) -> None:
         """
@@ -837,6 +838,14 @@ class ZoomRTMSAdapter(BotAdapter):
 
     def handle_fatal_media_socket_error(self):
         logger.info("handle_fatal_media_socket_error called")
+        self.send_message_callback({"message": self.Messages.APP_SESSION_DISCONNECT_REQUESTED})
+
+    def handle_rtms_exit(self):
+        if self.left_meeting:
+            return
+        if self.cleaned_up:
+            return
+        logger.info("handle_rtms_exit called")
         self.send_message_callback({"message": self.Messages.APP_SESSION_DISCONNECT_REQUESTED})
 
     def handle_rtms_json_message(self, json_data):

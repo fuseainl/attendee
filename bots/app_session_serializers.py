@@ -81,7 +81,7 @@ class CreateAppSessionSerializer(CreateBotSerializer):
         if value is None:
             value = {}
         value["resolution"] = "720p"
-        # Currently, we burn too much CPU with 1080p, so we'll only support 720p. Hopefully the RTMS Python SDK will let us support 1080p.        
+        # Currently, we burn too much CPU with 1080p, so we'll only support 720p. Hopefully the RTMS Python SDK will let us support 1080p.
         return super().validate_recording_settings(value)
 
 
