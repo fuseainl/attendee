@@ -33,8 +33,6 @@ Temporary Items
 .snyk
 .dccache
 
-bots/zoom_rtms_adapter/zoom_rtms_node_app/node_modules/
-
 ### Python ###
 # Byte-compiled / optimized / DLL files
 __pycache__/
