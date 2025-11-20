@@ -355,6 +355,10 @@ class RTMSClient:
                     elif msg_type == 6 and msg.get("event", {}).get("event_type") == 2:
                         await self._handle_active_speaker_change(msg)
 
+                    # Participant join / leave
+                    elif msg_type == 6 and (msg.get("event", {}).get("event_type") == 3 or msg.get("event", {}).get("event_type") == 4):
+                        await self._handle_participant_join_or_leave(msg)
+
                     # Session state update
                     elif msg_type == 9:
                         await self._handle_session_state_update(msg)
@@ -514,6 +518,18 @@ class RTMSClient:
             logger.exception("Media socket error")
         finally:
             logger.info("Media socket closed")
+
+    async def _handle_participant_join_or_leave(self, content: dict) -> None:
+        for participant in content.get("event", {}).get("participants", []):
+            event = {
+                "type": "userUpdate",
+                "user": {
+                    "id": participant.get("user_id"),
+                    "name": participant.get("user_name"),
+                },
+                "join": content.get("event", {}).get("event_type") == 3,
+            }
+            self.adapter.post_rtms_event(event)
 
     async def _handle_active_speaker_change(self, content: dict) -> None:
         user_id = content.get("event", {}).get("user_id")
@@ -850,7 +866,7 @@ class ZoomRTMSAdapter(BotAdapter):
             logger.info("RTMS userUpdate: %s", json_data)
             # {'op': 0, 'user': {'id': 16778240, 'name': 'Noah Duncan'}, 'type': 'userUpdate'}
             user_id = json_data.get("user").get("id")
-            user_name = json_data.get("user").get("name")
+            user_name = json_data.get("user").get("name") or self._participant_cache.get(user_id, {}).get("participant_full_name")
 
             self._participant_cache[user_id] = {
                 "participant_uuid": user_id,
@@ -863,9 +879,7 @@ class ZoomRTMSAdapter(BotAdapter):
             self.add_participant_event_callback(
                 {
                     "participant_uuid": user_id,
-                    "event_type": ParticipantEventTypes.JOIN
-                    if json_data.get("op") == 0
-                    else ParticipantEventTypes.LEAVE,
+                    "event_type": ParticipantEventTypes.JOIN if json_data.get("join") else ParticipantEventTypes.LEAVE,
                     "event_data": {},
                     "timestamp_ms": int(time.time() * 1000),
                 }
