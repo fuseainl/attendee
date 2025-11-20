@@ -561,18 +561,10 @@ class RTMSClient:
             logger.exception("Error base64-decoding audio frame")
             return
 
-        user_id = (
-            content.get("user_id")
-            or content.get("userId")
-            or -1
-        )
-        user_name = (
-            content.get("user_name")
-            or content.get("userName")
-            or ""
-        )
+        user_id = content.get("user_id")
+        user_name = content.get("user_name")
 
-        self.adapter._on_audio_frame(frame, user_name, int(user_id))
+        self.adapter._on_audio_frame(frame, user_name, user_id)
 
     async def _handle_video(self, content: dict) -> None:
         data_b64 = content.get("data")
@@ -740,7 +732,9 @@ class ZoomRTMSAdapter(BotAdapter):
                 self.add_mixed_audio_chunk_callback(frame)
             if self.use_one_way_audio and self.add_audio_chunk_callback:
                 current_time = datetime.utcnow()
-                self.add_audio_chunk_callback(userId, current_time, frame)
+                userIdToSend = userId or self.active_speaker_id
+                if userIdToSend is not None:
+                    self.add_audio_chunk_callback(userIdToSend, current_time, frame)
 
         except Exception:
             logger.exception("Audio frame handling failed")
