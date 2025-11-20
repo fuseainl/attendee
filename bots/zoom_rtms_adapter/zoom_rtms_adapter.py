@@ -351,8 +351,13 @@ class RTMSClient:
                         logger.debug("Responding to signaling KEEP_ALIVE_REQ: %s", resp)
                         await ws.send(json.dumps(resp))
 
-                    # You could inspect other signaling messages here and
-                    # possibly generate sessionUpdate events if Zoom exposes them.
+                    # Active speaker change
+                    elif msg_type == 6 and msg.get("event", {}).get("event_type") == 2:
+                        await self._handle_active_speaker_change(msg)
+
+                    # Session state update
+                    elif msg_type == 9:
+                        await self._handle_session_state_update(msg)
 
         except Exception:
             logger.exception("Signaling socket error")
@@ -443,8 +448,8 @@ class RTMSClient:
                         },
                         "video": {
                             "codec": 7,      # H264
-                            "resolution": 3, # (matches your JS; enum in Zoom docs)
-                            "fps": 20,
+                            "resolution": 2, # HD
+                            "fps": 15,
                         },
                     }
 
@@ -509,6 +514,24 @@ class RTMSClient:
             logger.exception("Media socket error")
         finally:
             logger.info("Media socket closed")
+
+    async def _handle_active_speaker_change(self, content: dict) -> None:
+        user_id = content.get("event", {}).get("user_id")
+        user_name = content.get("event", {}).get("user_name")
+        event = {
+            "type": "activeSpeakerChange",
+            "user_id": user_id,
+            "user_name": user_name,
+        }
+        self.adapter.post_rtms_event(event)
+
+    async def _handle_session_state_update(self, content: dict) -> None:
+        state = content.get("state")
+        event = {
+            "type": "sessionUpdate",
+            "state": state,
+        }
+        self.adapter.post_rtms_event(event)
 
 
     async def _handle_audio(self, content: dict) -> None:
@@ -637,69 +660,18 @@ class ZoomRTMSAdapter(BotAdapter):
 
         self.zoom_client_id = zoom_client_id
         self.zoom_client_secret = zoom_client_secret
-        self.recording_file_path = recording_file_path
 
-        self.meeting_service = None
-        self.setting_service = None
-        self.auth_service = None
-
-        self.auth_event = None
-        self.recording_event = None
-        self.meeting_service_event = None
-
-        self.audio_source = None
-        self.audio_helper = None
-
-        self.audio_settings = None
-
-        self.use_raw_recording = True
-        self.recording_permission_granted = False
-
-        self.reminder_controller = None
-
-        self.recording_ctrl = None
-
-        self.audio_raw_data_sender = None
-        self.virtual_audio_mic_event_passthrough = None
-
-        self.my_participant_id = None
-        self.participants_ctrl = None
-        self.meeting_reminder_event = None
-        self.on_mic_start_send_callback_called = False
-        self.on_virtual_camera_start_send_callback_called = False
-
-        self.meeting_video_controller = None
-        self.video_sender = None
-        self.virtual_camera_video_source = None
-        self.video_source_helper = None
         self.video_frame_size = video_frame_size
-        self.send_image_timeout_id = None
 
-        self.automatic_leave_configuration = automatic_leave_configuration
-
-        self.only_one_participant_in_meeting_at = None
         self.last_audio_received_at = None
         self.last_video_received_at = None
-        self.silence_detection_activated = False
         self.cleaned_up = False
-        self.requested_leave = False
-        self.joined_at = None
         self.left_meeting = False
 
-        self.video_input_manager = None
-
-        self.meeting_sharing_controller = None
-        self.meeting_share_ctrl_event = None
-
         self.active_speaker_id = None
-        self.active_sharer_id = None
-        self.active_sharer_source_id = None
+        self.active_speaker_name = None
 
         self._participant_cache = {}
-
-        self.meeting_status = None
-
-        self.suggested_video_cap = None
 
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.add_participant_event_callback = add_participant_event_callback
@@ -729,8 +701,13 @@ class ZoomRTMSAdapter(BotAdapter):
         if self.connected_at is not None and current_time - self.connected_at >= 1.0:
             if self.last_video_received_at is None or current_time - self.last_video_received_at >= 0.25:
                 # Create a black frame of the same dimensions
-                self._on_video_frame(self.black_frame, self.last_audio_frame_speaker_name, -1)
-                logger.info("Sent black frame")
+                if self.rtms_paused:
+                    name_to_render = "Paused"
+                else:
+                    name_to_render = self.active_speaker_name or ""
+                
+                self._on_video_frame(self.black_frame, name_to_render, -1)
+                logger.info("Sent black frame for name: %s", name_to_render)
 
         # Keep the GLib timeout active until we've been cleaned up
         return not self.cleaned_up
@@ -776,7 +753,7 @@ class ZoomRTMSAdapter(BotAdapter):
                 self.add_video_frame_callback(
                     frame,
                     time.time_ns(),
-                    overlay_text=self.last_audio_frame_speaker_name or "",
+                    overlay_text=userName or self.active_speaker_name or "",
                 )
         except Exception:
             logger.exception("Video frame handling failed")
@@ -819,10 +796,7 @@ class ZoomRTMSAdapter(BotAdapter):
         return
 
     def initialize_rtms_connection(self):
-        logger.info("Initializing RTMS connection (pure Python)...")
-
-        # recording_file_path is currently unused here; kept for parity with previous design
-        _recording_file_path = self.recording_file_path + ".temp"
+        logger.info("Initializing RTMS connection...")
 
         need_audio = self.use_one_way_audio or self.use_mixed_audio
         need_video = self.use_video
@@ -929,18 +903,25 @@ class ZoomRTMSAdapter(BotAdapter):
             self.first_buffer_timestamp_ms = time.time() * 1000
 
         elif json_data.get("type") == "sessionUpdate":
-            op = json_data.get("op")
+            state = json_data.get("state")
             # This means it was paused
-            if op == 2:
+            if state == 3:
                 logger.info("RTMS sessionUpdate: Paused")
                 self.last_audio_frame_speaker_name = "Paused"
                 self.rtms_paused = True
             # This means it was resumed
-            if op == 3:
+            if state == 4:
                 logger.info("RTMS sessionUpdate: Resumed")
                 self.last_audio_frame_speaker_name = None
                 self.waiting_for_keyframe = True
                 self.rtms_paused = False
+
+        elif json_data.get("type") == "activeSpeakerChange":
+            user_id = json_data.get("user_id")
+            user_name = json_data.get("user_name")
+            self.active_speaker_id = user_id
+            self.active_speaker_name = user_name
+            logger.info("RTMS activeSpeakerChange: %s", json_data)
 
     # ------------------------------------------------------------- control API
 
