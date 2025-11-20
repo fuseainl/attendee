@@ -24,7 +24,6 @@ try:
 except ImportError:  # pragma: no cover - runtime env must install websockets
     websockets = None
 
-from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.models import ParticipantEventTypes
 
 
@@ -636,8 +635,6 @@ class ZoomRTMSAdapter(BotAdapter):
         add_mixed_audio_chunk_callback,
         zoom_client_id,
         zoom_client_secret,
-        recording_file_path,
-        automatic_leave_configuration: AutomaticLeaveConfiguration,
         upsert_chat_message_callback,
         upsert_caption_callback,
         add_participant_event_callback,

@@ -11,9 +11,10 @@ from bots.utils import create_black_i420_frame, create_zero_pcm_audio
 logger = logging.getLogger(__name__)
 
 
-class GstreamerPipeline:
+class RTMSGstreamerPipeline:
     AUDIO_FORMAT_PCM = "audio/x-raw,format=S16LE,channels=1,rate=32000,layout=interleaved"
     AUDIO_FORMAT_FLOAT = "audio/x-raw,format=F32LE,channels=1,rate=48000,layout=interleaved"
+    AUDIO_FORMAT_PCM_16KHZ = "audio/x-raw,format=S16LE,channels=1,rate=16000,layout=interleaved"
     OUTPUT_FORMAT_FLV = "flv"
     OUTPUT_FORMAT_MP4 = "mp4"
     OUTPUT_FORMAT_WEBM = "webm"
@@ -22,11 +23,15 @@ class GstreamerPipeline:
     SINK_TYPE_APPSINK = "appsink"
     SINK_TYPE_FILE = "filesink"
 
+    VIDEO_FORMAT_I420 = "I420"
+    VIDEO_FORMAT_H264 = "H264"
+
     def __init__(
         self,
         *,
         on_new_sample_callback,
         video_frame_size,
+        video_format,
         audio_format,
         output_format,
         sink_type,
@@ -34,6 +39,7 @@ class GstreamerPipeline:
     ):
         self.on_new_sample_callback = on_new_sample_callback
         self.video_frame_size = video_frame_size
+        self.video_format = video_format
         self.audio_format = audio_format
         self.output_format = output_format
         self.sink_type = sink_type
@@ -56,6 +62,33 @@ class GstreamerPipeline:
 
         self.queue_drops = {}
         self.last_reported_drops = {}
+
+        self.overlay_text = ""
+        self.overlay_enabled = True
+
+    def update_overlay_text(self, text: str | None):
+        """Update the on-screen text (e.g., speaker name). Use '' or None to hide."""
+
+        if (text or "") == self.overlay_text:
+            return
+
+        self.overlay_text = text or ""
+        if not self.pipeline or not self.overlay_enabled:
+            return
+
+        overlay = self.pipeline.get_by_name("overlay")
+        if not overlay:
+            return
+
+        # Apply on the GLib main loop thread to avoid cross-thread issues
+        def _apply():
+            try:
+                overlay.set_property("text", self.overlay_text)
+            except Exception as e:
+                logger.info(f"Failed to set overlay text: {e}")
+            return False  # don't repeat
+
+        GLib.idle_add(_apply)
 
     def on_new_sample_from_appsink(self, sink):
         """Handle new samples from the appsink"""
@@ -107,14 +140,30 @@ class GstreamerPipeline:
                 f"{sink_string}"               # … → sink
             )
         else:
-            pipeline_str = (
-                "appsrc name=video_source do-timestamp=false stream-type=0 format=time ! "
-                "queue name=q1 max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "  # q1 can contain 100mb of video before it drops
+            # Common pipeline components
+            video_source = "appsrc name=video_source do-timestamp=false stream-type=0 format=time ! "
+            queue1 = "queue name=q1 max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "
+            overlay_and_encode = (
                 "videoconvert ! "
+                "textoverlay name=overlay halignment=left valignment=bottom xpad=10 ypad=10 "
+                "font-desc=\"Sans, 10\" draw-shadow=false draw-outline=false ! "
                 "videorate ! "
-                "queue name=q2 max-size-buffers=5000 max-size-bytes=500000000 max-size-time=0 ! "  # q2 can contain 100mb of video before it drops
+                "queue name=q2 max-size-buffers=5000 max-size-bytes=500000000 max-size-time=0 ! "
                 "x264enc tune=zerolatency speed-preset=ultrafast ! "
                 "queue name=q3 max-size-buffers=1000 max-size-bytes=100000000 max-size-time=0 ! "
+            )
+            
+            if self.video_format == self.VIDEO_FORMAT_H264:
+                # H.264 input → parse → decode → overlay → re-encode
+                decode_section = "h264parse ! avdec_h264 ! "
+            else:
+                # Raw input (e.g., I420) → overlay → encode
+                decode_section = ""
+            
+            video_pipeline_str = video_source + queue1 + decode_section + overlay_and_encode
+
+            pipeline_str = (
+                f"{video_pipeline_str}"
                 f"{muxer_string} ! queue name=q4 ! {sink_string} "
                 f"{audio_source_string} "
                 "voaacenc bitrate=128000 ! "
@@ -124,12 +173,24 @@ class GstreamerPipeline:
 
         self.pipeline = Gst.parse_launch(pipeline_str)
 
+        overlay = self.pipeline.get_by_name("overlay")
+        if overlay and self.overlay_enabled:
+            try:
+                overlay.set_property("text", self.overlay_text or "")
+            except Exception as e:
+                logger.info(f"Unable to init overlay text: {e}")
+
         if self.output_format != self.OUTPUT_FORMAT_MP3:
             # Get both appsrc elements
             self.appsrc = self.pipeline.get_by_name("video_source")
 
             # Configure video appsrc
-            video_caps = Gst.Caps.from_string(f"video/x-raw,format=I420,width={self.video_frame_size[0]},height={self.video_frame_size[1]},framerate=30/1")
+            if self.video_format == self.VIDEO_FORMAT_I420:
+                video_caps = Gst.Caps.from_string(f"video/x-raw,format=I420,width={self.video_frame_size[0]},height={self.video_frame_size[1]},framerate=30/1")
+            elif self.video_format == self.VIDEO_FORMAT_H264:
+                video_caps = Gst.Caps.from_string("video/x-h264,stream-format=byte-stream,alignment=au")
+            else:
+                raise ValueError(f"Invalid video format: {self.video_format}")
             self.appsrc.set_property("caps", video_caps)
             self.appsrc.set_property("format", Gst.Format.TIME)
             self.appsrc.set_property("is-live", True)
@@ -277,7 +338,7 @@ class GstreamerPipeline:
 
         return True
 
-    def on_new_video_frame(self, frame, current_time_ns, is_pause_frame=False):
+    def on_new_video_frame(self, frame, current_time_ns, is_pause_frame=False, overlay_text=None):
         if self.pause_timer_id is not None and not is_pause_frame:
             return
 
@@ -303,6 +364,9 @@ class GstreamerPipeline:
 
         except Exception as e:
             logger.info(f"Error processing video frame: {e}")
+
+        if overlay_text:
+            self.update_overlay_text(overlay_text)
 
     def pause_recording(self):
         """Pause the pipeline and start sending black frames and zero audio"""

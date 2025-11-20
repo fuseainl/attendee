@@ -2639,7 +2639,7 @@ class WebhookSecret(models.Model):
 
 
 class WebhookTriggerTypes(models.IntegerChoices):
-    BOT_STATE_CHANGE = 1, "State Change"
+    BOT_STATE_CHANGE = 1, "Bot State Change"
     TRANSCRIPT_UPDATE = 2, "Transcript Update"
     CHAT_MESSAGES_UPDATE = 3, "Chat Messages Update"
     PARTICIPANT_EVENTS_JOIN_LEAVE = 4, "Participant Join/Leave"
