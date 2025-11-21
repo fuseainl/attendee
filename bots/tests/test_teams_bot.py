@@ -1,3 +1,4 @@
+import base64
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -6,7 +7,8 @@ from django.db import connection
 from django.test import TransactionTestCase
 
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.bots_api_views import send_sync_command
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import UiTeamsBlockingUsException
 
 
@@ -336,3 +338,171 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    def test_audio_request_processed_after_chat_message(
+        self,
+        MockSaveDebugRecording,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Regression test for the Redis lambda closure bug.
+
+        When two Redis messages are delivered before GLib processes any callbacks,
+        we still expect both:
+        - chat message sync, and
+        - media request sync
+        to be handled exactly once.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create test audio blob
+        test_mp3_bytes = base64.b64decode("SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU2LjM2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU2LjQxAAAAAAAAAAAAAAAAJAAAAAAAAAAAASDs90hvAAAAAAAAAAAAAAAAAAAA//MUZAAAAAFkAAAAAAAAA0gAAAAATEFN//MUZAMAAAGkAAAAAAAAA0gAAAAARTMu//MUZAYAAAGkAAAAAAAAA0gAAAAAOTku//MUZAkAAAGkAAAAAAAAA0gAAAAANVVV")
+        audio_blob = MediaBlob.get_or_create_from_blob(project=self.bot.project, blob=test_mp3_bytes, content_type="audio/mp3")
+
+        # ---- GLib.idle_add patching setup ----
+        deferred_callbacks = []
+        pause_idle = False
+        two_redis_callbacks_scheduled = threading.Event()
+
+        def fake_idle_add(callback, *args, **kwargs):
+            """
+            Replacement for GLib.idle_add used in this test.
+
+            - When pause_idle is True, we *buffer* callbacks instead of executing them.
+            - When pause_idle is False, we immediately run the callback (simpler for test).
+            """
+            nonlocal deferred_callbacks, pause_idle
+            if pause_idle:
+                deferred_callbacks.append((callback, args, kwargs))
+                # When redis_listener schedules two callbacks, this event will fire.
+                if len(deferred_callbacks) >= 2:
+                    two_redis_callbacks_scheduled.set()
+            else:
+                # For test purposes we just execute immediately.
+                callback(*args)
+            # GLib.idle_add normally returns an int source id; any int is fine here.
+            return 1
+
+        with patch("bots.bot_controller.bot_controller.GLib.idle_add", side_effect=fake_idle_add):
+            # Create bot controller AFTER patching idle_add so run() uses this behavior.
+            controller = BotController(self.bot.id)
+
+            # Mock the attempt_to_join_meeting to succeed immediately
+            with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+                mock_attempt_to_join.return_value = None  # Successful join
+
+                # Run the bot in a separate thread since it has an event loop
+                bot_thread = threading.Thread(target=controller.run)
+                bot_thread.daemon = True
+                bot_thread.start()
+
+                # Wait for the bot to initialize and join
+                time.sleep(2)
+
+                # Spy on adapter methods
+                with patch.object(controller.adapter, "send_chat_message") as mock_send_chat_message:
+                    # Make the adapter ready to send chat messages and play audio
+                    controller.adapter.ready_to_send_chat_messages = True
+                    controller.adapter.ready_to_play_audio = True
+
+                    # Simulate the adapter becoming ready (this will go through GLib.idle_add as well)
+                    controller.adapter.send_message_callback({"message": controller.adapter.Messages.READY_TO_SEND_CHAT_MESSAGE})
+
+                    # Let that READY message be processed immediately (pause_idle is False here)
+                    time.sleep(0.5)
+
+                    # Create chat message request
+                    chat_message_request = BotChatMessageRequest.objects.create(
+                        bot=self.bot,
+                        message="Test message before audio",
+                        to=BotChatMessageToOptions.EVERYONE,
+                    )
+
+                    # Immediately create audio media request
+                    audio_request = BotMediaRequest.objects.create(
+                        bot=self.bot,
+                        media_blob=audio_blob,
+                        media_type=BotMediaRequestMediaTypes.AUDIO,
+                    )
+
+                    # --- THIS IS THE CRITICAL WINDOW: pause GLib, then send both Redis messages ---
+
+                    # Start buffering idle callbacks
+                    pause_idle = True
+
+                    # Send Redis commands back-to-back
+                    send_sync_command(self.bot, "sync_chat_message_requests")
+                    send_sync_command(self.bot, "sync_media_requests")
+
+                    # Wait until we know two idle callbacks were scheduled
+                    assert two_redis_callbacks_scheduled.wait(timeout=5), "Timed out waiting for two Redis idle callbacks to be scheduled"
+
+                    # Now "resume" GLib: run the buffered callbacks
+                    pause_idle = False
+                    for cb, args, kwargs in deferred_callbacks:
+                        cb(*args, **kwargs)
+
+                    # Give a small bit of time for any follow-up logic
+                    time.sleep(0.5)
+
+                    # Refresh from DB
+                    audio_request.refresh_from_db()
+                    chat_message_request.refresh_from_db()
+
+                    # ---- Assertions ----
+
+                    # Audio request should not be stuck in ENQUEUED
+                    self.assertNotEqual(
+                        audio_request.state,
+                        BotMediaRequestStates.ENQUEUED,
+                        f"Audio request should not be ENQUEUED; got {audio_request.state}",
+                    )
+
+                    # Audio should be either PLAYING or FINISHED
+                    self.assertIn(
+                        audio_request.state,
+                        [BotMediaRequestStates.PLAYING, BotMediaRequestStates.FINISHED],
+                        f"Audio request should be PLAYING or FINISHED; got {audio_request.state}",
+                    )
+
+                    # Chat message should have been actually sent
+                    self.assertGreater(
+                        mock_send_chat_message.call_count,
+                        0,
+                        "send_chat_message should be called at least once",
+                    )
+                    self.assertEqual(
+                        chat_message_request.state,
+                        BotChatMessageRequestStates.SENT,
+                        f"Chat message should be SENT; got {chat_message_request.state}",
+                    )
+
+                # Clean up: simulate meeting ending to trigger cleanup
+                controller.adapter.left_meeting = True
+                controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+                time.sleep(0.5)
+
+                # Now wait for the thread to finish naturally
+                bot_thread.join(timeout=2)
+
+                if bot_thread.is_alive():
+                    print("WARNING: Bot thread did not terminate properly after cleanup")
+
+                # Close the database connection since we're in a thread
+                connection.close()
