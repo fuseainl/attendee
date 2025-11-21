@@ -11,6 +11,64 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 
 
+def get_top_memory_process():
+    """
+    Scan /proc and return info about the process using the most resident memory.
+
+    Returns a dict like:
+        {
+            "pid": 123,
+            "name": "python3",
+            "rss_megabytes": 256
+        }
+    or None if nothing could be read.
+    """
+    proc_root = Path("/proc")
+    max_rss_kb = -1
+    top_proc = None
+
+    for entry in proc_root.iterdir():
+        # Only numeric dirs are PIDs
+        if not entry.name.isdigit():
+            continue
+
+        status_path = entry / "status"
+        comm_path = entry / "comm"
+
+        try:
+            rss_kb = None
+            with status_path.open() as f:
+                for line in f:
+                    # Example: "VmRSS:	  123456 kB"
+                    if line.startswith("VmRSS:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            rss_kb = int(parts[1])
+                        break
+
+            if rss_kb is None:
+                continue
+
+            if rss_kb > max_rss_kb:
+                max_rss_kb = rss_kb
+                try:
+                    name = comm_path.read_text().strip()
+                except FileNotFoundError:
+                    name = f"pid-{entry.name}"
+
+                top_proc = {
+                    "pid": int(entry.name),
+                    "name": name,
+                    "rss_megabytes": int(rss_kb / 1024),  # kB → MiB (approx)
+                }
+
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            # Process may have exited or we might not have perms; just skip
+            continue
+
+    return top_proc
+
+
 def _detect_cgroup_layout():
     """Return paths to the usage and stat files for this container."""
     # cgroup v2 has /sys/fs/cgroup/cgroup.controllers
@@ -159,9 +217,20 @@ class BotResourceSnapshotTaker:
             logger.error(f"Error getting resource usage for bot {self.bot.object_id}: {ram_usage_megabytes} or {cpu_usage_millicores_delta_per_second} was None")
             return
 
+        top_process_ram_usage_megabytes = None
+        top_process_name = None
+        try:
+            top_process = get_top_memory_process()
+            top_process_ram_usage_megabytes = top_process.get("rss_megabytes")
+            top_process_name = top_process.get("name")
+        except Exception as e:
+            logger.error(f"Error getting top process for bot {self.bot.object_id}: {e}")
+
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
+            "top_process_ram_usage_megabytes": top_process_ram_usage_megabytes,
+            "top_process_name": top_process_name,
         }
 
         BotResourceSnapshot.objects.create(bot=self.bot, data=snapshot_data)
