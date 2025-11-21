@@ -11,21 +11,20 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 
 
-def get_top_memory_process():
+def get_process_memory_list():
     """
-    Scan /proc and return info about the process using the most resident memory.
+    Scan /proc and return a list of processes with their resident memory usage.
 
-    Returns a dict like:
-        {
-            "pid": 123,
-            "name": "python3",
-            "rss_megabytes": 256
-        }
-    or None if nothing could be read.
+    Returns a list of dicts:
+        [
+            {"memory": <int MiB>, "name": <str>},
+            ...
+        ]
+
+    Sorted by memory descending. Best-effort: skips processes we can't read.
     """
     proc_root = Path("/proc")
-    max_rss_kb = -1
-    top_proc = None
+    processes = []
 
     for entry in proc_root.iterdir():
         # Only numeric dirs are PIDs
@@ -39,7 +38,7 @@ def get_top_memory_process():
             rss_kb = None
             with status_path.open() as f:
                 for line in f:
-                    # Example: "VmRSS:	  123456 kB"
+                    # Example: "VmRSS:\t  123456 kB"
                     if line.startswith("VmRSS:"):
                         parts = line.split()
                         if len(parts) >= 2:
@@ -49,24 +48,34 @@ def get_top_memory_process():
             if rss_kb is None:
                 continue
 
-            if rss_kb > max_rss_kb:
-                max_rss_kb = rss_kb
-                try:
-                    name = comm_path.read_text().strip()
-                except FileNotFoundError:
-                    name = f"pid-{entry.name}"
+            # Get a human-ish name; fall back to something generic if missing
+            try:
+                name = comm_path.read_text().strip()
+            except FileNotFoundError:
+                name = "unknown"
 
-                top_proc = {
-                    "pid": int(entry.name),
+            processes.append(
+                {
                     "name": name,
-                    "rss_megabytes": int(rss_kb / 1024),  # kB → MiB (approx)
+                    "memory": int(rss_kb / 1024),  # kB → MiB (approx)
                 }
+            )
 
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             # Process may have exited or we might not have perms; just skip
             continue
 
-    return top_proc
+    # Sort by memory descending (largest first)
+    processes.sort(key=lambda p: p["memory"], reverse=True)
+
+    # Get total memory and add a percentage of the total memory to the processes
+    total_memory = sum(p["memory"] for p in processes)
+    for process in processes:
+        process["percentage"] = process["memory"] / total_memory * 100
+
+    # Take top 4 processes
+    top_4_processes = processes[:4]
+    return top_4_processes
 
 
 def _detect_cgroup_layout():
@@ -217,20 +226,16 @@ class BotResourceSnapshotTaker:
             logger.error(f"Error getting resource usage for bot {self.bot.object_id}: {ram_usage_megabytes} or {cpu_usage_millicores_delta_per_second} was None")
             return
 
-        top_process_ram_usage_megabytes = None
-        top_process_name = None
+        memory_per_process = []
         try:
-            top_process = get_top_memory_process()
-            top_process_ram_usage_megabytes = top_process.get("rss_megabytes")
-            top_process_name = top_process.get("name")
+            memory_per_process = get_process_memory_list()
         except Exception as e:
-            logger.error(f"Error getting top process for bot {self.bot.object_id}: {e}")
+            logger.error(f"Error getting process memory list for bot {self.bot.object_id}: {e}. Continuing...")
 
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
-            "top_process_ram_usage_megabytes": top_process_ram_usage_megabytes,
-            "top_process_name": top_process_name,
+            "memory_per_process": memory_per_process,
         }
 
         BotResourceSnapshot.objects.create(bot=self.bot, data=snapshot_data)
