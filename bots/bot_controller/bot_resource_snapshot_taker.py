@@ -17,7 +17,7 @@ def get_process_memory_list():
 
     Returns a list of dicts:
         [
-            {"memory": <int MiB>, "name": <str>},
+            {"memory_megabytes": <int MiB>, "name": <str>},
             ...
         ]
 
@@ -57,7 +57,7 @@ def get_process_memory_list():
             processes.append(
                 {
                     "name": name,
-                    "memory": int(rss_kb / 1024),  # kB → MiB (approx)
+                    "memory_megabytes": int(rss_kb / 1024),  # kB → MiB (approx)
                 }
             )
 
@@ -66,16 +66,16 @@ def get_process_memory_list():
             continue
 
     # Sort by memory descending (largest first)
-    processes.sort(key=lambda p: p["memory"], reverse=True)
+    processes.sort(key=lambda p: p["memory_megabytes"], reverse=True)
 
     # Get total memory and add a percentage of the total memory to the processes
-    total_memory = sum(p["memory"] for p in processes)
+    total_memory = sum(p["memory_megabytes"] for p in processes)
     for process in processes:
-        process["percentage"] = process["memory"] / total_memory * 100
+        process["memory_percentage"] = process["memory_megabytes"] / total_memory * 100
 
-    # Take top 4 processes
-    top_4_processes = processes[:4]
-    return top_4_processes
+    # Take top 5 processes
+    top_5_processes = processes[:5]
+    return top_5_processes
 
 
 def _detect_cgroup_layout():
@@ -226,16 +226,16 @@ class BotResourceSnapshotTaker:
             logger.error(f"Error getting resource usage for bot {self.bot.object_id}: {ram_usage_megabytes} or {cpu_usage_millicores_delta_per_second} was None")
             return
 
-        memory_per_process = []
+        processes = []
         try:
-            memory_per_process = get_process_memory_list()
+            processes = get_process_memory_list()
         except Exception as e:
             logger.error(f"Error getting process memory list for bot {self.bot.object_id}: {e}. Continuing...")
 
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
-            "memory_per_process": memory_per_process,
+            "processes": processes,
         }
 
         BotResourceSnapshot.objects.create(bot=self.bot, data=snapshot_data)
