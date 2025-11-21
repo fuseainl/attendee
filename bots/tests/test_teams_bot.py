@@ -4,7 +4,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 from django.db import connection
-from django.test import TransactionTestCase, override_settings
+from django.test import TransactionTestCase
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
@@ -29,19 +29,6 @@ def create_mock_teams_driver():
 
 
 class TestTeamsBot(TransactionTestCase):
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-
-        # Instead of setting environment variables directly:
-        # os.environ["AWS_RECORDING_STORAGE_BUCKET_NAME"] = "test-bucket"
-        # os.environ["CHARGE_CREDITS_FOR_BOTS"] = "true"
-
-        # The settings have already been loaded, so we need to override them
-        # These will be applied to all tests in this class
-        cls.settings_override = override_settings(AWS_RECORDING_STORAGE_BUCKET_NAME="test-bucket", CHARGE_CREDITS_FOR_BOTS=True)
-        cls.settings_override.enable()
-
     def setUp(self):
         # Recreate organization and project for each test
         self.organization = Organization.objects.create(name="Test Org")
@@ -355,8 +342,10 @@ class TestTeamsBot(TransactionTestCase):
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
     def test_audio_request_processed_after_chat_message(
         self,
+        MockSaveDebugRecording,
         MockFileUploader,
         MockChromeDriver,
         MockDisplay,
