@@ -486,6 +486,8 @@
                             <th>Timestamp</th>
                             <th>RAM Usage (MB)</th>
                             <th>CPU Usage (millicores)</th>
+                            <th>Top Process RAM Usage (MB)</th>
+                            <th>Top Process Name</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -494,6 +496,8 @@
                                 <td>{{ snapshot.created_at|date:"M d, Y H:i:s" }}</td>
                                 <td>{{ snapshot.data.ram_usage_megabytes|default:"-" }}</td>
                                 <td>{{ snapshot.data.cpu_usage_millicores|default:"-" }}</td>
+                                <td>{{ snapshot.data.top_process_ram_usage_megabytes|default:"-" }}</td>
+                                <td>{{ snapshot.data.top_process_name|default:"-" }}</td>
                             </tr>
                         {% endfor %}
                     </tbody>
