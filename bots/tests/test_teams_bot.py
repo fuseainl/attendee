@@ -1,3 +1,4 @@
+import base64
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -6,7 +7,8 @@ from django.db import connection
 from django.test import TransactionTestCase
 
 from bots.bot_controller.bot_controller import BotController
-from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
+from bots.bots_api_views import send_sync_command
+from bots.models import Bot, BotChatMessageRequest, BotChatMessageRequestStates, BotChatMessageToOptions, BotEventManager, BotEventSubTypes, BotEventTypes, BotMediaRequest, BotMediaRequestMediaTypes, BotMediaRequestStates, BotStates, MediaBlob, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes
 from bots.teams_bot_adapter.teams_ui_methods import UiTeamsBlockingUsException
 
 
@@ -321,6 +323,132 @@ class TestTeamsBot(TransactionTestCase):
                 # Verify that the chat message request is now in SENT state
                 chat_message_request.refresh_from_db()
                 self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.SENT, "Chat message should be in SENT state after being sent")
+
+            # Clean up: simulate meeting ending to trigger cleanup
+            controller.adapter.left_meeting = True
+            controller.adapter.send_message_callback({"message": controller.adapter.Messages.MEETING_ENDED})
+            time.sleep(2)
+
+            # Now wait for the thread to finish naturally
+            bot_thread.join(timeout=5)
+
+            # If thread is still running after timeout, that's a problem to report
+            if bot_thread.is_alive():
+                print("WARNING: Bot thread did not terminate properly after cleanup")
+
+            # Close the database connection since we're in a thread
+            connection.close()
+
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_audio_request_processed_after_chat_message(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+    ):
+        """
+        Test that an audio request sent immediately after a chat message is processed
+        and not stuck in the ENQUEUED state.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_teams_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Create test audio blob
+        test_mp3_bytes = base64.b64decode("SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU2LjM2LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAAEAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV6urq6urq6urq6urq6urq6urq6urq6urq6v////////////////////////////////8AAAAATGF2YzU2LjQxAAAAAAAAAAAAAAAAJAAAAAAAAAAAASDs90hvAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFN//MUZAMAAAGkAAAAAAAAA0gAAAAARTMu//MUZAYAAAGkAAAAAAAAA0gAAAAAOTku//MUZAkAAAGkAAAAAAAAA0gAAAAANVVV")
+        audio_blob = MediaBlob.get_or_create_from_blob(project=self.bot.project, blob=test_mp3_bytes, content_type="audio/mp3")
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Mock the attempt_to_join_meeting to succeed immediately
+        with patch("bots.teams_bot_adapter.teams_ui_methods.TeamsUIMethods.attempt_to_join_meeting") as mock_attempt_to_join:
+            mock_attempt_to_join.return_value = None  # Successful join
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            # Wait for the bot to join
+            time.sleep(3)
+
+            # Mock send_chat_message and play_raw_audio to track calls
+            with patch.object(controller.adapter, "send_chat_message") as mock_send_chat_message, \
+                 patch.object(controller.adapter, "play_raw_audio") as mock_play_raw_audio:
+                
+                # Make the adapter ready to send chat messages and play audio
+                controller.adapter.ready_to_send_chat_messages = True
+                controller.adapter.ready_to_play_audio = True
+
+                # Simulate the adapter becoming ready
+                controller.adapter.send_message_callback({"message": controller.adapter.Messages.READY_TO_SEND_CHAT_MESSAGE})
+                controller.adapter.send_message_callback({"message": controller.adapter.Messages.READY_TO_PLAY_AUDIO})
+
+                # Wait for ready callbacks to be processed
+                time.sleep(0.5)
+
+                # Create chat message request
+                chat_message_request = BotChatMessageRequest.objects.create(
+                    bot=self.bot,
+                    message="Test message before audio",
+                    to=BotChatMessageToOptions.EVERYONE,
+                )
+
+                # Send sync command for chat message
+                send_sync_command(self.bot, "sync_chat_message_requests")
+
+
+                # Immediately create audio media request
+                audio_request = BotMediaRequest.objects.create(
+                    bot=self.bot,
+                    media_blob=audio_blob,
+                    media_type=BotMediaRequestMediaTypes.AUDIO,
+                )
+
+                # Send sync command for media request
+                send_sync_command(self.bot, "sync_media_requests")
+
+                # Wait for audio to start playing
+                time.sleep(1.0)
+
+                # Refresh the audio request from the database
+                audio_request.refresh_from_db()
+
+                # Verify that the audio request is NOT in ENQUEUED state
+                # It should be either PLAYING or COMPLETED
+                self.assertNotEqual(
+                    audio_request.state, 
+                    BotMediaRequestStates.ENQUEUED,
+                    f"Audio request should not be in ENQUEUED state. Current state: {audio_request.state}"
+                )
+
+                # Verify it's in a valid state after the chat message
+                self.assertIn(
+                    audio_request.state,
+                    [BotMediaRequestStates.PLAYING, BotMediaRequestStates.COMPLETED],
+                    f"Audio request should be in PLAYING or COMPLETED state, but is in {audio_request.state}"
+                )
+
+                # Verify that send_chat_message was called
+                self.assertGreater(mock_send_chat_message.call_count, 0, "send_chat_message should be called at least once")
+
+                # Verify that play_raw_audio was called (indicating audio is being played)
+                self.assertGreater(mock_play_raw_audio.call_count, 0, "play_raw_audio should be called at least once, indicating audio playback started")
+
+                # Verify the chat message request is in SENT state
+                chat_message_request.refresh_from_db()
+                self.assertEqual(chat_message_request.state, BotChatMessageRequestStates.SENT, "Chat message should be in SENT state")
 
             # Clean up: simulate meeting ending to trigger cleanup
             controller.adapter.left_meeting = True
