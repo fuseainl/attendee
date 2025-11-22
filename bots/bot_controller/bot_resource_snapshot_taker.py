@@ -1,5 +1,6 @@
 import datetime
 import logging
+from collections import defaultdict
 
 from django.utils import timezone
 
@@ -13,67 +14,75 @@ from pathlib import Path
 
 def get_process_memory_list():
     """
-    Scan /proc and return a list of processes with their resident memory usage.
+    Scan /proc and return a list of process *names* with their proportional
+    set size (PSS) memory usage aggregated across all PIDs with that name.
 
     Returns a list of dicts:
         [
-            {"memory_megabytes": <int MiB>, "name": <str>},
+            {"memory_megabytes": <int MiB>, "name": <str>, "memory_percentage": <float>},
             ...
         ]
 
-    Sorted by memory descending. Best-effort: skips processes we can't read.
+    Sorted by memory descending (largest first).
     """
     proc_root = Path("/proc")
-    processes = []
+    memory_by_name_kb = defaultdict(int)
 
     for entry in proc_root.iterdir():
         # Only numeric dirs are PIDs
         if not entry.name.isdigit():
             continue
 
-        status_path = entry / "status"
-        comm_path = entry / "comm"
+        pid_dir = entry
+        smaps_rollup_path = pid_dir / "smaps_rollup"
+        comm_path = pid_dir / "comm"
 
         try:
-            rss_kb = None
-            with status_path.open() as f:
+            # Read PSS from smaps_rollup (kB)
+            pss_kb = None
+            with smaps_rollup_path.open() as f:
                 for line in f:
-                    # Example: "VmRSS:\t  123456 kB"
-                    if line.startswith("VmRSS:"):
+                    # Example: "Pss:          12345 kB"
+                    if line.startswith("Pss:"):
                         parts = line.split()
                         if len(parts) >= 2:
-                            rss_kb = int(parts[1])
+                            pss_kb = int(parts[1])
                         break
 
-            if rss_kb is None:
+            if pss_kb is None:
                 continue
 
             # Get a human-ish name; fall back to something generic if missing
             try:
-                name = comm_path.read_text().strip()
+                name = comm_path.read_text().strip() or "unknown"
             except FileNotFoundError:
                 name = "unknown"
 
-            processes.append(
-                {
-                    "name": name,
-                    "memory_megabytes": int(rss_kb / 1024),  # kB → MiB (approx)
-                }
-            )
+            # Aggregate by name
+            memory_by_name_kb[name] += pss_kb
 
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             # Process may have exited or we might not have perms; just skip
             continue
 
+    # Convert to list of dicts in MiB
+    processes = [
+        {
+            "name": name,
+            "memory_megabytes": int(total_kb / 1024),  # kB → MiB (approx)
+        }
+        for name, total_kb in memory_by_name_kb.items()
+    ]
+
     # Sort by memory descending (largest first)
     processes.sort(key=lambda p: p["memory_megabytes"], reverse=True)
 
     # Get total memory and add a percentage of the total memory to the processes
-    total_memory = sum(p["memory_megabytes"] for p in processes)
+    total_memory = sum(p["memory_megabytes"] for p in processes) or 1
     for process in processes:
         process["memory_percentage"] = process["memory_megabytes"] / total_memory * 100
 
-    # Take top 5 processes
+    # Take top 5 “names”
     top_5_processes = processes[:5]
     return top_5_processes
 
