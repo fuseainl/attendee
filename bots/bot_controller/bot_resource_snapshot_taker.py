@@ -241,12 +241,6 @@ class BotResourceSnapshotTaker:
         except Exception as e:
             logger.error(f"Error getting process memory list for bot {self.bot.object_id}: {e}. Continuing...")
 
-        # If there is a process named "Xvfb" and it is taking up more than 100 mb, then log a warning.
-        # This indicates that recording quality is degraded.
-        for process in processes:
-            if process.get("name") == "Xvfb" and process.get("memory_megabytes") is not None and process.get("memory_megabytes") > 100:
-                logger.warning(f"Xvfb is consuming more than 100 mb of memory for bot {self.bot.object_id}. Recording quality may be degraded.")
-
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
