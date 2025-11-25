@@ -47,7 +47,7 @@ class BotEventAdmin(admin.ModelAdmin):
     list_display = ("bot_object_id", "event_type", "event_sub_type", "old_state", "new_state", "created_at")
     list_filter = ("event_type", "event_sub_type", "old_state", "new_state")
     search_fields = ("bot__object_id",)
-    readonly_fields = ("bot", "created_at", "old_state", "new_state", "event_type", "event_sub_type", "metadata", "requested_bot_action_taken_at", "version")
+    readonly_fields = ("bot", "created_at", "old_state", "new_state", "event_type", "event_sub_type", "metadata", "requested_bot_action_taken_at", "version", "debug_screenshots_display")
     ordering = ("-created_at",)
 
     def bot_object_id(self, obj):
@@ -55,6 +55,23 @@ class BotEventAdmin(admin.ModelAdmin):
 
     bot_object_id.short_description = "Bot"
     bot_object_id.admin_order_field = "bot__object_id"
+
+    def debug_screenshots_display(self, obj):
+        screenshots = obj.debug_screenshots.all()
+        if not screenshots:
+            return "-"
+
+        links = []
+        for screenshot in screenshots:
+            url = screenshot.url
+            if url:
+                links.append(format_html('<a href="{}" target="_blank">{}</a>', url, screenshot.file.name))
+            else:
+                links.append(screenshot.object_id)
+
+        return format_html("<br>".join(links))
+
+    debug_screenshots_display.short_description = "Debug Screenshots"
 
     def has_add_permission(self, request):
         return False
@@ -70,6 +87,7 @@ class BotEventAdmin(admin.ModelAdmin):
         ("Event Information", {"fields": ("bot", "event_type", "event_sub_type", "created_at")}),
         ("State Transition", {"fields": ("old_state", "new_state")}),
         ("Additional Data", {"fields": ("metadata", "requested_bot_action_taken_at")}),
+        ("Debug Data", {"fields": ("debug_screenshots_display",)}),
         ("System", {"fields": ("version",)}),
     )
 
