@@ -505,7 +505,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
     CALENDAR_EVENT_SELECT_FIELDS = "id,subject,start,end,attendees,organizer,iCalUId,seriesMasterId,isCancelled,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,onlineMeetingUrl,location,body,webLink"
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
-        if e.response.json().get("error") == "invalid_grant":
+        if e.response.json().get("error") == "invalid_grant" or e.response.json().get("error") == "invalid_client":
             raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
 
         if "ErrorAccessDenied" in e.response.text:
