@@ -21,7 +21,6 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
-from bots.tasks import send_slack_alert
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -1464,6 +1463,8 @@ class BotEventManager:
 
     @classmethod
     def after_new_state_is_fatal_error(cls, bot: Bot, event_type: BotEventTypes, event_sub_type: BotEventSubTypes, new_state: BotStates):
+        from bots.tasks import send_slack_alert
+
         # Make sure the event type is FATAL_ERROR, this indicates an unexpected failure
         if event_type != BotEventTypes.FATAL_ERROR:
             return
