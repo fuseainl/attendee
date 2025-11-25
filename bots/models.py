@@ -1474,11 +1474,11 @@ class BotEventManager:
 
         # Send a slack webhook if the event type is FATAL_ERROR.
         # It will include the bot's object id and the event sub type and the last bot resource snapshot.
-        last_bot_resource_snapshot_data = "N/A"
+        last_bot_resource_snapshot_data = "None found."
         last_bot_resource_snapshot = bot.resource_snapshots.order_by("-created_at").first()
         if last_bot_resource_snapshot:
             last_bot_resource_snapshot_data = json.dumps(last_bot_resource_snapshot.data)
-        message = f"Bot {bot.object_id} has entered a fatal error state. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}. Last bot resource snapshot: {last_bot_resource_snapshot_data}"
+        message = f"Bot {bot.object_id} encountered a fatal error. Site Domain: {settings.SITE_DOMAIN}. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}. Last bot resource snapshot: {last_bot_resource_snapshot_data}"
         send_slack_alert.delay(message)
 
     @classmethod
