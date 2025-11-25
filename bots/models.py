@@ -7,7 +7,6 @@ import secrets
 import string
 from datetime import timedelta
 
-import requests
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
 from cryptography.fernet import Fernet, InvalidToken
@@ -22,6 +21,7 @@ from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
 from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
+from bots.tasks import send_slack_alert
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -1468,17 +1468,17 @@ class BotEventManager:
         if event_type != BotEventTypes.FATAL_ERROR:
             return
 
-        slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-        if not slack_webhook_url:
+        if not os.getenv("SLACK_WEBHOOK_URL"):
             return
 
-        # We will send a slack webhook if the event type is FATAL_ERROR.
-        # It will include the bot's object id and the event sub type.
-        # If the request doesn't go through quickly, just return
-        try:
-            requests.post(slack_webhook_url, json={"text": f"Bot {bot.object_id} has entered a fatal error state. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}"}, timeout=2)
-        except Exception:
-            return
+        # Send a slack webhook if the event type is FATAL_ERROR.
+        # It will include the bot's object id and the event sub type and the last bot resource snapshot.
+        last_bot_resource_snapshot_data = "N/A"
+        last_bot_resource_snapshot = bot.resource_snapshots.order_by("-created_at").first()
+        if last_bot_resource_snapshot:
+            last_bot_resource_snapshot_data = json.dumps(last_bot_resource_snapshot.data)
+        message = f"Bot {bot.object_id} has entered a fatal error state. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}. Last bot resource snapshot: {last_bot_resource_snapshot_data}"
+        send_slack_alert.delay(message)
 
     @classmethod
     def after_new_state_is_joined_recording(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
