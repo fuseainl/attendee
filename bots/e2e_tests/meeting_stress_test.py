@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import base64
 import concurrent.futures
 import json
 import random
@@ -72,7 +71,7 @@ class AttendeeClient:
         """
         json_payload = {"url": video_url}
         url = self._url(f"/api/v1/bots/{bot_id}/output_video")
-        
+
         r = self.session.post(url, data=json.dumps(json_payload), timeout=self.timeout)
         r.raise_for_status()
 
@@ -100,24 +99,17 @@ def wait_for_state(client: AttendeeClient, bot_id: str, predicate, desc: str, ti
         time.sleep(poll_s)
 
 
-def play_videos_for_bot(
-    client: AttendeeClient,
-    bot_id: str,
-    bot_name: str,
-    video_urls_with_durations: List[Tuple[str, float]],
-    end_time: float,
-    verbose: bool
-) -> None:
+def play_videos_for_bot(client: AttendeeClient, bot_id: str, bot_name: str, video_urls_with_durations: List[Tuple[str, float]], end_time: float, verbose: bool) -> None:
     """
     Continuously plays random videos for a bot until end_time is reached.
     Each video plays for its duration + 15 seconds buffer before playing the next.
     """
     while time.time() < end_time:
         video_url, duration = random.choice(video_urls_with_durations)
-        
+
         if verbose:
             print(f"[{bot_name}] Playing video: {video_url} (duration: {duration}s)")
-        
+
         try:
             client.output_video(bot_id, video_url)
         except Exception as e:
@@ -125,43 +117,31 @@ def play_videos_for_bot(
             # Continue trying other videos
             time.sleep(5)
             continue
-        
+
         # Wait for video duration + 15 second buffer
         wait_time = duration + 15
         time_remaining = end_time - time.time()
-        
+
         # Don't wait longer than remaining time
         actual_wait = min(wait_time, time_remaining)
-        
+
         if actual_wait > 0:
             if verbose:
                 print(f"[{bot_name}] Waiting {actual_wait:.1f}s before next video")
             time.sleep(actual_wait)
-    
+
     if verbose:
         print(f"[{bot_name}] Finished playing videos (time limit reached)")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Stress test: send multiple bots to a meeting to continuously play videos."
-    )
+    parser = argparse.ArgumentParser(description="Stress test: send multiple bots to a meeting to continuously play videos.")
     parser.add_argument("--api-key", required=True, help="Attendee API key")
     parser.add_argument("--base-url", required=True, help="Attendee base URL, e.g. https://staging.attendee.dev")
     parser.add_argument("--meeting-url", required=True, help="Meeting URL (must bypass waiting room)")
     parser.add_argument("--num-bots", type=int, default=16, help="Number of bots to send (default: 16)")
-    parser.add_argument(
-        "--videos",
-        required=True,
-        nargs="+",
-        help="List of video URLs with durations in format: url1:duration1 url2:duration2 (duration in seconds)"
-    )
-    parser.add_argument(
-        "--meeting-duration",
-        type=float,
-        required=True,
-        help="Total time in seconds for bots to stay in meeting"
-    )
+    parser.add_argument("--videos", required=True, nargs="+", help="List of video URLs with durations in format: url1:duration1 url2:duration2 (duration in seconds)")
+    parser.add_argument("--meeting-duration", type=float, required=True, help="Total time in seconds for bots to stay in meeting")
     parser.add_argument("--join-timeout", type=int, default=180, help="Seconds to wait for each bot to join")
     parser.add_argument("--end-timeout", type=int, default=300, help="Seconds to wait for 'Ended'")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
@@ -176,7 +156,7 @@ def main():
         except ValueError:
             print(f"ERROR: Invalid video spec '{video_spec}'. Expected format: url:duration", file=sys.stderr)
             sys.exit(2)
-    
+
     if not video_urls_with_durations:
         print("ERROR: At least one video URL with duration is required", file=sys.stderr)
         sys.exit(2)
@@ -191,10 +171,10 @@ def main():
     # 1) Create N bots
     if args.verbose:
         print(f"\nCreating {args.num_bots} bots...")
-    
+
     bots = []
     for i in range(args.num_bots):
-        bot_name = f"Video Bot {i+1}"
+        bot_name = f"Video Bot {i + 1}"
         try:
             bot = client.create_bot(meeting_url=args.meeting_url, bot_name=bot_name)
             bots.append((bot["id"], bot_name))
@@ -223,23 +203,15 @@ def main():
     # 3) Start video playback for all bots concurrently
     if args.verbose:
         print(f"\nStarting video playback for {len(bots)} bots (duration: {args.meeting_duration}s)...")
-    
+
     end_time = time.time() + args.meeting_duration
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.num_bots) as executor:
         futures = []
         for bot_id, bot_name in bots:
-            future = executor.submit(
-                play_videos_for_bot,
-                client,
-                bot_id,
-                bot_name,
-                video_urls_with_durations,
-                end_time,
-                args.verbose
-            )
+            future = executor.submit(play_videos_for_bot, client, bot_id, bot_name, video_urls_with_durations, end_time, args.verbose)
             futures.append(future)
-        
+
         # Wait for all video playback to complete
         for future in concurrent.futures.as_completed(futures):
             try:
@@ -250,7 +222,7 @@ def main():
     # 4) Tell all bots to leave
     if args.verbose:
         print(f"\nTelling all {len(bots)} bots to leave...")
-    
+
     for bot_id, bot_name in bots:
         try:
             client.tell_bot_to_leave(bot_id)
@@ -276,7 +248,7 @@ def main():
 
     if args.verbose:
         print("\n✓ Stress test completed successfully!")
-    
+
     sys.exit(0)
 
 
@@ -286,4 +258,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
-
