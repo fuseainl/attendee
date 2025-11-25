@@ -411,9 +411,10 @@ def _validate_metadata_attribute(value):
         raise serializers.ValidationError("Metadata must have at least one key")
 
     # Check if all values are strings
-    for key, val in value.items():
-        if not isinstance(val, str):
-            raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+    if settings.REQUIRE_STRING_VALUES_IN_METADATA:
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
 
     # Check if all keys are strings
     for key in value.keys():
