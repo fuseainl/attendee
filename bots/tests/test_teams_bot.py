@@ -147,36 +147,48 @@ class TestTeamsBot(TransactionTestCase):
 
             mock_driver.save_screenshot.side_effect = save_screenshot_mock
 
-            # Run the bot in a separate thread since it has an event loop
-            bot_thread = threading.Thread(target=controller.run)
-            bot_thread.daemon = True
-            bot_thread.start()
+            # Mock the send_slack_alert task to verify it gets called
+            with patch("bots.tasks.send_slack_alert_task.send_slack_alert.delay") as mock_send_slack_alert:
+                # Mock the environment variable to enable Slack alerts
+                with patch.dict("os.environ", {"SLACK_WEBHOOK_URL": "https://hooks.slack.com/test"}):
+                    # Run the bot in a separate thread since it has an event loop
+                    bot_thread = threading.Thread(target=controller.run)
+                    bot_thread.daemon = True
+                    bot_thread.start()
 
-            # Allow time for the retry logic to run
-            time.sleep(10)
+                    # Allow time for the retry logic to run
+                    time.sleep(10)
 
-            # Verify the attempt_to_join_meeting method was called four times
-            self.assertEqual(mock_attempt_to_join.call_count, 4, "attempt_to_join_meeting should be called four times")
+                    # Verify the attempt_to_join_meeting method was called four times
+                    self.assertEqual(mock_attempt_to_join.call_count, 4, "attempt_to_join_meeting should be called four times")
 
-            # Now wait for the thread to finish naturally
-            bot_thread.join(timeout=5)  # Give it time to clean up
+                    # Now wait for the thread to finish naturally
+                    bot_thread.join(timeout=5)  # Give it time to clean up
 
-            # If thread is still running after timeout, that's a problem to report
-            if bot_thread.is_alive():
-                print("WARNING: Bot thread did not terminate properly after cleanup")
+                    # If thread is still running after timeout, that's a problem to report
+                    if bot_thread.is_alive():
+                        print("WARNING: Bot thread did not terminate properly after cleanup")
 
-            # Close the database connection since we're in a thread
-            connection.close()
+                    # Close the database connection since we're in a thread
+                    connection.close()
 
-            # Test that the last bot event is a FATAL_ERROR
-            self.bot.refresh_from_db()
-            last_bot_event = self.bot.bot_events.last()
-            self.assertEqual(last_bot_event.event_type, BotEventTypes.FATAL_ERROR)
-            self.assertEqual(last_bot_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
-            self.assertEqual(last_bot_event.metadata.get("step"), "unknown")
-            self.assertEqual(last_bot_event.metadata.get("exception_type"), "Exception")
-            self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
-            print("last_bot_event", last_bot_event.__dict__)
+                    # Test that the last bot event is a FATAL_ERROR
+                    self.bot.refresh_from_db()
+                    last_bot_event = self.bot.bot_events.last()
+                    self.assertEqual(last_bot_event.event_type, BotEventTypes.FATAL_ERROR)
+                    self.assertEqual(last_bot_event.event_sub_type, BotEventSubTypes.FATAL_ERROR_UI_ELEMENT_NOT_FOUND)
+                    self.assertEqual(last_bot_event.metadata.get("step"), "unknown")
+                    self.assertEqual(last_bot_event.metadata.get("exception_type"), "Exception")
+                    self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+                    print("last_bot_event", last_bot_event.__dict__)
+
+                    # Verify that send_slack_alert task was enqueued
+                    self.assertEqual(mock_send_slack_alert.call_count, 1, "send_slack_alert should be called once")
+                    # Verify the message contains the bot object_id and error information
+                    call_args = mock_send_slack_alert.call_args
+                    message = call_args[0][0]
+                    self.assertIn(self.bot.object_id, message, "Message should contain bot object_id")
+                    self.assertIn("fatal error", message.lower(), "Message should mention fatal error")
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
