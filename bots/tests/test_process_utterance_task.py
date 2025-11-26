@@ -935,8 +935,7 @@ class OpenAIProviderTest(TransactionTestCase):
             "segments": [
                 {"text": "Hey, what's up?", "start": 0.08, "end": 0.28, "speaker": "A"},
                 {"text": "I'm good, thank you!", "start": 0.28, "end": 0.52, "speaker": "B"},
-            ],
-            "language": "en",
+            ]
         }
 
         # Set up bot with diarize model and response_format
@@ -957,8 +956,6 @@ class OpenAIProviderTest(TransactionTestCase):
         self.assertEqual(tx["words"][0]["start"], 0.08)
         self.assertEqual(tx["words"][0]["end"], 0.28)
         self.assertEqual(tx["words"][0]["speaker"], "A")
-        # Verify language is included
-        self.assertEqual(tx["language"], "en")
 
 
 class OpenAIModelValidationTest(TransactionTestCase):

@@ -42,10 +42,6 @@ def transform_diarized_json_to_schema(result):
     if words:
         transcription["words"] = words
 
-    language = result.get("language")
-    if language:
-        transcription["language"] = language
-
     return transcription
 
 
