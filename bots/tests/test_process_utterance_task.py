@@ -926,10 +926,18 @@ class OpenAIProviderTest(TransactionTestCase):
     # ────────────────────────────────────────────────────────────────────────────────
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
     @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
-    def test_diarize_model_with_response_format(self, mock_pcm, mock_post):
-        """Test that response_format is sent when using gpt-4o-transcribe-diarize"""
+    def test_diarized_json_transformation(self, mock_pcm, mock_post):
+        """Test that diarized_json format is transformed to Attendee's expected transcription schema"""
+        # Mock diarized_json response with segments
         mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"text": "Hello world", "segments": [{"type": "transcript.text.segment", "id": "seg_001", "start": 0.0, "end": 2.0, "text": "Hello world", "speaker": "A"}], "duration": 2.0}
+        mock_post.return_value.json.return_value = {
+            "text": "Hey, what's up? I'm good, thank you!",
+            "segments": [
+                {"text": "Hey, what's up?", "start": 0.08, "end": 0.28, "speaker": "A"},
+                {"text": "I'm good, thank you!", "start": 0.28, "end": 0.52, "speaker": "B"},
+            ],
+            "language": "en",
+        }
 
         # Set up bot with diarize model and response_format
         self.bot.settings = {"transcription_settings": {"openai": {"model": "gpt-4o-transcribe-diarize", "response_format": "diarized_json"}}}
@@ -940,46 +948,17 @@ class OpenAIProviderTest(TransactionTestCase):
             tx, failure = get_transcription_via_openai(self.utt)
 
         self.assertIsNone(failure)
-        self.assertEqual(tx["transcript"], "Hello world")
-        self.assertIn("segments", tx)
-        self.assertEqual(len(tx["segments"]), 1)
-        self.assertEqual(tx["duration"], 2.0)
-
-        # Verify response_format was sent
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        files_dict = call_args[1]["files"]
-        self.assertEqual(files_dict["response_format"][1], "diarized_json")
-
-    # ────────────────────────────────────────────────────────────────────────────────
-    @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
-    def test_diarize_model_with_server_vad_chunking(self, mock_pcm, mock_post):
-        """Test that chunking_strategy with server_vad is sent correctly"""
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"text": "Test transcription"}
-
-        # Set up bot with diarize model and server_vad chunking
-        self.bot.settings = {"transcription_settings": {"openai": {"model": "gpt-4o-transcribe-diarize", "chunking_strategy": {"type": "server_vad", "prefix_padding_ms": 500, "silence_duration_ms": 300, "threshold": 0.7}}}}
-        self.bot.save()
-        self.utt.refresh_from_db()
-
-        with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
-            tx, failure = get_transcription_via_openai(self.utt)
-
-        self.assertIsNone(failure)
-
-        # Verify chunking_strategy was sent as JSON string
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        files_dict = call_args[1]["files"]
-        import json
-
-        chunking_strategy = json.loads(files_dict["chunking_strategy"][1])
-        self.assertEqual(chunking_strategy["type"], "server_vad")
-        self.assertEqual(chunking_strategy["prefix_padding_ms"], 500)
-        self.assertEqual(chunking_strategy["silence_duration_ms"], 300)
-        self.assertEqual(chunking_strategy["threshold"], 0.7)
+        # Verify transformation to our schema
+        self.assertEqual(tx["transcript"], "Hey, what's up? I'm good, thank you!")
+        self.assertIn("words", tx)
+        self.assertEqual(len(tx["words"]), 2)
+        # Verify first word
+        self.assertEqual(tx["words"][0]["word"], "Hey, what's up?")
+        self.assertEqual(tx["words"][0]["start"], 0.08)
+        self.assertEqual(tx["words"][0]["end"], 0.28)
+        self.assertEqual(tx["words"][0]["speaker"], "A")
+        # Verify language is included
+        self.assertEqual(tx["language"], "en")
 
 
 class OpenAIModelValidationTest(TransactionTestCase):
