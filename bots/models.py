@@ -1462,6 +1462,26 @@ class BotEventManager:
         return ~(pre_meeting_q | post_meeting_q)
 
     @classmethod
+    def after_new_state_is_fatal_error(cls, bot: Bot, event_type: BotEventTypes, event_sub_type: BotEventSubTypes, new_state: BotStates):
+        from bots.tasks import send_slack_alert
+
+        # Make sure the event type is FATAL_ERROR, this indicates an unexpected failure
+        if event_type != BotEventTypes.FATAL_ERROR:
+            return
+
+        if not os.getenv("SLACK_WEBHOOK_URL"):
+            return
+
+        # Send a slack webhook if the event type is FATAL_ERROR.
+        # It will include the bot's object id and the event sub type and the last bot resource snapshot.
+        last_bot_resource_snapshot_data = "None found."
+        last_bot_resource_snapshot = bot.resource_snapshots.order_by("-created_at").first()
+        if last_bot_resource_snapshot:
+            last_bot_resource_snapshot_data = json.dumps(last_bot_resource_snapshot.data)
+        message = f"Bot {bot.object_id} encountered a fatal error. Site Domain: {settings.SITE_DOMAIN}. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}. Last bot resource snapshot: {last_bot_resource_snapshot_data}"
+        send_slack_alert.delay(message)
+
+    @classmethod
     def after_new_state_is_joined_recording(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
         pending_recordings = bot.recordings.filter(state__in=[RecordingStates.NOT_STARTED, RecordingStates.PAUSED])
         if pending_recordings.count() != 1:
@@ -1610,6 +1630,9 @@ class BotEventManager:
 
                     if new_state == BotStates.JOINED_RECORDING_PERMISSION_DENIED:
                         cls.after_new_state_is_joined_recording_permission_denied(bot=bot, new_state=new_state)
+
+                    if new_state == BotStates.FATAL_ERROR:
+                        cls.after_new_state_is_fatal_error(bot=bot, event_type=event_type, event_sub_type=event_sub_type, new_state=new_state)
 
                     # If we transitioned to a post meeting state
                     transitioned_to_post_meeting_state = cls.is_post_meeting_state(new_state) and not cls.is_post_meeting_state(old_state)
