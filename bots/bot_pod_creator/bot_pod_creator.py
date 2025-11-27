@@ -1,14 +1,50 @@
+import json
 import logging
 import os
 import uuid
 from typing import Dict, Optional
 
+import jsonpatch
 from django.conf import settings
 from kubernetes import client, config
+
+from .bot_pod_spec import BotPodSpecType
 
 logger = logging.getLogger(__name__)
 
 # fmt: off
+
+def apply_json6902_patch(json_to_patch: dict, patch_str: str) -> dict:
+    """
+    Apply a JSON6902 (RFC 6902) patch to a JSON object.
+
+    Args:
+        json_to_patch: The JSON object to patch
+        patch_str: The JSON6902 patch string
+    """
+    if not patch_str:
+        return json_to_patch
+
+    try:
+        patch_ops = json.loads(patch_str)
+    except json.JSONDecodeError as e:
+        logger.error("patch_str is not valid JSON: %s", e)
+        return json_to_patch
+
+    if not isinstance(patch_ops, list):
+        logger.error(
+            "patch_str must be a JSON array of JSON6902 operations; got %r",
+            type(patch_ops),
+        )
+        return json_to_patch
+
+    try:
+        patch = jsonpatch.JsonPatch(patch_ops)
+        patched = patch.apply(json_to_patch, in_place=False)
+        return patched
+    except Exception as e:
+        logger.error("Failed to apply patch: %s", e)
+        return json_to_patch
 
 class BotPodCreator:
     def __init__(self):
@@ -18,6 +54,7 @@ class BotPodCreator:
             config.load_kube_config()
         
         self.v1 = client.CoreV1Api()
+        self.api_client = client.ApiClient()
         self.namespace = settings.BOT_POD_NAMESPACE
         self.webpage_streamer_namespace = settings.WEBPAGE_STREAMER_POD_NAMESPACE
         
@@ -32,6 +69,53 @@ class BotPodCreator:
         self.app_instance = f"{self.app_name}-{self.app_version.split('-')[-1]}"
         default_pod_image = f"nduncan{self.app_name}/{self.app_name}"
         self.image = f"{os.getenv('BOT_POD_IMAGE', default_pod_image)}:{self.app_version}"
+
+    def get_bot_pod_volumes(self):
+        """
+        Use a generic ephemeral volume backed by PD so we can exceed
+        the 10Gi Autopilot local ephemeral-storage cap.
+
+        BOT_PERSISTENT_STORAGE_SIZE: e.g. "50Gi"
+        """
+        if not self.add_persistent_storage:
+            return None
+        
+        size = os.getenv("BOT_PERSISTENT_STORAGE_SIZE", "50Gi")
+
+        pvc_spec = client.V1PersistentVolumeClaimSpec(
+            access_modes=["ReadWriteOnce"],
+            resources=client.V1ResourceRequirements(
+                requests={"storage": size}
+            ),
+        )
+
+        pvc_template = client.V1PersistentVolumeClaimTemplate(
+            metadata=client.V1ObjectMeta(
+                labels={"app": self.app_name},
+            ),
+            spec=pvc_spec,
+        )
+
+        return [client.V1Volume(
+            name="bot-persistent-storage",
+            ephemeral=client.V1EphemeralVolumeSource(
+                volume_claim_template=pvc_template
+            ),
+        ),]
+
+    def get_bot_container_volume_mounts(self):
+        if not self.add_persistent_storage:
+            return None
+        return [
+            client.V1VolumeMount(name="bot-persistent-storage", mount_path="/bot-persistent-storage"),
+        ]
+
+    def get_bot_pod_security_context(self):
+        if not self.add_persistent_storage:
+            return None
+        return client.V1PodSecurityContext(
+            fs_group=1000,
+        )
 
     def get_bot_container_security_context(self):
 
@@ -158,7 +242,8 @@ class BotPodCreator:
                             )
                         ],
                         env=[],
-                        security_context = self.get_bot_container_security_context()
+                        security_context = self.get_bot_container_security_context(),
+                        volume_mounts=self.get_bot_container_volume_mounts(),
                     )
 
     def get_pod_tolerations(self):
@@ -187,12 +272,18 @@ class BotPodCreator:
             )
         ]
 
+    def apply_spec_to_bot_pod(self, bot_pod: client.V1Pod) -> dict:
+        bot_pod_spec_data = self.api_client.sanitize_for_serialization(bot_pod)
+        return apply_json6902_patch(bot_pod_spec_data, self.bot_pod_spec)
+
     def create_bot_pod(
         self,
         bot_id: int,
         bot_name: Optional[str] = None,
         bot_cpu_request: Optional[int] = None,
         add_webpage_streamer: Optional[bool] = False,
+        add_persistent_storage: Optional[bool] = False,
+        bot_pod_spec_type: Optional[BotPodSpecType] = BotPodSpecType.DEFAULT,
     ) -> Dict:
         """
         Create a bot pod with configuration from environment.
@@ -206,6 +297,13 @@ class BotPodCreator:
 
         self.bot_id = bot_id
         self.bot_cpu_request = bot_cpu_request
+        self.add_persistent_storage = add_persistent_storage
+
+        # Out of caution ensure bot_pod_spec_type is purely alphabetical and all uppercase
+        if not bot_pod_spec_type.isalpha() or not bot_pod_spec_type.isupper():
+            raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
+        # Fetch bot pod spec from environment variable, falling back to default if not defined
+        self.bot_pod_spec = os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}") or os.getenv(f"BOT_POD_SPEC_{BotPodSpecType.DEFAULT}")
 
         # Metadata labels matching the deployment
         bot_pod_labels = {
@@ -238,13 +336,17 @@ class BotPodCreator:
             ),
             spec=client.V1PodSpec(
                 containers=[self.get_bot_container()],
+                security_context=self.get_bot_pod_security_context(),
                 service_account_name=os.getenv("BOT_POD_SERVICE_ACCOUNT_NAME", "default"),
                 restart_policy="Never",
                 image_pull_secrets=self.get_pod_image_pull_secrets(),
                 termination_grace_period_seconds=60,
-                tolerations= self.get_pod_tolerations()
+                tolerations= self.get_pod_tolerations(),
+                volumes=self.get_bot_pod_volumes(),
             )
         )
+
+        bot_pod_spec_data = self.apply_spec_to_bot_pod(bot_pod)
 
         if add_webpage_streamer:
             # Create specific labels for the webpage streamer pod
@@ -274,7 +376,7 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod
+                body=bot_pod_spec_data
             )
 
             if add_webpage_streamer:

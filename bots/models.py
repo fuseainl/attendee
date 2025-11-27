@@ -5,6 +5,7 @@ import os
 import random
 import secrets
 import string
+from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
@@ -19,6 +20,7 @@ from django.utils import timezone
 from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
+from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -614,6 +616,9 @@ class TranscriptionSettings:
     def deepgram_replace_settings(self):
         return self._settings.get("deepgram", {}).get("replace", [])
 
+    def kyutai_server_url(self):
+        return self._settings.get("kyutai", {}).get("server_url", None)
+
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
 
@@ -702,6 +707,14 @@ class Bot(models.Model):
                 if retry_count >= max_retries:
                     raise
                 continue
+
+    @property
+    def bot_pod_spec_type(self) -> BotPodSpecType:
+        # If join_at is greater than SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS seconds into the future, use the scheduled pod spec
+        scheduled_bot_pod_spec_margin_seconds = int(os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120))
+        if self.join_at and self.join_at - timedelta(seconds=scheduled_bot_pod_spec_margin_seconds) > timezone.now():
+            return BotPodSpecType.SCHEDULED
+        return BotPodSpecType.DEFAULT
 
     def bot_duration_seconds(self) -> int:
         if self.first_heartbeat_timestamp is None or self.last_heartbeat_timestamp is None:
@@ -831,6 +844,12 @@ class Bot(models.Model):
         if recording_settings is None:
             recording_settings = {}
         return recording_settings.get("record_chat_messages_when_paused", False)
+
+    def reserve_additional_storage(self):
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+        return recording_settings.get("reserve_additional_storage", False)
 
     def record_async_transcription_audio_chunks(self):
         if not self.project.organization.is_async_transcription_enabled:
@@ -1443,6 +1462,26 @@ class BotEventManager:
         return ~(pre_meeting_q | post_meeting_q)
 
     @classmethod
+    def after_new_state_is_fatal_error(cls, bot: Bot, event_type: BotEventTypes, event_sub_type: BotEventSubTypes, new_state: BotStates):
+        from bots.tasks import send_slack_alert
+
+        # Make sure the event type is FATAL_ERROR, this indicates an unexpected failure
+        if event_type != BotEventTypes.FATAL_ERROR:
+            return
+
+        if not os.getenv("SLACK_WEBHOOK_URL"):
+            return
+
+        # Send a slack webhook if the event type is FATAL_ERROR.
+        # It will include the bot's object id and the event sub type and the last bot resource snapshot.
+        last_bot_resource_snapshot_data = "None found."
+        last_bot_resource_snapshot = bot.resource_snapshots.order_by("-created_at").first()
+        if last_bot_resource_snapshot:
+            last_bot_resource_snapshot_data = json.dumps(last_bot_resource_snapshot.data)
+        message = f"Bot {bot.object_id} encountered a fatal error. Site Domain: {settings.SITE_DOMAIN}. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}. Last bot resource snapshot: {last_bot_resource_snapshot_data}"
+        send_slack_alert.delay(message)
+
+    @classmethod
     def after_new_state_is_joined_recording(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
         pending_recordings = bot.recordings.filter(state__in=[RecordingStates.NOT_STARTED, RecordingStates.PAUSED])
         if pending_recordings.count() != 1:
@@ -1592,6 +1631,9 @@ class BotEventManager:
                     if new_state == BotStates.JOINED_RECORDING_PERMISSION_DENIED:
                         cls.after_new_state_is_joined_recording_permission_denied(bot=bot, new_state=new_state)
 
+                    if new_state == BotStates.FATAL_ERROR:
+                        cls.after_new_state_is_fatal_error(bot=bot, event_type=event_type, event_sub_type=event_sub_type, new_state=new_state)
+
                     # If we transitioned to a post meeting state
                     transitioned_to_post_meeting_state = cls.is_post_meeting_state(new_state) and not cls.is_post_meeting_state(old_state)
                     if transitioned_to_post_meeting_state:
@@ -1668,6 +1710,7 @@ class Participant(models.Model):
 class ParticipantEventTypes(models.IntegerChoices):
     JOIN = 1, "Join"
     LEAVE = 2, "Leave"
+    UPDATE = 5, "Update"  # Leave space for possible speech start / stop events
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1675,6 +1718,7 @@ class ParticipantEventTypes(models.IntegerChoices):
         mapping = {
             cls.JOIN: "join",
             cls.LEAVE: "leave",
+            cls.UPDATE: "update",
         }
         return mapping.get(value)
 
@@ -1770,6 +1814,7 @@ class TranscriptionProviders(models.IntegerChoices):
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
     ELEVENLABS = 7, "ElevenLabs"
+    KYUTAI = 8, "Kyutai"
 
 
 class RecordingStorage(Storage):
@@ -2210,6 +2255,7 @@ class Credentials(models.Model):
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
+        KYUTAI = 11, "Kyutai"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)

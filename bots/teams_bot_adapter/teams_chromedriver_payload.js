@@ -14,6 +14,12 @@ class StyleManager {
 
     addAudioTrack(audioTrack) {
         this.audioTracks.push(audioTrack);
+        if (this.audioTracks.length > 1) {
+            window.ws?.sendJson({
+                type: 'MultipleAudioTracksDetected',
+                numberOfTracks: this.audioTracks.length,
+            });
+        }
     }
 
     checkAudioActivity() {
@@ -365,6 +371,7 @@ class DominantSpeakerManager {
     constructor() {
         this.dominantSpeakerStreamId = null;
         this.captionAudioTimes = [];
+        this.speechIntervalsPerParticipant = {};
     }
 
     getLastSpeakerIdForTimestampMs(timestampMs) {
@@ -375,6 +382,93 @@ class DominantSpeakerManager {
         }
         // Return the caption audio time with the highest timestampMs
         return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    }
+
+    getSpeakerIdForTimestampMsUsingSpeechIntervals(timestampMs) {
+        const speakersAtTimestamp = [];
+        
+        // Check each participant to see if they have a speech interval at the given timestamp
+        for (const [speakerId, intervals] of Object.entries(this.speechIntervalsPerParticipant)) {
+            
+            let isCurrentlySpeaking = false;
+            let timestampMsOfLastStart = null;
+            
+            // Process each interval event to determine if participant is speaking at timestampMs
+            for (const interval of intervals) {
+                if (interval.timestampMs > timestampMs) {
+                    // We've passed the timestamp, stop checking this participant
+                    break;
+                }
+                
+                if (interval.type === 'start') {
+                    isCurrentlySpeaking = true;
+                    timestampMsOfLastStart = interval.timestampMs;
+                } else if (interval.type === 'end') {
+                    isCurrentlySpeaking = false;
+                }
+            }
+            
+            if (isCurrentlySpeaking) {
+                speakersAtTimestamp.push({
+                    speakerId,
+                    timestampMsOfLastStart
+                });
+            }
+        }
+        
+        if (speakersAtTimestamp.length === 0)
+            return null;
+
+        if (speakersAtTimestamp.length === 1)
+            return speakersAtTimestamp[0].speakerId;
+
+        // If there were multiple speakers in this interval, we need a "tie breaker"
+
+        // If we have captions, then look at the participant for the last caption audio time
+        if (this.captionAudioTimes.length > 0)
+        {
+            const participantForLastCaptionAudioTime = this.getLastSpeakerIdForTimestampMs(timestampMs);
+            if (participantForLastCaptionAudioTime && speakersAtTimestamp.some(speaker => speaker.speakerId === participantForLastCaptionAudioTime))
+                return participantForLastCaptionAudioTime;
+        }
+
+        // Otherwise use the the speaker with the earliest timestampMsOfLastStart
+        return speakersAtTimestamp.reduce((min, speaker) => speaker.timestampMsOfLastStart < min.timestampMsOfLastStart ? speaker : min).speakerId;
+
+        // Otherwise use the speaker with the highest timestampMsOfLastStart (Not using)
+        // return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
+    }
+
+    addSpeechIntervalStart(timestampMs, speakerId) {
+        if (!this.speechIntervalsPerParticipant[speakerId])
+            this.speechIntervalsPerParticipant[speakerId] = [];
+
+        this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
+
+        // Not going to send this to server for now.
+        /*
+        window.ws.sendJson({
+            type: 'SpeechStart',
+            participant_uuid: speakerId,
+            timestamp: timestampMs
+        });
+        */
+    }
+
+    addSpeechIntervalEnd(timestampMs, speakerId) {
+        if (!this.speechIntervalsPerParticipant[speakerId])
+            this.speechIntervalsPerParticipant[speakerId] = [];
+
+        this.speechIntervalsPerParticipant[speakerId].push({type: 'end', timestampMs: timestampMs});
+
+        // Not going to send this to server for now.
+        /*
+        window.ws.sendJson({
+            type: 'SpeechStop',
+            participant_uuid: speakerId,
+            timestamp: timestampMs
+        });
+        */
     }
 
     addCaptionAudioTime(timestampMs, speakerId) {
@@ -1079,9 +1173,9 @@ class WebSocketClient {
   
     enableMediaSending() {
         this.mediaSendingEnabled = true;
+        window.receiverManager.startPollingReceivers();
         window.styleManager.start();
         window.callManager.syncParticipants();
-
         // No longer need this because we're not using MediaStreamTrackProcessor's
         //this.startBlackFrameTimer();
     }
@@ -1506,6 +1600,114 @@ const wsInterceptor = new WebSocketInterceptor({
     }
 });
 
+class ParticipantSpeakingStateMachine {
+    constructor(participantId) {
+        this.participantId = participantId;
+        this.state = 'NOT_SPEAKING';
+        this.samples = [];
+    }
+
+    addSample(sample) {
+        this.samples.push(sample);
+
+        if (this.samples.length > 10) {
+            this.samples.shift();
+        }
+
+        const lastFiveSamples = this.samples.slice(-5);
+        if (lastFiveSamples.length < 5)
+            return;
+
+        const majorityOfLastFiveSamplesWereTrue = lastFiveSamples.filter(sample => sample.isSpeaking).length > 3;
+        const previousState = this.state;
+        const firstOfLastFiveSamplesTimestamp = lastFiveSamples[0].timestamp;
+        if (majorityOfLastFiveSamplesWereTrue) {
+            this.state = 'SPEAKING';
+        } else {
+            this.state = 'NOT_SPEAKING';
+        }
+
+        if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
+            realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
+            dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+        } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
+            realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
+            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+        }
+    }
+}
+
+class ReceiverManager {
+    constructor() {
+        this.receiverMap = new Map();
+        this.participantSpeakingStateMachineMap = new Map();
+    }
+
+    startPollingReceivers() {
+        window.ws.sendJson({
+            type: 'ReceiverManagerUpdate',
+            update: "startPollingReceivers"
+        });
+        setInterval(() => {
+            this.pollReceivers();
+        }, 100);
+    }
+
+    pollReceivers() {
+        for (const [receiver, isActive] of this.receiverMap) {
+            const contributingSources = receiver.getContributingSources();
+
+            if (contributingSources.length > 0 && !isActive) {
+                this.receiverMap.set(receiver, true);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverActive",
+                    receiverTrackId: receiver.track?.id
+                });
+            }
+
+            if (!isActive)
+                continue;
+
+            const currentTime = Date.now();
+            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
+            const speakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
+
+            for (const speakingParticipantId of speakingParticipantIds) {
+                if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
+                    this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
+                }
+            }
+
+            // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
+            for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
+                participantSpeakingStateMachine.addSample({
+                    isSpeaking: speakingParticipantIds.has(participantId),
+                    timestamp: currentTime
+                });
+            }
+            
+            /*
+            {
+    "rtpTimestamp": 506968569,
+    "source": 414,
+    "timestamp": 1759288487277
+}
+            */
+        }
+    }
+
+    addReceiver(receiver) {
+        if (!receiver || this.receiverMap.has(receiver)) return;
+        realConsole?.log('ReceiverManager is adding receiver', receiver);
+        window.ws?.sendJson({
+            type: 'ReceiverManagerUpdate',
+            update: "addReceiver",
+            receiverTrackId: receiver.track?.id
+        });
+        this.receiverMap.set(receiver, false);
+    }
+}
 
 const ws = new WebSocketClient();
 window.ws = ws;
@@ -1521,6 +1723,9 @@ const dominantSpeakerManager = new DominantSpeakerManager();
 
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
+
+const receiverManager = new ReceiverManager();
+window.receiverManager = receiverManager;
 
 if (!realConsole) {
     if (document.readyState === 'complete') {
@@ -1583,12 +1788,14 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
+window.captureDominantSpeakerViaCaptions = false;
+
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
     // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
     // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio)
+    if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
     {
         const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
         dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
@@ -1857,11 +2064,21 @@ const handleVideoTrack = async (event) => {
     }
   };
 
+  const globalAudioQueueIntervalsSet = new Set();
 
   const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
     const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    let trackIsNonSilent = false;
+    let handleAudioTrackDebugInfo = {
+        framesWithoutDominantSpeaker: 0,
+        framesWithDominantSpeaker: 0,
+        totalFrames: 0,
+    };
+    let timeSinceLastDebugInfoSend = 0;
+
+    window.receiverManager.addReceiver(event.receiver);
     
     // Start continuous background processing of the audio queue
     const processAudioQueue = () => {
@@ -1870,22 +2087,53 @@ const handleVideoTrack = async (event) => {
             const { audioData, audioArrivalTime } = audioDataQueue.shift();
 
             // Get the dominant speaker and assume that's who the participant speaking is
-            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
+            const dominantSpeakerId = dominantSpeakerManager.getSpeakerIdForTimestampMsUsingSpeechIntervals(audioArrivalTime);
 
             // Send audio data through websocket
+            handleAudioTrackDebugInfo.totalFrames++;
             if (dominantSpeakerId) {
                 ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
+                handleAudioTrackDebugInfo.framesWithDominantSpeaker++;
             }
+            else
+            {
+                handleAudioTrackDebugInfo.framesWithoutDominantSpeaker++;
+            }
+        }
+
+        if (Date.now() - timeSinceLastDebugInfoSend >= 10000)  {
+            timeSinceLastDebugInfoSend = Date.now();
+            ws.sendJson({
+                type: 'HandleAudioTrackDebugInfo',
+                trackId: event.track?.id,
+                debugInfo: handleAudioTrackDebugInfo
+            });
+            handleAudioTrackDebugInfo = {
+                framesWithoutDominantSpeaker: 0,
+                framesWithDominantSpeaker: 0,
+                totalFrames: 0,
+            };
         }
     };
 
     // Set up background processing every 100ms
     const queueProcessingInterval = setInterval(processAudioQueue, 100);
+    globalAudioQueueIntervalsSet.add(queueProcessingInterval);
+    if (globalAudioQueueIntervalsSet.size > 1) {
+        window.ws?.sendJson({
+            type: 'MultipleAudioQueuesDetected',
+            trackId: event.track?.id,
+        });
+    }
     
     // Clean up interval when track ends
     event.track.addEventListener('ended', () => {
         clearInterval(queueProcessingInterval);
         console.log('Audio track ended, cleared queue processing interval');
+        window.ws?.sendJson({
+            type: 'AudioTrackEnded',
+            trackId: event.track?.id,
+        });
     });
     
     try {
@@ -1968,6 +2216,24 @@ const handleVideoTrack = async (event) => {
                   //    return;
                   //}
 
+                  if (!trackIsNonSilent && audioData.some(value => value !== 0)) {
+                    trackIsNonSilent = true;
+                    window.ws?.sendJson({
+                        type: 'WebRTCTrackIsNonSilent',
+                        trackId: event.track?.id,
+                    });
+                  }
+
+                  // Don't bother sending unless we've gotten some non-silent audio data in this track.
+                  if (!trackIsNonSilent) {
+                    return;
+                  }
+
+                  // If we have multiple audio queues, we hit multiple audioTracks, so we're in an irregular state. Filter out non-zero audio data.
+                  if (globalAudioQueueIntervalsSet.size > 1 && !audioData.some(value => value !== 0)) {
+                    return;
+                  }
+
                   // Add to queue with timestamp - the background thread will process it
                   audioDataQueue.push({
                     audioArrivalTime: Date.now(),
@@ -1985,6 +2251,10 @@ const handleVideoTrack = async (event) => {
               console.log('Transform stream flush called');
               // Clear the interval when the stream ends
               clearInterval(queueProcessingInterval);
+              window.ws?.sendJson({
+                type: 'AudioQueueFlush',
+                trackId: event.track?.id,
+            });
           }
       });
   
@@ -2010,12 +2280,20 @@ const handleVideoTrack = async (event) => {
           abortController.abort();
           // Clear the interval on error
           clearInterval(queueProcessingInterval);
+          window.ws?.sendJson({
+            type: 'AudioQueueError',
+            trackId: event.track?.id,
+          });
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
         // Clear the interval on error
         clearInterval(queueProcessingInterval);
+        window.ws?.sendJson({
+            type: 'AudioQueueError',
+            trackId: event.track?.id,
+        });
     }
   };
   
@@ -2040,19 +2318,25 @@ new RTCInterceptor({
 
         peerConnection.addEventListener('track', (event) => {
             console.log('New track:', {
-                trackId: event.track.id,
-                trackKind: event.track.kind,
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
                 streams: event.streams,
+            });
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
+                streams: event.streams?.map(stream => stream?.id),
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
-            if (event.track.kind === 'audio') {
+            if (event.track?.kind === 'audio') {
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
             }
-            if (event.track.kind === 'video') {
+            if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
             }
         });
@@ -2450,6 +2734,26 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+
+    getSpeakingParticipantIds(contributingSources) {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+
+        const speakingParticipantIds = new Set();
+
+        this.activeCall.participants.forEach(participant => {
+            if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
+                speakingParticipantIds.add(participant.id);
+        });
+
+        return speakingParticipantIds;
     }
 
     syncParticipants() {

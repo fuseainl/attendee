@@ -381,6 +381,17 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": ["model_id"],
             "additionalProperties": False,
         },
+        "kyutai": {
+            "type": "object",
+            "properties": {
+                "server_url": {
+                    "type": "string",
+                    "description": ("The WebSocket URL of the Kyutai STT server (e.g., 'wss://your-domain.com/api/asr-streaming'). Must start with ws:// or wss://. If not provided, will use the server_url from project credentials."),
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -400,9 +411,10 @@ def _validate_metadata_attribute(value):
         raise serializers.ValidationError("Metadata must have at least one key")
 
     # Check if all values are strings
-    for key, val in value.items():
-        if not isinstance(val, str):
-            raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+    if settings.REQUIRE_STRING_VALUES_IN_METADATA:
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
 
     # Check if all keys are strings
     for key in value.keys():
@@ -562,6 +574,11 @@ class RTMPSettingsJSONField(serializers.JSONField):
             "record_async_transcription_audio_chunks": {
                 "type": "boolean",
                 "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
+                "default": False,
+            },
+            "reserve_additional_storage": {
+                "type": "boolean",
+                "description": "Whether to reserve extra space to store the recording. Only needed when the bot will record video for longer than 6 hours. Defaults to false.",
                 "default": False,
             },
         },
@@ -1226,7 +1243,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     recording_settings = RecordingSettingsJSONField(
         help_text="The settings for the bot's recording.",
         required=False,
-        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False, "record_async_transcription_audio_chunks": False},
+        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False, "record_async_transcription_audio_chunks": False, "reserve_additional_storage": False},
     )
 
     RECORDING_SETTINGS_SCHEMA = {
@@ -1240,6 +1257,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             },
             "record_chat_messages_when_paused": {"type": "boolean"},
             "record_async_transcription_audio_chunks": {"type": "boolean"},
+            "reserve_additional_storage": {"type": "boolean"},
         },
         "additionalProperties": False,
         "required": [],
@@ -1272,6 +1290,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         view = value.get("view")
         if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
             raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
+
+        # You can only reserve additional storage if you're using Kubernetes to launch the bot
+        if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+            raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
 
         return value
 

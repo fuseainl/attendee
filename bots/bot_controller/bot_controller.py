@@ -42,6 +42,7 @@ from bots.models import (
     MeetingTypes,
     Participant,
     ParticipantEvent,
+    ParticipantEventTypes,
     RealtimeTriggerTypes,
     Recording,
     RecordingFormats,
@@ -82,8 +83,17 @@ class BotController:
     # Default wait time for utterance termination (5 minutes)
     UTTERANCE_TERMINATION_WAIT_TIME_SECONDS = 300
 
+    def use_streaming_transcription(self):
+        provider = self.get_recording_transcription_provider()
+        if provider == TranscriptionProviders.KYUTAI:
+            return True
+        if provider == TranscriptionProviders.DEEPGRAM:
+            return self.bot_in_db.transcription_settings.deepgram_use_streaming()
+        return False
+
     def per_participant_audio_input_manager(self):
-        if self.bot_in_db.transcription_settings.deepgram_use_streaming():
+        # Use streaming manager for providers that support streaming
+        if self.use_streaming_transcription():
             return self.per_participant_streaming_audio_input_manager
         else:
             return self.per_participant_non_streaming_audio_input_manager
@@ -613,7 +623,13 @@ class BotController:
         elif not self.pipeline_configuration.record_audio and not self.pipeline_configuration.record_video:
             return None
         else:
-            return os.path.join("/tmp", self.get_recording_filename())
+            return os.path.join(self.get_recording_storage_directory(), self.get_recording_filename())
+
+    def get_recording_storage_directory(self):
+        if self.bot_in_db.reserve_additional_storage():
+            return "/bot-persistent-storage"
+        else:
+            return "/tmp"
 
     def should_create_gstreamer_pipeline(self):
         # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a gstreamer pipeline
@@ -686,6 +702,7 @@ class BotController:
             sample_rate=self.get_per_participant_audio_sample_rate(),
             utterance_size_limit=self.non_streaming_audio_utterance_size_limit(),
             silence_duration_limit=self.non_streaming_audio_silence_duration_limit(),
+            should_print_diagnostic_info=self.should_capture_audio_chunks(),
         )
 
         self.per_participant_streaming_audio_input_manager = PerParticipantStreamingAudioInputManager(
@@ -797,7 +814,7 @@ class BotController:
                     message = self.pubsub.get_message(timeout=1.0)
                     if message:
                         # Schedule Redis message handling in the main GLib loop
-                        GLib.idle_add(lambda: self.handle_redis_message(message))
+                        GLib.idle_add(self.handle_redis_message, message)
                 except Exception as e:
                     # If this is a certain type of exception, we can attempt to reconnect
                     if isinstance(e, redis.exceptions.ConnectionError) and "Connection closed by server." in str(e):
@@ -931,6 +948,10 @@ class BotController:
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_chat_message_requests_in_db(self):
+        if not self.adapter.is_ready_to_send_chat_messages():
+            logger.info("Bot adapter is not ready to send chat messages, so not sending chat message requests")
+            return
+
         chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
         for chat_message_request in chat_message_requests:
             self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
@@ -1274,6 +1295,14 @@ class BotController:
             },
         )
 
+        if event["event_type"] == ParticipantEventTypes.UPDATE:
+            if "isHost" in event["event_data"]:
+                participant.is_host = event["event_data"]["isHost"]["after"]
+                participant.save()
+                logger.info(f"Updated participant {participant.object_id} is host to {participant.is_host}")
+            # Don't save this event type in the database for now.
+            return
+
         participant_event = ParticipantEvent.objects.create(
             participant=participant,
             event_type=event["event_type"],
@@ -1283,6 +1312,10 @@ class BotController:
 
         # Don't send webhook for the bot itself
         if participant.is_the_bot:
+            return
+
+        # Don't send webhook for non join / leave events
+        if participant_event.event_type != ParticipantEventTypes.JOIN and participant_event.event_type != ParticipantEventTypes.LEAVE:
             return
 
         trigger_webhook(

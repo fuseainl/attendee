@@ -26,6 +26,8 @@ class BotVideoOutputStream {
         this.canvas.height = this.canvasHeightForImage;
         this.canvasCtx = this.canvas.getContext("2d");
         this.imageRedrawInterval = null;
+        this.imageToDraw = null;
+        this.imageDrawParams = null;
 
         this.canvasCtx.fillStyle = "black";
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
@@ -71,15 +73,17 @@ class BotVideoOutputStream {
         const blob = new Blob([buffer], { type: "image/png" });
         const url = URL.createObjectURL(blob);
         try {
-            const img = await this._loadImage(url);
+            this.imageToDraw = await this._loadImage(url);
             this.canvas.width = this.canvasWidthForImage;
             this.canvas.height = this.canvasHeightForImage;
-            const imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(img.width, img.height);
-            this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
+            this.imageDrawParams = this.calculateImageDrawParamsForLetterBoxing(this.imageToDraw.width, this.imageToDraw.height);
+            this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
             // Set up an interval that redraws the image every 1000ms. Needed to work in Teams.
-            this.imageRedrawInterval = setInterval(() => {
-                this.canvasCtx.drawImage(img, imageDrawParams.offsetX, imageDrawParams.offsetY, imageDrawParams.width, imageDrawParams.height);
-            }, 1000);
+            if (!this.imageRedrawInterval) {
+                this.imageRedrawInterval = setInterval(() => {
+                    this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
+                }, 1000);
+            }
             this.ensureInputOn();
 
             // Capture last image bytes, so that we can display it again if we play a video

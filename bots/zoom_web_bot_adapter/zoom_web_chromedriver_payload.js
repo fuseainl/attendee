@@ -503,7 +503,8 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost
             });
         }
 
@@ -528,7 +529,8 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost
             });
         }
 
