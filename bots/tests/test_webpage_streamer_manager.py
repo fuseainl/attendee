@@ -1,6 +1,5 @@
 import os
 import threading
-import time
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
@@ -312,8 +311,8 @@ class TestWebpageStreamerManagerCleanup(TestCase):
         self.assertTrue(manager.cleaned_up)
 
 
-class TestWebpageStreamerManagerInit(TestCase):
-    """Tests for init method that starts keepalive thread."""
+class TestWebpageStreamerManagerInitMethod(TestCase):
+    """Tests for init() method that starts keepalive thread."""
 
     def _create_manager(self):
         """Helper to create a manager with mock callbacks."""
@@ -452,4 +451,3 @@ class TestWebpageStreamerManagerKeepalive(TestCase):
 
         # Should have tried twice
         self.assertEqual(mock_post.call_count, times_to_try)
-
