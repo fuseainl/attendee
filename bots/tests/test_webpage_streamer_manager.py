@@ -1,183 +1,455 @@
-import unittest
-from unittest.mock import MagicMock, patch, call
+import os
 import threading
 import time
-import os
+from unittest.mock import MagicMock, patch
+
+from django.test import TestCase
 
 from bots.bot_controller.webpage_streamer_manager import WebpageStreamerManager
 
-class TestWebpageStreamerManager(unittest.TestCase):
-    def setUp(self):
-        self.mock_is_bot_ready = MagicMock(return_value=True)
-        self.mock_get_offer = MagicMock(return_value={"sdp": "fake_sdp", "type": "offer"})
-        self.mock_start_peer = MagicMock()
-        self.mock_play_stream = MagicMock()
-        self.mock_stop_stream = MagicMock()
-        self.mock_on_ready = MagicMock()
-        self.hostname = "test-hostname"
-        
-        self.manager = WebpageStreamerManager(
-            is_bot_ready_for_webpage_streamer_callback=self.mock_is_bot_ready,
-            get_peer_connection_offer_callback=self.mock_get_offer,
-            start_peer_connection_callback=self.mock_start_peer,
-            play_bot_output_media_stream_callback=self.mock_play_stream,
-            stop_bot_output_media_stream_callback=self.mock_stop_stream,
-            on_message_that_webpage_streamer_connection_can_start_callback=self.mock_on_ready,
-            webpage_streamer_service_hostname=self.hostname
+
+class TestWebpageStreamerManagerInit(TestCase):
+    """Tests for WebpageStreamerManager initialization."""
+
+    def test_init_sets_callbacks_and_defaults(self):
+        """Test that __init__ properly sets all callbacks and default values."""
+        is_ready_callback = MagicMock()
+        get_offer_callback = MagicMock()
+        start_pc_callback = MagicMock()
+        play_media_callback = MagicMock()
+        stop_media_callback = MagicMock()
+        on_can_start_callback = MagicMock()
+
+        manager = WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=is_ready_callback,
+            get_peer_connection_offer_callback=get_offer_callback,
+            start_peer_connection_callback=start_pc_callback,
+            play_bot_output_media_stream_callback=play_media_callback,
+            stop_bot_output_media_stream_callback=stop_media_callback,
+            on_message_that_webpage_streamer_connection_can_start_callback=on_can_start_callback,
+            webpage_streamer_service_hostname="test-hostname",
         )
 
-    def tearDown(self):
-        self.manager.cleanup()
-        if self.manager.keepalive_task and self.manager.keepalive_task.is_alive():
-            self.manager.keepalive_task.join(timeout=1)
+        self.assertIsNone(manager.url)
+        self.assertIsNone(manager.last_non_empty_url)
+        self.assertIsNone(manager.output_destination)
+        self.assertEqual(manager.get_peer_connection_offer_callback, get_offer_callback)
+        self.assertEqual(manager.start_peer_connection_callback, start_pc_callback)
+        self.assertFalse(manager.cleaned_up)
+        self.assertEqual(manager.webpage_streamer_service_hostname, "test-hostname")
+        self.assertEqual(manager.is_bot_ready_for_webpage_streamer_callback, is_ready_callback)
+        self.assertEqual(manager.play_bot_output_media_stream_callback, play_media_callback)
+        self.assertEqual(manager.stop_bot_output_media_stream_callback, stop_media_callback)
+        self.assertEqual(manager.on_message_that_webpage_streamer_connection_can_start_callback, on_can_start_callback)
+        self.assertFalse(manager.webrtc_connection_started)
+        self.assertIsNone(manager.keepalive_task)
+        self.assertFalse(manager.webpage_streamer_connection_can_start)
+
+
+class TestWebpageStreamerManagerStreamingServiceHostname(TestCase):
+    """Tests for streaming_service_hostname method."""
+
+    def _create_manager(self):
+        """Helper to create a manager with mock callbacks."""
+        return WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=MagicMock(),
+            get_peer_connection_offer_callback=MagicMock(),
+            start_peer_connection_callback=MagicMock(),
+            play_bot_output_media_stream_callback=MagicMock(),
+            stop_bot_output_media_stream_callback=MagicMock(),
+            on_message_that_webpage_streamer_connection_can_start_callback=MagicMock(),
+            webpage_streamer_service_hostname="k8s-service-hostname",
+        )
+
+    @patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "kubernetes"})
+    def test_returns_service_hostname_in_kubernetes(self):
+        """Test that streaming_service_hostname returns the service hostname in k8s."""
+        manager = self._create_manager()
+        result = manager.streaming_service_hostname()
+        self.assertEqual(result, "k8s-service-hostname")
+
+    @patch.dict(os.environ, {"LAUNCH_BOT_METHOD": "docker"})
+    def test_returns_local_hostname_in_docker(self):
+        """Test that streaming_service_hostname returns local hostname in docker."""
+        manager = self._create_manager()
+        result = manager.streaming_service_hostname()
+        self.assertEqual(result, "attendee-webpage-streamer-local")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_returns_local_hostname_when_no_env_var(self):
+        """Test that streaming_service_hostname returns local hostname when env var not set."""
+        manager = self._create_manager()
+        result = manager.streaming_service_hostname()
+        self.assertEqual(result, "attendee-webpage-streamer-local")
+
+
+class TestWebpageStreamerManagerUpdate(TestCase):
+    """Tests for the update method."""
+
+    def _create_manager(self):
+        """Helper to create a manager with mock callbacks."""
+        manager = WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=MagicMock(),
+            get_peer_connection_offer_callback=MagicMock(),
+            start_peer_connection_callback=MagicMock(),
+            play_bot_output_media_stream_callback=MagicMock(),
+            stop_bot_output_media_stream_callback=MagicMock(),
+            on_message_that_webpage_streamer_connection_can_start_callback=MagicMock(),
+            webpage_streamer_service_hostname="test-hostname",
+        )
+        return manager
+
+    def test_update_does_nothing_when_connection_cannot_start(self):
+        """Test that update does nothing when webpage_streamer_connection_can_start is False."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = False
+
+        manager.update("http://example.com", "webcam")
+
+        # Should not update any values
+        self.assertIsNone(manager.url)
+        self.assertIsNone(manager.output_destination)
+        manager.play_bot_output_media_stream_callback.assert_not_called()
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_starts_connection_with_new_url(self, mock_post):
+        """Test that update starts a WebRTC connection when url is set."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+        manager.get_peer_connection_offer_callback.return_value = {"sdp": "test-sdp", "type": "offer"}
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"sdp": "answer-sdp", "type": "answer"}
+        mock_post.return_value = mock_response
+
+        manager.update("http://example.com", "webcam")
+
+        self.assertEqual(manager.url, "http://example.com")
+        self.assertEqual(manager.output_destination, "webcam")
+        self.assertEqual(manager.last_non_empty_url, "http://example.com")
+        manager.play_bot_output_media_stream_callback.assert_called_once_with("webcam")
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_stops_stream_when_url_becomes_empty(self, mock_post):
+        """Test that update stops the media stream when url becomes empty."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+        manager.url = "http://example.com"
+        manager.output_destination = "webcam"
+
+        manager.update("", "webcam")
+
+        manager.stop_bot_output_media_stream_callback.assert_called_once()
+        self.assertEqual(manager.url, "")
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
+    def test_update_stops_and_replays_when_output_destination_changes(self, mock_sleep, mock_post):
+        """Test that update stops and replays stream when output destination changes."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+        manager.webrtc_connection_started = True
+        manager.url = "http://example.com"
+        manager.last_non_empty_url = "http://example.com"
+        manager.output_destination = "webcam"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        manager.update("http://example.com", "screenshare")
+
+        manager.stop_bot_output_media_stream_callback.assert_called_once()
+        manager.play_bot_output_media_stream_callback.assert_called_once_with("screenshare")
+        mock_sleep.assert_called_once_with(1)
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_only_changes_url_without_replaying(self, mock_post):
+        """Test that changing only the URL doesn't stop/replay the stream."""
+        manager = self._create_manager()
+        manager.webpage_streamer_connection_can_start = True
+        manager.webrtc_connection_started = True
+        manager.url = "http://example.com"
+        manager.last_non_empty_url = "http://example.com"
+        manager.output_destination = "webcam"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        manager.update("http://example2.com", "webcam")
+
+        # Should not call play_bot_output_media_stream_callback since output_destination unchanged
+        manager.play_bot_output_media_stream_callback.assert_not_called()
+        manager.stop_bot_output_media_stream_callback.assert_not_called()
+        self.assertEqual(manager.url, "http://example2.com")
+
+
+class TestWebpageStreamerManagerStartOrUpdateWebrtcConnection(TestCase):
+    """Tests for start_or_update_webrtc_connection method."""
+
+    def _create_manager(self):
+        """Helper to create a manager with mock callbacks."""
+        return WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=MagicMock(),
+            get_peer_connection_offer_callback=MagicMock(),
+            start_peer_connection_callback=MagicMock(),
+            play_bot_output_media_stream_callback=MagicMock(),
+            stop_bot_output_media_stream_callback=MagicMock(),
+            on_message_that_webpage_streamer_connection_can_start_callback=MagicMock(),
+            webpage_streamer_service_hostname="test-hostname",
+        )
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_start_webrtc_connection_success(self, mock_post):
+        """Test successful WebRTC connection start."""
+        manager = self._create_manager()
+        manager.get_peer_connection_offer_callback.return_value = {"sdp": "offer-sdp", "type": "offer"}
+
+        mock_offer_response = MagicMock()
+        mock_offer_response.json.return_value = {"sdp": "answer-sdp", "type": "answer"}
+
+        mock_start_response = MagicMock()
+        mock_start_response.status_code = 200
+
+        mock_post.side_effect = [mock_offer_response, mock_start_response]
+
+        manager.start_or_update_webrtc_connection("http://example.com")
+
+        self.assertTrue(manager.webrtc_connection_started)
+        manager.start_peer_connection_callback.assert_called_once_with({"sdp": "answer-sdp", "type": "answer"})
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_start_webrtc_connection_fails_on_offer_error(self, mock_post):
+        """Test that WebRTC connection doesn't start when offer has an error."""
+        manager = self._create_manager()
+        manager.get_peer_connection_offer_callback.return_value = {"error": "Failed to create offer"}
+
+        manager.start_or_update_webrtc_connection("http://example.com")
+
+        self.assertFalse(manager.webrtc_connection_started)
+        mock_post.assert_not_called()
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_start_webrtc_connection_fails_on_streaming_error(self, mock_post):
+        """Test that webrtc_connection_started stays False when streaming fails."""
+        manager = self._create_manager()
+        manager.get_peer_connection_offer_callback.return_value = {"sdp": "offer-sdp", "type": "offer"}
+
+        mock_offer_response = MagicMock()
+        mock_offer_response.json.return_value = {"sdp": "answer-sdp", "type": "answer"}
+
+        mock_start_response = MagicMock()
+        mock_start_response.status_code = 500
+
+        mock_post.side_effect = [mock_offer_response, mock_start_response]
+
+        manager.start_or_update_webrtc_connection("http://example.com")
+
+        self.assertFalse(manager.webrtc_connection_started)
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_update_webrtc_connection_when_already_started(self, mock_post):
+        """Test that update is called when connection is already started."""
+        manager = self._create_manager()
+        manager.webrtc_connection_started = True
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        manager.start_or_update_webrtc_connection("http://newurl.com")
+
+        # Should only call start_streaming, not offer
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        self.assertIn("start_streaming", call_args[0][0])
+
+
+class TestWebpageStreamerManagerCleanup(TestCase):
+    """Tests for cleanup method."""
+
+    def _create_manager(self):
+        """Helper to create a manager with mock callbacks."""
+        return WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=MagicMock(),
+            get_peer_connection_offer_callback=MagicMock(),
+            start_peer_connection_callback=MagicMock(),
+            play_bot_output_media_stream_callback=MagicMock(),
+            stop_bot_output_media_stream_callback=MagicMock(),
+            on_message_that_webpage_streamer_connection_can_start_callback=MagicMock(),
+            webpage_streamer_service_hostname="test-hostname",
+        )
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_cleanup_sends_shutdown_request(self, mock_post):
+        """Test that cleanup sends a shutdown request."""
+        manager = self._create_manager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"status": "ok"}
+        mock_post.return_value = mock_response
+
+        manager.cleanup()
+
+        self.assertTrue(manager.cleaned_up)
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        self.assertIn("shutdown", call_args[0][0])
+
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_cleanup_handles_shutdown_exception(self, mock_post):
+        """Test that cleanup handles exceptions gracefully."""
+        manager = self._create_manager()
+
+        mock_post.side_effect = Exception("Connection refused")
+
+        # Should not raise exception
+        manager.cleanup()
+
+        self.assertTrue(manager.cleaned_up)
+
+
+class TestWebpageStreamerManagerInit(TestCase):
+    """Tests for init method that starts keepalive thread."""
+
+    def _create_manager(self):
+        """Helper to create a manager with mock callbacks."""
+        return WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=MagicMock(),
+            get_peer_connection_offer_callback=MagicMock(),
+            start_peer_connection_callback=MagicMock(),
+            play_bot_output_media_stream_callback=MagicMock(),
+            stop_bot_output_media_stream_callback=MagicMock(),
+            on_message_that_webpage_streamer_connection_can_start_callback=MagicMock(),
+            webpage_streamer_service_hostname="test-hostname",
+        )
 
     def test_init_starts_keepalive_thread(self):
-        with patch.object(self.manager, 'send_webpage_streamer_keepalive_periodically') as mock_keepalive:
-            # We don't want the thread to actually run the loop in this test
-            self.manager.keepalive_task = MagicMock() 
-            self.manager.init()
-            # Since I assigned a mock to keepalive_task before init, init returns early. 
-            # Let's reset and test properly.
-            self.manager.keepalive_task = None
-            
-            # We actually want to check if a thread is started targeting the method
-            with patch('threading.Thread') as mock_thread:
-                self.manager.init()
-                mock_thread.assert_called_once_with(target=self.manager.send_webpage_streamer_keepalive_periodically, daemon=True)
-                mock_thread.return_value.start.assert_called_once()
+        """Test that init() starts a keepalive thread."""
+        manager = self._create_manager()
+        manager.cleaned_up = True  # Prevent the thread from running forever
 
-    @patch('bots.bot_controller.webpage_streamer_manager.requests.post')
-    def test_update_starts_webrtc_connection(self, mock_post):
-        # Setup successful responses
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {"status": "ok"}
-        
-        self.manager.webpage_streamer_connection_can_start = True
-        url = "http://example.com"
-        output_dest = "camera"
-        
-        self.manager.update(url, output_dest)
-        
-        # Check offer was requested
-        self.mock_get_offer.assert_called_once()
-        
-        # Check offer was sent to streaming service
-        expected_offer_url = f"http://attendee-webpage-streamer-local:8000/offer"
-        # Note: hostname defaults to attendee-webpage-streamer-local if env var not set
-        
-        # Verify calls to requests.post
-        # 1. Offer
-        # 2. Start streaming
-        
-        # Filter calls to ignore keepalive if any (though usually init() starts it)
-        # Here we didn't call init(), so keepalive shouldn't be running.
-        
-        calls = mock_post.call_args_list
-        self.assertTrue(len(calls) >= 2)
-        
-        # Verify offer call
-        offer_call = [c for c in calls if c.args[0].endswith('/offer')][0]
-        self.assertEqual(offer_call.kwargs['json'], {"sdp": "fake_sdp", "type": "offer"})
-        
-        # Verify start streaming call
-        start_call = [c for c in calls if c.args[0].endswith('/start_streaming')][0]
-        self.assertEqual(start_call.kwargs['json'], {"url": url})
-        
-        # Verify callbacks
-        self.mock_start_peer.assert_called_once()
-        self.mock_play_stream.assert_called_once_with(output_dest)
-        
-        self.assertTrue(self.manager.webrtc_connection_started)
-        self.assertEqual(self.manager.url, url)
-        self.assertEqual(self.manager.output_destination, output_dest)
+        manager.init()
 
-    @patch('bots.bot_controller.webpage_streamer_manager.requests.post')
-    def test_update_updates_existing_connection(self, mock_post):
-        mock_post.return_value.status_code = 200
-        self.manager.webpage_streamer_connection_can_start = True
-        self.manager.webrtc_connection_started = True
-        self.manager.url = "http://old.com"
-        self.manager.output_destination = "camera"
-        
-        new_url = "http://new.com"
-        self.manager.update(new_url, "camera")
-        
-        # Should call start_streaming (which updates if already started)
-        start_calls = [c for c in mock_post.call_args_list if c.args[0].endswith('/start_streaming')]
-        self.assertEqual(len(start_calls), 1)
-        self.assertEqual(start_calls[0].kwargs['json'], {"url": new_url})
-        
-        # Should not get new offer
-        self.mock_get_offer.assert_not_called()
-        
-    @patch('bots.bot_controller.webpage_streamer_manager.requests.post')
-    def test_update_change_output_destination(self, mock_post):
-        mock_post.return_value.status_code = 200
-        self.manager.webpage_streamer_connection_can_start = True
-        self.manager.webrtc_connection_started = True
-        self.manager.url = "http://example.com"
-        self.manager.output_destination = "camera"
-        self.manager.last_non_empty_url = "http://example.com"
-        
-        new_dest = "screenshare"
-        
-        # To avoid sleep in test
-        with patch('time.sleep'):
-            self.manager.update("http://example.com", new_dest)
-            
-        self.mock_stop_stream.assert_called_once()
-        self.mock_play_stream.assert_called_once_with(new_dest)
-        self.assertEqual(self.manager.output_destination, new_dest)
+        self.assertIsNotNone(manager.keepalive_task)
+        self.assertIsInstance(manager.keepalive_task, threading.Thread)
+        self.assertTrue(manager.keepalive_task.daemon)
 
-    @patch('bots.bot_controller.webpage_streamer_manager.requests.post')
-    def test_update_stop_streaming_if_no_url(self, mock_post):
-        self.manager.webpage_streamer_connection_can_start = True
-        self.manager.webrtc_connection_started = True
-        self.manager.url = "http://example.com"
-        self.manager.output_destination = "camera"
-        
-        self.manager.update(None, "camera")
-        
-        self.mock_stop_stream.assert_called_once()
-        self.assertIsNone(self.manager.url)
+    def test_init_does_not_start_second_thread(self):
+        """Test that init() doesn't start a second thread if already running."""
+        manager = self._create_manager()
+        manager.cleaned_up = True  # Prevent the thread from running forever
 
-    @patch('bots.bot_controller.webpage_streamer_manager.requests.post')
-    def test_keepalive_loop(self, mock_post):
-        mock_post.return_value.status_code = 200
-        
-        # Mock time.sleep to raise an exception after a few iterations or just run once then stop
-        # Better: run the loop in a separate thread (as intended) but control it via cleaned_up
-        
-        # We want to test that it calls keepalive and eventually sets webpage_streamer_connection_can_start
-        
-        # Using a controlled execution
-        # Let's override send_webpage_streamer_keepalive_periodically to run once logic logic 
-        # but that is testing the python loop.
-        # Instead, let's call the logic inside the loop manually or adjust sleep.
-        
-        # Simulating one iteration of the loop where connection is not yet allowed
-        self.manager.webpage_streamer_connection_can_start = False
-        
-        with patch('time.sleep'): # skip sleep
-            # We need to break the loop. Let's make cleaned_up True after one call to requests.post?
-            # Or mock requests.post to set cleaned_up = True as side effect?
-            def side_effect(*args, **kwargs):
-                self.manager.cleaned_up = True
-                return MagicMock(status_code=200)
-            mock_post.side_effect = side_effect
-            
-            self.manager.send_webpage_streamer_keepalive_periodically()
-            
-        mock_post.assert_called_with(f"http://attendee-webpage-streamer-local:8000/keepalive", json={})
-        
-        # Check callbacks
-        self.mock_is_bot_ready.assert_called()
-        self.mock_on_ready.assert_called()
-        self.assertTrue(self.manager.webpage_streamer_connection_can_start)
+        manager.init()
+        first_task = manager.keepalive_task
 
-    @patch('bots.bot_controller.webpage_streamer_manager.requests.post')
-    def test_cleanup(self, mock_post):
-        self.manager.cleanup()
-        self.assertTrue(self.manager.cleaned_up)
-        mock_post.assert_called_with(f"http://attendee-webpage-streamer-local:8000/shutdown", json={})
+        manager.init()
+
+        self.assertEqual(manager.keepalive_task, first_task)
+
+
+class TestWebpageStreamerManagerKeepalive(TestCase):
+    """Tests for keepalive functionality."""
+
+    def _create_manager(self):
+        """Helper to create a manager with mock callbacks."""
+        return WebpageStreamerManager(
+            is_bot_ready_for_webpage_streamer_callback=MagicMock(return_value=True),
+            get_peer_connection_offer_callback=MagicMock(),
+            start_peer_connection_callback=MagicMock(),
+            play_bot_output_media_stream_callback=MagicMock(),
+            stop_bot_output_media_stream_callback=MagicMock(),
+            on_message_that_webpage_streamer_connection_can_start_callback=MagicMock(),
+            webpage_streamer_service_hostname="test-hostname",
+        )
+
+    @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_keepalive_sets_connection_can_start_on_success(self, mock_post, mock_sleep):
+        """Test that keepalive sets webpage_streamer_connection_can_start when service responds."""
+        manager = self._create_manager()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        # Make sleep set cleaned_up on the second call to break the loop after first iteration completes
+        sleep_call_count = [0]
+
+        def sleep_side_effect(duration):
+            sleep_call_count[0] += 1
+            if sleep_call_count[0] >= 2:
+                manager.cleaned_up = True
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        manager.send_webpage_streamer_keepalive_periodically()
+
+        self.assertTrue(manager.webpage_streamer_connection_can_start)
+        manager.on_message_that_webpage_streamer_connection_can_start_callback.assert_called_once()
+
+    @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_keepalive_does_not_notify_if_bot_not_ready(self, mock_post, mock_sleep):
+        """Test that keepalive doesn't notify when bot is not ready."""
+        manager = self._create_manager()
+        manager.is_bot_ready_for_webpage_streamer_callback.return_value = False
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        # Make sleep set cleaned_up on the second call to break the loop after first iteration completes
+        sleep_call_count = [0]
+
+        def sleep_side_effect(duration):
+            sleep_call_count[0] += 1
+            if sleep_call_count[0] >= 2:
+                manager.cleaned_up = True
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        manager.send_webpage_streamer_keepalive_periodically()
+
+        self.assertFalse(manager.webpage_streamer_connection_can_start)
+        manager.on_message_that_webpage_streamer_connection_can_start_callback.assert_not_called()
+
+    @patch("bots.bot_controller.webpage_streamer_manager.time.sleep")
+    @patch("bots.bot_controller.webpage_streamer_manager.requests.post")
+    def test_keepalive_handles_request_exception(self, mock_post, mock_sleep):
+        """Test that keepalive continues after request exception."""
+        manager = self._create_manager()
+
+        call_count = [0]
+
+        def post_side_effect(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise Exception("Connection refused")
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            return mock_response
+
+        mock_post.side_effect = post_side_effect
+
+        # Make sleep set cleaned_up to break the loop after second iteration
+        sleep_call_count = [0]
+
+        times_to_try = 3
+
+        def sleep_side_effect(duration):
+            sleep_call_count[0] += 1
+            if sleep_call_count[0] > times_to_try:
+                manager.cleaned_up = True
+
+        mock_sleep.side_effect = sleep_side_effect
+
+        # Should not raise exception
+        manager.send_webpage_streamer_keepalive_periodically()
+
+        # Should have tried twice
+        self.assertEqual(mock_post.call_count, times_to_try)
 
