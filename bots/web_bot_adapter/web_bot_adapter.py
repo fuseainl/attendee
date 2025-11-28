@@ -838,6 +838,8 @@ class WebBotAdapter(BotAdapter):
         self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream();")
 
     def is_bot_ready_for_webpage_streamer(self):
+        if not self.driver:
+            return False
         return self.driver.execute_script("return window.botOutputManager.isReadyForWebpageStreamer();")
 
     def ready_to_show_bot_image(self):
