@@ -56,7 +56,7 @@ class LatestFrameTrack(VideoStreamTrack):
 
         # Re-stamp timing using our own clock so aiortc sees this as real-time
         pts, time_base = await self.next_timestamp()
-        frame.pts = pts + 50
+        frame.pts = pts
         frame.time_base = time_base
         return frame
 
