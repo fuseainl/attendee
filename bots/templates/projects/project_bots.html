@@ -104,6 +104,8 @@
                             <input type="date" class="form-control form-control-sm" id="end_date" name="end_date" value="{{ filter_params.end_date }}">
                         </div>
                         
+                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                        
                         <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="join_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Join At</label>
                             <input type="date" class="form-control form-control-sm" id="join_at_start" name="join_at_start" value="{{ filter_params.join_at_start }}">
@@ -127,7 +129,7 @@
                         </div>
                     </div>
                     
-                    <div class="col-md-2 d-flex align-items-end filter-item">
+                    <div class="col-md-2 d-flex align-items-end filter-item justify-content-end">
                         <button type="submit" class="btn btn-sm btn-primary me-2">Apply</button>
                         <a href="{% url 'bots:project-bots' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
                     </div>
