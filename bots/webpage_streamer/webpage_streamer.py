@@ -211,7 +211,7 @@ class WebpageStreamer:
                 ! queue max-size-buffers=5 leaky=downstream
                 ! appsink name=video_sink sync=false max-buffers=5 drop=true
             alsasrc device=default
-                ! audio/x-raw,format=S16LE,channels=2,rate=48000
+                ! audio/x-raw,format=S16LE,channels=1,rate=48000
                 ! audioconvert
                 ! audioresample
                 ! queue max-size-buffers=50 leaky=downstream
