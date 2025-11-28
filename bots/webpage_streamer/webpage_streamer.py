@@ -9,14 +9,14 @@ import os
 import time
 from fractions import Fraction
 
+import gi
 import numpy as np
 from aiohttp import web
-from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRelay
-from av import VideoFrame, AudioFrame
+from av import AudioFrame, VideoFrame
 from pyvirtualdisplay import Display
 
-import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
 from gi.repository import Gst, GstApp
@@ -104,9 +104,7 @@ class GstVideoStreamTrack(MediaStreamTrack):
         try:
             data = mapinfo.data
             # We forced format=BGR in the pipeline
-            arr = np.frombuffer(data, dtype=np.uint8).reshape(
-                self._height, self._width, 3
-            )
+            arr = np.frombuffer(data, dtype=np.uint8).reshape(self._height, self._width, 3)
             frame = VideoFrame.from_ndarray(arr, format="bgr24")
         finally:
             buffer.unmap(mapinfo)
@@ -158,9 +156,7 @@ class GstAudioStreamTrack(MediaStreamTrack):
             num_samples = len(data) // (2 * self._channels)
             if num_samples <= 0:
                 raise RuntimeError("Empty audio buffer")
-            pcm = np.frombuffer(data, dtype=np.int16).reshape(
-                num_samples, self._channels
-            )
+            pcm = np.frombuffer(data, dtype=np.int16).reshape(num_samples, self._channels)
         finally:
             buffer.unmap(mapinfo)
 
@@ -282,9 +278,7 @@ class WebpageStreamer:
         options.add_argument("--autoplay-policy=no-user-gesture-required")
         options.add_argument("--use-fake-device-for-media-stream")
         # options.add_argument("--use-fake-ui-for-media-stream")
-        options.add_argument(
-            f"--window-size={self.video_frame_size[0]},{self.video_frame_size[1]}"
-        )
+        options.add_argument(f"--window-size={self.video_frame_size[0]},{self.video_frame_size[1]}")
         options.add_argument("--start-fullscreen")
 
         # options.add_argument('--headless=new')
@@ -292,9 +286,7 @@ class WebpageStreamer:
         # options.add_argument("--mute-audio")
         options.add_argument("--disable-application-cache")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument(
-            "--enable-blink-features=WebCodecs,WebRTC-InsertableStreams,-AutomationControlled"
-        )
+        options.add_argument("--enable-blink-features=WebCodecs,WebRTC-InsertableStreams,-AutomationControlled")
         options.add_argument("--remote-debugging-port=9222")
 
         if os.getenv("ENABLE_CHROME_SANDBOX_FOR_WEBPAGE_STREAMER", "true").lower() != "true":
@@ -326,9 +318,7 @@ class WebpageStreamer:
         """
 
         # Add the combined script to execute on new document
-        self.driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument", {"source": combined_code}
-        )
+        self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
 
         # Start the shared GStreamer capture
         self._start_gstreamer_capture()
@@ -347,9 +337,7 @@ class WebpageStreamer:
             time_since_last_keepalive = current_time - self.last_keepalive_time
 
             if time_since_last_keepalive > 900:  # More than 15 minutes since last keepalive
-                logger.warning(
-                    f"No keepalive received in {time_since_last_keepalive:.1f} seconds. Shutting down process."
-                )
+                logger.warning(f"No keepalive received in {time_since_last_keepalive:.1f} seconds. Shutting down process.")
                 await self.shutdown_process()
                 break
 
@@ -393,9 +381,7 @@ class WebpageStreamer:
             # Do we have an upstream audio yet?
             upstream = req.app.get(UPSTREAM_AUDIO_TRACK_KEY)
             if upstream is None:
-                return web.Response(
-                    status=409, text="No upstream audio has been published yet."
-                )
+                return web.Response(status=409, text="No upstream audio has been published yet.")
 
             pc = RTCPeerConnection()
             pcs.add(pc)
@@ -413,9 +399,7 @@ class WebpageStreamer:
             await pc.setRemoteDescription(offer)
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
-            return web.json_response(
-                {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-            )
+            return web.json_response({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
 
         async def offer(req):
             params = await req.json()
@@ -463,9 +447,7 @@ class WebpageStreamer:
             await pc.setRemoteDescription(offer)
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
-            return web.json_response(
-                {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-            )
+            return web.json_response({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
 
         async def start_streaming(req):
             data = await req.json()
@@ -482,9 +464,7 @@ class WebpageStreamer:
             """Keepalive endpoint to reset the timeout timer."""
             self.last_keepalive_time = time.time()
             logger.info("Keepalive received")
-            return web.json_response(
-                {"status": "alive", "timestamp": self.last_keepalive_time}
-            )
+            return web.json_response({"status": "alive", "timestamp": self.last_keepalive_time})
 
         async def shutdown(req):
             """Shutdown endpoint to gracefully shutdown the process."""
