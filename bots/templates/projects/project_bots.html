@@ -93,27 +93,24 @@
                     </div>
                     
                     <!-- Compact date filters in a single row -->
-                    <div class="col-md-10 d-flex filter-item">
-                        <div class="me-3" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                    <div class="col-md-10 d-flex flex-wrap filter-item">
+                        <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="start_date" class="form-label me-2 mb-0" style="flex-shrink: 0;">Created</label>
                             <input type="date" class="form-control form-control-sm" id="start_date" name="start_date" value="{{ filter_params.start_date }}">
                         </div>
                         
-                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
-                            <label for="end_date" class="form-label me-3 mb-1" style="flex-shrink: 0;">→</label>
+                        <div class="me-4" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="end_date" class="form-label me-2 mb-1" style="flex-shrink: 0;">→</label>
                             <input type="date" class="form-control form-control-sm" id="end_date" name="end_date" value="{{ filter_params.end_date }}">
                         </div>
-                    </div>
-                    
-                    <!-- Join At date filters -->
-                    <div class="col-md-10 d-flex filter-item">
-                        <div class="me-3" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                        
+                        <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="join_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Join At</label>
                             <input type="date" class="form-control form-control-sm" id="join_at_start" name="join_at_start" value="{{ filter_params.join_at_start }}">
                         </div>
                         
                         <div style="display: inline-flex; white-space: nowrap; align-items: center;">
-                            <label for="join_at_end" class="form-label me-3 mb-1" style="flex-shrink: 0;">→</label>
+                            <label for="join_at_end" class="form-label me-2 mb-1" style="flex-shrink: 0;">→</label>
                             <input type="date" class="form-control form-control-sm" id="join_at_end" name="join_at_end" value="{{ filter_params.join_at_end }}">
                         </div>
                     </div>
