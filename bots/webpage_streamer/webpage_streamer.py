@@ -252,7 +252,7 @@ class WebpageStreamer:
             sink=self._gst_audio_sink,
             clock=clock,
             sample_rate=48000,
-            channels=2,
+            channels=1,
         )
 
     def _stop_gstreamer_capture(self):
@@ -417,7 +417,7 @@ class WebpageStreamer:
                 # Optional: hint encoder
                 try:
                     params = v_sender.getParameters()
-                    params.encodings = [{"maxBitrate": 750_000, "maxFramerate": 15}]
+                    params.encodings = [{"maxBitrate": 1_200_000, "maxFramerate": 15}]
                     v_sender.setParameters(params)
                 except Exception:
                     pass
