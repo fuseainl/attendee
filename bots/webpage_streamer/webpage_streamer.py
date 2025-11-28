@@ -208,14 +208,14 @@ class WebpageStreamer:
                 ! video/x-raw,framerate=15/1,width={width},height={height}
                 ! videoconvert
                 ! video/x-raw,format=BGR,width={width},height={height}
-                ! queue max-size-buffers=5 leaky=downstream
-                ! appsink name=video_sink sync=false max-buffers=5 drop=true
+                ! queue max-size-buffers=50 leaky=downstream
+                ! appsink name=video_sink sync=false max-buffers=50 drop=true
             alsasrc device=default
                 ! audio/x-raw,format=S16LE,channels=1,rate=48000
                 ! audioconvert
                 ! audioresample
-                ! queue max-size-buffers=50 leaky=downstream
-                ! appsink name=audio_sink sync=false max-buffers=50 drop=true
+                ! queue max-size-buffers=500 leaky=downstream
+                ! appsink name=audio_sink sync=false max-buffers=500 drop=true
         """
 
         logger.info("Starting GStreamer capture pipeline")
