@@ -78,18 +78,10 @@ class SharedAVClock:
         if delay > 0:
             await asyncio.sleep(delay)
 
-
 class GstVideoStreamTrack(MediaStreamTrack):
     kind = "video"
 
-    def __init__(
-        self,
-        sink: GstApp.AppSink,
-        clock: SharedAVClock,
-        width: int,
-        height: int,
-        framerate: int = 15,
-    ):
+    def __init__(self, sink, clock, width, height, framerate=15):
         super().__init__()
         self._sink = sink
         self._clock = clock
@@ -102,7 +94,6 @@ class GstVideoStreamTrack(MediaStreamTrack):
         return self._sink.emit("pull-sample")
 
     async def recv(self) -> VideoFrame:
-        # Block in a thread while waiting for the next GStreamer sample
         loop = asyncio.get_running_loop()
         sample = await loop.run_in_executor(None, self._pull_sample)
         if sample is None:
@@ -111,7 +102,6 @@ class GstVideoStreamTrack(MediaStreamTrack):
         buffer = sample.get_buffer()
         pts_ns = buffer.pts
 
-        # Keep audio + video aligned in real time
         await self._clock.wait(pts_ns)
 
         ok, mapinfo = buffer.map(Gst.MapFlags.READ)
@@ -119,10 +109,22 @@ class GstVideoStreamTrack(MediaStreamTrack):
             raise RuntimeError("Could not map video buffer")
 
         try:
-            data = mapinfo.data
-            # We forced format=BGR in the pipeline
-            arr = np.frombuffer(data, dtype=np.uint8).reshape(self._height, self._width, 3)
-            frame = VideoFrame.from_ndarray(arr, format="bgr24")
+            data = memoryview(mapinfo.data)
+            w, h = self._width, self._height
+
+            # I420 layout: Y (W*H), U (W/2*H/2), V (W/2*H/2)
+            y_size = w * h
+            uv_size = y_size // 4
+
+            y_plane = data[0:y_size]
+            u_plane = data[y_size : y_size + uv_size]
+            v_plane = data[y_size + uv_size : y_size + 2 * uv_size]
+
+            frame = VideoFrame(format="yuv420p", width=w, height=h)
+            frame.planes[0].update(y_plane)
+            frame.planes[1].update(u_plane)
+            frame.planes[2].update(v_plane)
+
         finally:
             buffer.unmap(mapinfo)
 
@@ -219,12 +221,13 @@ class WebpageStreamer:
 
         # Shared clock with bounded lag
         clock = SharedAVClock(max_lag_seconds=3.0)
-
+        
         pipeline_desc = f"""
             ximagesrc display-name={display_var} use-damage=0 show-pointer=false
                 ! video/x-raw,framerate=15/1,width={width},height={height}
                 ! videoconvert
-                ! video/x-raw,format=BGR,width={width},height={height}
+                ! videoscale
+                ! video/x-raw,format=I420,width={width},height={height}
                 ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
                 ! appsink name=video_sink emit-signals=false sync=false max-buffers=1 drop=true
 
