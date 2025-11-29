@@ -26,69 +26,16 @@ Gst.init(None)
 os.environ["PULSE_LATENCY_MSEC"] = "20"
 
 
-class SharedAVClock:
-    """
-    Shared A/V clock with a configurable maximum allowed lag. If we ever
-    fall further than `max_lag_seconds` behind wall clock, we "jump" the
-    origin forward so we drop backlog instead of accumulating latency.
-    """
-
-    def __init__(self, max_lag_seconds: float = 0.5):
-        self._start_pts: int | None = None
-        self._start_time: float | None = None
-        self._lock: asyncio.Lock | None = None
-        self._max_lag_seconds = max_lag_seconds
-
-    async def wait(self, pts_ns: int | None):
-        if pts_ns is None or pts_ns == Gst.CLOCK_TIME_NONE:
-            return
-
-        loop = asyncio.get_running_loop()
-
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-
-        async with self._lock:
-            if self._start_pts is None:
-                # First sample defines the origin
-                self._start_pts = pts_ns
-                self._start_time = loop.time()
-
-            start_pts = self._start_pts
-            start_time = self._start_time
-
-        pts_seconds = (pts_ns - start_pts) / 1e9
-        now = loop.time()
-        elapsed = now - start_time
-        lag = elapsed - pts_seconds  # >0 => we are behind wall clock
-
-        # If we're too far behind, drop backlog by moving the origin forward
-        if lag > self._max_lag_seconds:
-            async with self._lock:
-                # Move start_pts so that THIS buffer is only max_lag in the past
-                start_time = self._start_time  # unchanged
-                elapsed = loop.time() - start_time
-                self._start_pts = pts_ns - int((elapsed - self._max_lag_seconds) * 1e9)
-                start_pts = self._start_pts
-
-            pts_seconds = (pts_ns - start_pts) / 1e9
-
-        target_time = start_time + pts_seconds
-        delay = target_time - now
-        if delay > 0:
-            await asyncio.sleep(delay)
-
 class GstVideoStreamTrack(MediaStreamTrack):
     kind = "video"
 
-    def __init__(self, sink, clock, width, height, framerate=15):
+    def __init__(self, sink, width, height, framerate=15):
         super().__init__()
         self._sink = sink
-        self._clock = clock
         self._width = width
         self._height = height
         self._framerate = framerate
-        self._ts = 0
+        self._base_pts_ns = None
 
     def _pull_sample(self):
         return self._sink.emit("pull-sample")
@@ -101,8 +48,6 @@ class GstVideoStreamTrack(MediaStreamTrack):
 
         buffer = sample.get_buffer()
         pts_ns = buffer.pts
-
-        await self._clock.wait(pts_ns)
 
         ok, mapinfo = buffer.map(Gst.MapFlags.READ)
         if not ok:
@@ -124,13 +69,18 @@ class GstVideoStreamTrack(MediaStreamTrack):
             frame.planes[0].update(y_plane)
             frame.planes[1].update(u_plane)
             frame.planes[2].update(v_plane)
-
         finally:
             buffer.unmap(mapinfo)
 
-        frame.pts = self._ts
-        frame.time_base = Fraction(1, self._framerate)
-        self._ts += 1
+        if self._base_pts_ns is None:
+            self._base_pts_ns = pts_ns
+
+        rel_ns = pts_ns - self._base_pts_ns
+
+        # Reuse the same μs time base as audio for nice alignment
+        frame.time_base = Fraction(1, 1_000_000)
+        frame.pts = rel_ns // 1_000
+
         return frame
 
 
@@ -140,16 +90,14 @@ class GstAudioStreamTrack(MediaStreamTrack):
     def __init__(
         self,
         sink: GstApp.AppSink,
-        clock: SharedAVClock,
         sample_rate: int = 48000,
         channels: int = 2,
     ):
         super().__init__()
         self._sink = sink
-        self._clock = clock
         self._sample_rate = sample_rate
         self._channels = channels
-        self._ts = 0
+        self._base_pts_ns = None
 
     def _pull_sample(self):
         return self._sink.emit("pull-sample")
@@ -163,15 +111,13 @@ class GstAudioStreamTrack(MediaStreamTrack):
         buffer = sample.get_buffer()
         pts_ns = buffer.pts
 
-        await self._clock.wait(pts_ns)
-
         ok, mapinfo = buffer.map(Gst.MapFlags.READ)
         if not ok:
             raise RuntimeError("Could not map audio buffer")
 
         try:
             data = mapinfo.data
-            # S16LE: 2 bytes per sample
+            # S16LE: 2 bytes per sample per channel
             num_samples = len(data) // (2 * self._channels)
             if num_samples <= 0:
                 raise RuntimeError("Empty audio buffer")
@@ -183,9 +129,16 @@ class GstAudioStreamTrack(MediaStreamTrack):
         frame = AudioFrame(format="s16", layout=layout, samples=num_samples)
         frame.planes[0].update(pcm.tobytes())
         frame.sample_rate = self._sample_rate
-        frame.time_base = Fraction(1, self._sample_rate)
-        frame.pts = self._ts
-        self._ts += num_samples
+
+        if self._base_pts_ns is None:
+            self._base_pts_ns = pts_ns
+
+        rel_ns = pts_ns - self._base_pts_ns
+
+        # Reuse the same μs time base as audio for nice alignment
+        frame.time_base = Fraction(1, 1_000_000)
+        frame.pts = rel_ns // 1_000
+
         return frame
 
 
@@ -209,19 +162,12 @@ class WebpageStreamer:
         self._audio_track = None
 
     def _start_gstreamer_capture(self):
-        """
-        Start a single GStreamer pipeline that captures both X11 video and
-        system audio, feeding them into appsinks.
-        """
         if self._gst_pipeline:
             return
 
         width, height = self.video_frame_size
         display_var = self.display_var_for_recording
 
-        # Shared clock with bounded lag
-        clock = SharedAVClock(max_lag_seconds=3.0)
-        
         pipeline_desc = f"""
             ximagesrc display-name={display_var} use-damage=0 show-pointer=false
                 ! video/x-raw,framerate=15/1,width={width},height={height}
@@ -229,14 +175,14 @@ class WebpageStreamer:
                 ! videoscale
                 ! video/x-raw,format=I420,width={width},height={height}
                 ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
-                ! appsink name=video_sink emit-signals=false sync=false max-buffers=1 drop=true
+                ! appsink name=video_sink emit-signals=false max-buffers=1 drop=true
 
             alsasrc device=default
                 ! audio/x-raw,format=S16LE,channels=1,rate=48000
                 ! audioconvert
                 ! audioresample
                 ! queue max-size-buffers=50 max-size-time=0 leaky=downstream
-                ! appsink name=audio_sink emit-signals=false sync=false max-buffers=10 drop=true
+                ! appsink name=audio_sink emit-signals=false max-buffers=10 drop=true
         """
 
         logger.info("Starting GStreamer capture pipeline")
@@ -248,7 +194,6 @@ class WebpageStreamer:
         if not self._gst_video_sink or not self._gst_audio_sink:
             raise RuntimeError("Failed to get GStreamer appsinks for audio/video")
 
-        # Put pipeline into PLAYING
         ret = self._gst_pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
             self._gst_pipeline.set_state(Gst.State.NULL)
@@ -258,14 +203,12 @@ class WebpageStreamer:
 
         self._video_track = GstVideoStreamTrack(
             sink=self._gst_video_sink,
-            clock=clock,
             width=width,
             height=height,
             framerate=15,
         )
         self._audio_track = GstAudioStreamTrack(
             sink=self._gst_audio_sink,
-            clock=clock,
             sample_rate=48000,
             channels=1,
         )
