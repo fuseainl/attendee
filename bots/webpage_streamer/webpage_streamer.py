@@ -28,14 +28,16 @@ os.environ["PULSE_LATENCY_MSEC"] = "20"
 
 class SharedAVClock:
     """
-    Map GStreamer PTS (in ns) onto wall-clock time and provide a shared
-    clock for both audio and video tracks so they stay in sync.
+    Shared A/V clock with a configurable maximum allowed lag. If we ever
+    fall further than `max_lag_seconds` behind wall clock, we "jump" the
+    origin forward so we drop backlog instead of accumulating latency.
     """
 
-    def __init__(self):
-        self._start_pts = None
-        self._start_time = None
-        self._lock = None  # created lazily once we have an event loop
+    def __init__(self, max_lag_seconds: float = 0.5):
+        self._start_pts: int | None = None
+        self._start_time: float | None = None
+        self._lock: asyncio.Lock | None = None
+        self._max_lag_seconds = max_lag_seconds
 
     async def wait(self, pts_ns: int | None):
         if pts_ns is None or pts_ns == Gst.CLOCK_TIME_NONE:
@@ -48,15 +50,30 @@ class SharedAVClock:
 
         async with self._lock:
             if self._start_pts is None:
+                # First sample defines the origin
                 self._start_pts = pts_ns
                 self._start_time = loop.time()
+
             start_pts = self._start_pts
             start_time = self._start_time
 
-        # Convert nanoseconds to seconds
         pts_seconds = (pts_ns - start_pts) / 1e9
-        target_time = start_time + pts_seconds
         now = loop.time()
+        elapsed = now - start_time
+        lag = elapsed - pts_seconds  # >0 => we are behind wall clock
+
+        # If we're too far behind, drop backlog by moving the origin forward
+        if lag > self._max_lag_seconds:
+            async with self._lock:
+                # Move start_pts so that THIS buffer is only max_lag in the past
+                start_time = self._start_time  # unchanged
+                elapsed = loop.time() - start_time
+                self._start_pts = pts_ns - int((elapsed - self._max_lag_seconds) * 1e9)
+                start_pts = self._start_pts
+
+            pts_seconds = (pts_ns - start_pts) / 1e9
+
+        target_time = start_time + pts_seconds
         delay = target_time - now
         if delay > 0:
             await asyncio.sleep(delay)
@@ -192,30 +209,31 @@ class WebpageStreamer:
     def _start_gstreamer_capture(self):
         """
         Start a single GStreamer pipeline that captures both X11 video and
-        system audio, feeding them into appsinks. These appsinks are then
-        exposed as aiortc MediaStreamTracks.
+        system audio, feeding them into appsinks.
         """
+        if self._gst_pipeline:
+            return
+
         width, height = self.video_frame_size
         display_var = self.display_var_for_recording
 
-        # Shared clock so that audio + video use the same PTS origin
-        clock = SharedAVClock()
+        # Shared clock with bounded lag
+        clock = SharedAVClock(max_lag_seconds=3.0)
 
-        # Pipeline closely mirrors your ScreenAndAudioRecorder example,
-        # but instead of mp4mux/filesink we terminate into appsinks.
         pipeline_desc = f"""
             ximagesrc display-name={display_var} use-damage=0 show-pointer=false
                 ! video/x-raw,framerate=15/1,width={width},height={height}
                 ! videoconvert
                 ! video/x-raw,format=BGR,width={width},height={height}
-                ! queue max-size-buffers=50 leaky=downstream
-                ! appsink name=video_sink sync=false max-buffers=50 drop=true
+                ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
+                ! appsink name=video_sink emit-signals=false sync=false max-buffers=1 drop=true
+
             alsasrc device=default
                 ! audio/x-raw,format=S16LE,channels=1,rate=48000
                 ! audioconvert
                 ! audioresample
-                ! queue max-size-buffers=500 leaky=downstream
-                ! appsink name=audio_sink sync=false max-buffers=500 drop=true
+                ! queue max-size-buffers=50 max-size-time=0 leaky=downstream
+                ! appsink name=audio_sink emit-signals=false sync=false max-buffers=10 drop=true
         """
 
         logger.info("Starting GStreamer capture pipeline")
@@ -227,11 +245,6 @@ class WebpageStreamer:
         if not self._gst_video_sink or not self._gst_audio_sink:
             raise RuntimeError("Failed to get GStreamer appsinks for audio/video")
 
-        # We pull samples manually in track.recv()
-        for sink in (self._gst_video_sink, self._gst_audio_sink):
-            sink.set_property("emit-signals", False)
-            sink.set_property("sync", False)
-
         # Put pipeline into PLAYING
         ret = self._gst_pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
@@ -240,7 +253,6 @@ class WebpageStreamer:
 
         logger.info("GStreamer capture pipeline is PLAYING")
 
-        # Expose as aiortc tracks
         self._video_track = GstVideoStreamTrack(
             sink=self._gst_video_sink,
             clock=clock,
@@ -319,9 +331,6 @@ class WebpageStreamer:
 
         # Add the combined script to execute on new document
         self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": combined_code})
-
-        # Start the shared GStreamer capture
-        self._start_gstreamer_capture()
 
         self.load_webapp()
 
@@ -404,6 +413,10 @@ class WebpageStreamer:
         async def offer(req):
             params = await req.json()
             offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+
+            # Lazy-start capture so we don't accumulate latency before WebRTC is up
+            if self._gst_pipeline is None:
+                self._start_gstreamer_capture()
 
             pc = RTCPeerConnection()
             pcs.add(pc)
