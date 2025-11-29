@@ -29,7 +29,7 @@ def transform_diarized_json_to_schema(result):
         segment_text = segment.get("text", "")
         segment_start = segment.get("start", 0.0)
         segment_end = segment.get("end", segment_start)
-        speaker = segment.get("speaker", "")
+        speaker = segment.get("speaker", None)
 
         word_obj = {
             "word": segment_text,

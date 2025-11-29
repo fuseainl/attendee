@@ -935,7 +935,7 @@ class OpenAIProviderTest(TransactionTestCase):
             "segments": [
                 {"text": "Hey, what's up?", "start": 0.08, "end": 0.28, "speaker": "A"},
                 {"text": "I'm good, thank you!", "start": 0.28, "end": 0.52, "speaker": "B"},
-            ]
+            ],
         }
 
         # Set up bot with diarize model and response_format
