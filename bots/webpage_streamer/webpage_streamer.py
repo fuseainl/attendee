@@ -13,7 +13,6 @@ import gi
 import numpy as np
 from aiohttp import web
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaRelay
 from av import AudioFrame, VideoFrame
 from pyvirtualdisplay import Display
 
@@ -315,11 +314,6 @@ class WebpageStreamer:
     def load_webapp(self):
         pcs = set()
 
-        # Relay for *rebroadcasting* upstream meeting audio
-        AUDIO_RELAY = MediaRelay()
-        # Relay for server-side GStreamer capture tracks
-        SERVER_RELAY = MediaRelay()
-
         # will hold the *original* upstream AudioStreamTrack
         # from the first client that posts to /offer
         UPSTREAM_AUDIO_TRACK_KEY = "upstream_audio_track"
@@ -342,8 +336,7 @@ class WebpageStreamer:
             pcs.add(pc)
 
             # Re-broadcast using the relay so multiple listeners are OK
-            rebroadcast_track = AUDIO_RELAY.subscribe(upstream)
-            pc.addTrack(rebroadcast_track)
+            pc.addTrack(upstream)
 
             @pc.on("connectionstatechange")
             async def _on_state():
@@ -372,23 +365,10 @@ class WebpageStreamer:
             a_track = self._audio_track
 
             if v_track is not None:
-                v_sender = pc.addTrack(SERVER_RELAY.subscribe(v_track))
-                # Optional: hint encoder
-                try:
-                    params = v_sender.getParameters()
-                    params.encodings = [{"maxBitrate": 1_200_000, "maxFramerate": 15}]
-                    v_sender.setParameters(params)
-                except Exception:
-                    pass
+                pc.addTrack(v_track)
 
             if a_track is not None:
-                a_sender = pc.addTrack(SERVER_RELAY.subscribe(a_track))
-                try:
-                    params = a_sender.getParameters()
-                    params.encodings = [{"maxBitrate": 64_000}]
-                    a_sender.setParameters(params)
-                except Exception:
-                    pass
+                pc.addTrack(a_track)
 
             @pc.on("track")
             def on_track(track):
