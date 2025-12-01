@@ -171,7 +171,6 @@ class WebpageStreamer:
             ximagesrc display-name={display_var} use-damage=0 show-pointer=false
                 ! video/x-raw,framerate=15/1,width={width},height={height}
                 ! videoconvert
-                ! videoscale
                 ! video/x-raw,format=I420,width={width},height={height}
                 ! queue max-size-buffers=5 max-size-time=0 leaky=downstream
                 ! appsink name=video_sink emit-signals=false max-buffers=1 drop=true
