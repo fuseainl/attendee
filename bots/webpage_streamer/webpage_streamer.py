@@ -13,6 +13,7 @@ import gi
 import numpy as np
 from aiohttp import web
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc.contrib.media import MediaRelay
 from av import AudioFrame, VideoFrame
 from pyvirtualdisplay import Display
 
@@ -315,6 +316,8 @@ class WebpageStreamer:
 
         # will hold the *original* upstream AudioStreamTrack
         # from the first client that posts to /offer
+        # The MediaRelay is necessary because it creates a small buffer. Without it audio quality is degraded.
+        UPSTREAM_AUDIO_RELAY = MediaRelay()
         UPSTREAM_AUDIO_TRACK_KEY = "upstream_audio_track"
 
         async def offer_meeting_audio(req):
@@ -335,7 +338,8 @@ class WebpageStreamer:
             pcs.add(pc)
 
             # Re-broadcast using the relay so multiple listeners are OK
-            pc.addTrack(upstream)
+            rebroadcast_track = UPSTREAM_AUDIO_RELAY.subscribe(upstream)
+            pc.addTrack(rebroadcast_track)
 
             @pc.on("connectionstatechange")
             async def _on_state():
