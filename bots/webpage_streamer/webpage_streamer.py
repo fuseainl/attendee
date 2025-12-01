@@ -89,7 +89,7 @@ class GstAudioStreamTrack(MediaStreamTrack):
     def __init__(
         self,
         sink: GstApp.AppSink,
-        sample_rate: int = 48000,
+        sample_rate: int = 16000,
         channels: int = 2,
     ):
         super().__init__()
@@ -177,7 +177,7 @@ class WebpageStreamer:
                 ! appsink name=video_sink emit-signals=false max-buffers=1 drop=true
 
             alsasrc device=default
-                ! audio/x-raw,format=S16LE,channels=1,rate=48000
+                ! audio/x-raw,format=S16LE,channels=1,rate=16000
                 ! audioconvert
                 ! audioresample
                 ! queue max-size-buffers=50 max-size-time=0 leaky=downstream
@@ -208,7 +208,7 @@ class WebpageStreamer:
         )
         self._audio_track = GstAudioStreamTrack(
             sink=self._gst_audio_sink,
-            sample_rate=48000,
+            sample_rate=16000,
             channels=1,
         )
 
