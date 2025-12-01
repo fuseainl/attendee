@@ -30,7 +30,24 @@
           if (!resolved) {
             resolved = true;
             const errorMsg = 'Failed to receive remote audio stream within 10 seconds';
-            alert(errorMsg);
+            const errorDiv = document.createElement('div');
+            errorDiv.id = 'attendee-audio-error';
+            errorDiv.textContent = errorMsg;
+            Object.assign(errorDiv.style, {
+              position: 'fixed',
+              top: '20px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: '#d32f2f',
+              color: 'white',
+              padding: '12px 24px',
+              borderRadius: '4px',
+              fontFamily: 'system-ui, sans-serif',
+              fontSize: '14px',
+              zIndex: '999999',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+            });
+            document.body.appendChild(errorDiv);
             reject(new Error(errorMsg));
           }
         }, 10000); // 10 second timeout
