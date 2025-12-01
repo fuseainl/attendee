@@ -2,9 +2,11 @@ import logging
 import signal
 import time
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import connection, models
 from django.utils import timezone
+from kubernetes import client, config
 
 from bots.models import Bot, BotStates
 
@@ -34,6 +36,14 @@ class Command(BaseCommand):
         self._keep_running = False
 
     def handle(self, *args, **opts):
+        # Initialize kubernetes client
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+        self.v1 = client.CoreV1Api()
+        self.namespace = settings.BOT_POD_NAMESPACE
+
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
         signal.signal(signal.SIGINT, self._graceful_exit)
         signal.signal(signal.SIGTERM, self._graceful_exit)
@@ -68,6 +78,15 @@ class Command(BaseCommand):
 
         logger.info("Correct failed bot launches daemon exited")
 
+    def bot_pod_exists(self, pod_name: str) -> bool:
+        try:
+            self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
+            return True
+        except client.ApiException as e:
+            if e.status == 404:
+                return False
+            raise
+
     def _correct_failed_bot_launches(self):
         logger.info("Looking for bots created in last 5 minutes that failed to launch...")
 
@@ -89,6 +108,9 @@ class Command(BaseCommand):
             # Re-launch each bot
             for bot in problem_bots:
                 try:
+                    if self.bot_pod_exists(bot.k8s_pod_name()):
+                        logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
+                        continue
                     logger.info(f"Re-launching bot {bot.object_id} that failed to launch")
                     launch_bot(bot)
                 except Exception as e:
