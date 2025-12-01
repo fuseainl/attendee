@@ -8,9 +8,8 @@ from django.db import connection, models
 from django.utils import timezone
 from kubernetes import client, config
 
+from bots.launch_bot_utils import launch_bot
 from bots.models import Bot, BotStates
-
-from .launch_bot_utils import launch_bot
 
 logger = logging.getLogger(__name__)
 
