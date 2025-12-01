@@ -9,7 +9,7 @@ from django.utils import timezone
 from kubernetes import client, config
 
 from bots.launch_bot_utils import launch_bot
-from bots.models import Bot, BotStates
+from bots.models import Bot, BotEventTypes, BotStates
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,13 @@ class Command(BaseCommand):
                 try:
                     if self.bot_pod_exists(bot.k8s_pod_name()):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
+                        continue
+                    last_bot_event = bot.last_bot_event()
+                    if last_bot_event.event_type != BotEventTypes.JOIN_REQUESTED:
+                        logger.info(f"Bot {bot.object_id} is not in JOINING state, skipping re-launch")
+                        continue
+                    if last_bot_event.requested_bot_action_taken_at is not None:
+                        logger.info(f"Bot {bot.object_id} has already had a bot action taken, skipping re-launch")
                         continue
                     logger.info(f"Re-launching bot {bot.object_id} that failed to launch")
                     launch_bot(bot)
