@@ -8,6 +8,27 @@
   let virtualAudioTrack = null;
   let virtualMicPromise = null;
 
+  function showErrorOnDom(errorMsg) {
+    const errorDiv = document.createElement('div');
+    errorDiv.id = 'attendee-audio-error';
+    errorDiv.textContent = errorMsg;
+    Object.assign(errorDiv.style, {
+      position: 'fixed',
+      top: '20px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: '#d32f2f',
+      color: 'white',
+      padding: '12px 24px',
+      borderRadius: '4px',
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '14px',
+      zIndex: '999999',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+    });
+    document.body.appendChild(errorDiv);
+  }
+
   async function ensureVirtualMicTrack() {
     if (virtualAudioTrack && virtualAudioTrack.readyState === "live") {
       return virtualAudioTrack;
@@ -30,24 +51,7 @@
           if (!resolved) {
             resolved = true;
             const errorMsg = 'Failed to receive remote audio stream within 10 seconds';
-            const errorDiv = document.createElement('div');
-            errorDiv.id = 'attendee-audio-error';
-            errorDiv.textContent = errorMsg;
-            Object.assign(errorDiv.style, {
-              position: 'fixed',
-              top: '20px',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              background: '#d32f2f',
-              color: 'white',
-              padding: '12px 24px',
-              borderRadius: '4px',
-              fontFamily: 'system-ui, sans-serif',
-              fontSize: '14px',
-              zIndex: '999999',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-            });
-            document.body.appendChild(errorDiv);
+            showErrorOnDom(errorMsg);
             reject(new Error(errorMsg));
           }
         }, 10000); // 10 second timeout
@@ -79,11 +83,9 @@
 
         if (!res.ok) {
           const t = await res.text().catch(() => "");
-          reject(
-            new Error(
-              "Upstream audio error: " + res.status + (t ? " " + t : "")
-            )
-          );
+          const errorMsg = "Upstream audio error: " + res.status + (t ? " " + t : "");
+          showErrorOnDom(errorMsg);
+          reject(new Error(errorMsg));
           return;
         }
 
