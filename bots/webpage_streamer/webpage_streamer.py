@@ -180,8 +180,8 @@ class WebpageStreamer:
                 ! audio/x-raw,format=S16LE,channels=1,rate=16000
                 ! audioconvert
                 ! audioresample
-                ! queue max-size-buffers=50 max-size-time=0 leaky=downstream
-                ! appsink name=audio_sink emit-signals=false max-buffers=10 drop=true
+                ! queue max-size-buffers=8000 leaky=downstream
+                ! appsink name=audio_sink emit-signals=false max-buffers=8000 drop=true
         """
 
         logger.info("Starting GStreamer capture pipeline")
