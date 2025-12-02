@@ -87,7 +87,8 @@ class GoogleMeetUIMethods:
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
-            logger.info("Google is blocking us for whatever reason, but we can retry. Raising UiGoogleBlockingUsException")
+            element_text = cannot_join_element.text
+            logger.info(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
     def look_for_login_required_element(self, step):
