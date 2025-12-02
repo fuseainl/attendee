@@ -103,8 +103,17 @@ class GoogleMeetUIMethods:
             '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
         )
         if denied_your_request_element:
-            logger.info("Someone in the call denied our request to join. Raising UiRequestToJoinDeniedException")
+            element_text = denied_your_request_element.text
+        
+        if "denied your request" in element_text:
+            logger.info("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
+        elif "No one responded" in element_text:
+            logger.info("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
+        else:  # "You left the meeting"
+            logger.info("You left the meeting. Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("You left the meeting", step)
 
     def look_for_asking_to_be_let_in_element_after_waiting_period_expired(self, step):
         asking_to_be_let_in_element = self.find_element_by_selector(
