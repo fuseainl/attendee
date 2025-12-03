@@ -3,6 +3,7 @@ import os
 from django.test.testcases import TransactionTestCase
 from pyvirtualdisplay import Display
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 
 
 class TestChromeDriver(TransactionTestCase):
@@ -25,7 +26,7 @@ class TestChromeDriver(TransactionTestCase):
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-blink-features=AutomationControlled")
             # Initialize Chrome driver
-            driver = webdriver.Chrome(options=options)
+            driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
 
             try:
                 # Load Google

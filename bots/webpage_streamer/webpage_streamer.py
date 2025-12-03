@@ -1,6 +1,7 @@
 import logging
 
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +265,7 @@ class WebpageStreamer:
             },
         )
 
-        self.driver = webdriver.Chrome(options=options)
+        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
         with open("bots/webpage_streamer/webpage_streamer_payload.js", "r") as file:
