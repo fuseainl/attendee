@@ -98,17 +98,22 @@ class Command(BaseCommand):
             # - created between 5 minutes and 1 minute ago AND join_at is null
             # - first heartbeat is null (bot pod never ran)
             # - state is joining
-            # TODO: Possibly include scheduled bots. For now we'll ignore them for simplicity.
-            failed_to_launch_q_filter = models.Q(created_at__gt=five_minutes_ago, created_at__lt=one_minute_ago, first_heartbeat_timestamp__isnull=True, join_at__isnull=True)
-            problem_bots = Bot.objects.filter(failed_to_launch_q_filter).filter(state=BotStates.JOINING)
+            failed_to_launch_non_scheduled_q_filter = models.Q(created_at__gt=five_minutes_ago, created_at__lt=one_minute_ago, first_heartbeat_timestamp__isnull=True, join_at__isnull=True)
+            problem_non_scheduled_bots = Bot.objects.filter(failed_to_launch_non_scheduled_q_filter).filter(state=BotStates.JOINING)
 
-            logger.info(f"Found {problem_bots.count()} bots created in last 5 minutes that failed to launch")
+            failed_to_launch_scheduled_q_filter = models.Q(join_at__gt=five_minutes_ago, join_at__lt=one_minute_ago, first_heartbeat_timestamp__isnull=True, join_at__isnull=False)
+            problem_scheduled_bots = Bot.objects.filter(failed_to_launch_scheduled_q_filter).filter(state=BotStates.STAGED)
+
+            logger.info(f"Found {problem_non_scheduled_bots.count()} non-scheduled and {problem_scheduled_bots.count()} scheduled bots that failed to launch")
 
             # Re-launch each bot
-            for bot in problem_bots:
+            for bot in problem_non_scheduled_bots:
                 try:
                     if self.bot_pod_exists(bot.k8s_pod_name()):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
+                        continue
+                    if bot.should_launch_webpage_streamer():
+                        logger.info(f"Bot {bot.object_id} should launch a webpage streamer, skipping re-launch")
                         continue
                     last_bot_event = bot.last_bot_event()
                     if last_bot_event.event_type != BotEventTypes.JOIN_REQUESTED:
@@ -117,10 +122,27 @@ class Command(BaseCommand):
                     if last_bot_event.requested_bot_action_taken_at is not None:
                         logger.info(f"Bot {bot.object_id} has already had a bot action taken, skipping re-launch")
                         continue
-                    logger.info(f"Re-launching bot {bot.object_id} that failed to launch")
+                    logger.info(f"Re-launching non-scheduled bot {bot.object_id} that failed to launch")
                     launch_bot(bot)
                 except Exception as e:
-                    logger.error(f"Failed to re-launch bot {bot.object_id}: {str(e)}")
+                    logger.error(f"Failed to re-launch non-scheduled bot {bot.object_id}: {str(e)}")
+
+            for bot in problem_scheduled_bots:
+                try:
+                    if self.bot_pod_exists(bot.k8s_pod_name()):
+                        logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
+                        continue
+                    if bot.should_launch_webpage_streamer():
+                        logger.info(f"Bot {bot.object_id} should launch a webpage streamer, skipping re-launch")
+                        continue
+                    last_bot_event = bot.last_bot_event()
+                    if last_bot_event.event_type != BotEventTypes.STAGED:
+                        logger.info(f"Bot {bot.object_id} is not in STAGED state, skipping re-launch")
+                        continue
+                    logger.info(f"Re-launching scheduled bot {bot.object_id} that failed to launch")
+                    launch_bot(bot)
+                except Exception as e:
+                    logger.error(f"Failed to re-launch scheduled bot {bot.object_id}: {str(e)}")
 
             logger.info("Finished re-launching bots that failed to launch")
 
