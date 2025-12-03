@@ -65,7 +65,8 @@
             <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createBotModal">
                 <i class="bi bi-plus-circle me-1"></i> Create Bot
             </button>
-        {% elif session_type == SessionTypes.APP_SESSION %}
+        {% endif %}
+        {% if session_type == SessionTypes.APP_SESSION %}
             <h2>App Sessions</h2>
         {% endif %}
     </div>
@@ -137,7 +138,8 @@
                         <button type="submit" class="btn btn-sm btn-primary me-2">Apply</button>
                         {% if session_type == SessionTypes.APP_SESSION %}
                         <a href="{% url 'bots:project-app-sessions' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
-                        {% elif session_type == SessionTypes.BOT %}
+                        {% endif %}
+                        {% if session_type == SessionTypes.BOT %}
                         <a href="{% url 'bots:project-bots' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
                         {% endif %}
                     </div>
@@ -167,7 +169,8 @@
                     <tr class="clickable-row"
                         {% if session_type == SessionTypes.APP_SESSION %}
                         hx-get="{% url 'projects:project-app-session-detail' project.object_id bot.object_id %}"
-                        {% else %}
+                        {% endif %}
+                        {% if session_type == SessionTypes.BOT %}
                         hx-get="{% url 'projects:project-bot-detail' project.object_id bot.object_id %}"
                         {% endif %}
                         hx-select="#content"
@@ -220,13 +223,15 @@
                 {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}
                     {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found matching the current filters.
-                    {% else %}
+                    {% endif %}
+                    {% if session_type == SessionTypes.BOT %}
                         No bots found matching the current filters.
                     {% endif %}
                 {% else %}
                     {% if session_type == SessionTypes.APP_SESSION %}
                         No app sessions found. Use the API to create app sessions for this project.
-                    {% else %}
+                    {% endif %}
+                    {% if session_type == SessionTypes.BOT %}
                         No bots found. Use the API to create bots for this project.
                     {% endif %}
                 {% endif %}

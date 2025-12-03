@@ -114,7 +114,9 @@
                             {% endif %}
                         </div>
                     </div>
+                    {% if project.organization.is_app_sessions_enabled %}
                     <hr>
+                    {% endif %}
 
                     <a class="nav-link" 
                        hx-get="{% url 'projects:project-bots' project.object_id %}" 
