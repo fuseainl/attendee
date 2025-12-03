@@ -87,7 +87,8 @@ class GoogleMeetUIMethods:
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
-            logger.info("Google is blocking us for whatever reason, but we can retry. Raising UiGoogleBlockingUsException")
+            element_text = cannot_join_element.text
+            logger.info(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
     def look_for_login_required_element(self, step):
@@ -101,9 +102,20 @@ class GoogleMeetUIMethods:
             By.XPATH,
             '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
         )
-        if denied_your_request_element:
-            logger.info("Someone in the call denied our request to join. Raising UiRequestToJoinDeniedException")
+        if not denied_your_request_element:
+            return
+
+        element_text = denied_your_request_element.text
+
+        if "Someone in the call denied your request to join" in element_text:
+            logger.info("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
+        elif "No one responded to your request to join the call" in element_text:
+            logger.info("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
+        else:  # "You left the meeting"
+            logger.info("Saw 'You left the meeting' element. Happens if someone actively denied our request to join. Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("You left the meeting", step)
 
     def look_for_asking_to_be_let_in_element_after_waiting_period_expired(self, step):
         asking_to_be_let_in_element = self.find_element_by_selector(
