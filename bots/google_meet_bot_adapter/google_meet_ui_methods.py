@@ -104,7 +104,7 @@ class GoogleMeetUIMethods:
         )
         if denied_your_request_element:
             element_text = denied_your_request_element.text
-        
+
         if "denied your request" in element_text:
             logger.info("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
