@@ -112,6 +112,9 @@ class Command(BaseCommand):
                     if self.bot_pod_exists(bot.k8s_pod_name()):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
+                    if bot.should_launch_webpage_streamer():
+                        logger.info(f"Bot {bot.object_id} should launch a webpage streamer, skipping re-launch")
+                        continue
                     last_bot_event = bot.last_bot_event()
                     if last_bot_event.event_type != BotEventTypes.JOIN_REQUESTED:
                         logger.info(f"Bot {bot.object_id} is not in JOINING state, skipping re-launch")
@@ -128,6 +131,9 @@ class Command(BaseCommand):
                 try:
                     if self.bot_pod_exists(bot.k8s_pod_name()):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
+                        continue
+                    if bot.should_launch_webpage_streamer():
+                        logger.info(f"Bot {bot.object_id} should launch a webpage streamer, skipping re-launch")
                         continue
                     last_bot_event = bot.last_bot_event()
                     if last_bot_event.event_type != BotEventTypes.STAGED:
