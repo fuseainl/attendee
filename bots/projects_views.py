@@ -500,6 +500,23 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
                 # Handle invalid date format
                 pass
 
+        # Apply join_at date filters if provided
+        join_at_start = self.request.GET.get("join_at_start")
+        join_at_end = self.request.GET.get("join_at_end")
+
+        if join_at_start:
+            queryset = queryset.filter(join_at__gte=join_at_start)
+        if join_at_end:
+            from datetime import datetime, timedelta
+
+            try:
+                join_at_end_obj = datetime.strptime(join_at_end, "%Y-%m-%d")
+                join_at_end_obj = join_at_end_obj + timedelta(days=1)
+                queryset = queryset.filter(join_at__lt=join_at_end_obj)
+            except (ValueError, TypeError):
+                # Handle invalid date format
+                pass
+
         # Apply state filters if provided
         states = self.request.GET.getlist("states")
         if states:
@@ -547,7 +564,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"

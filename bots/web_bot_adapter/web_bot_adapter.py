@@ -14,6 +14,7 @@ import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -539,7 +540,7 @@ class WebBotAdapter(BotAdapter):
                 logger.info(f"Error closing existing driver: {e}")
             self.driver = None
 
-        self.driver = webdriver.Chrome(options=options)
+        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
         initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
@@ -722,8 +723,6 @@ class WebBotAdapter(BotAdapter):
 
         self.media_sending_enable_timestamp_ms = time.time() * 1000
 
-        self.ready_to_show_webpage_stream()
-
     def leave(self):
         if self.left_meeting:
             return
@@ -839,11 +838,13 @@ class WebBotAdapter(BotAdapter):
     def webpage_streamer_stop_bot_output_media_stream(self):
         self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream();")
 
+    def is_bot_ready_for_webpage_streamer(self):
+        if not self.driver:
+            return False
+        return self.driver.execute_script("return window.botOutputManager?.isReadyForWebpageStreamer();")
+
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
-
-    def ready_to_show_webpage_stream(self):
-        self.send_message_callback({"message": self.Messages.READY_TO_SHOW_WEBPAGE_STREAM})
 
     def get_first_buffer_timestamp_ms(self):
         if self.media_sending_enable_timestamp_ms is None:
