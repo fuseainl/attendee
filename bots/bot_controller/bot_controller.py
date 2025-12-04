@@ -342,11 +342,11 @@ class BotController:
 
         self.websocket_audio_client.send_async(payload)
 
-    def is_rtms_meeting(self):
+    def is_using_rtms(self):
         return self.bot_in_db.zoom_rtms_stream_id is not None
 
     def get_meeting_type(self):
-        if self.is_rtms_meeting():
+        if self.is_using_rtms():
             return MeetingTypes.ZOOM
 
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
@@ -365,7 +365,7 @@ class BotController:
     def get_per_participant_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.is_rtms_meeting():
+            if self.is_using_rtms():
                 return 16000
             elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
@@ -379,7 +379,7 @@ class BotController:
     def mixed_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.is_rtms_meeting():
+            if self.is_using_rtms():
                 return 16000
             elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
@@ -393,7 +393,7 @@ class BotController:
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.is_rtms_meeting():
+            if self.is_using_rtms():
                 return RTMSGstreamerPipeline.AUDIO_FORMAT_PCM_16KHZ
             elif self.bot_in_db.use_zoom_web_adapter():
                 return GstreamerPipeline.AUDIO_FORMAT_FLOAT
@@ -413,7 +413,7 @@ class BotController:
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.is_rtms_meeting():
+            if self.is_using_rtms():
                 return self.get_zoom_rtms_adapter()
             elif self.bot_in_db.use_zoom_web_adapter():
                 return self.get_zoom_web_bot_adapter()
@@ -683,7 +683,7 @@ class BotController:
         # so we don't need to create a gstreamer pipeline here
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.is_rtms_meeting():
+            if self.is_using_rtms():
                 return True
             elif self.bot_in_db.use_zoom_web_adapter():
                 return False
@@ -776,7 +776,7 @@ class BotController:
 
         self.gstreamer_pipeline = None
         if self.should_create_gstreamer_pipeline():
-            gstreamer_pipeline_class = RTMSGstreamerPipeline if self.is_rtms_meeting() else GstreamerPipeline
+            gstreamer_pipeline_class = RTMSGstreamerPipeline if self.is_using_rtms() else GstreamerPipeline
             self.gstreamer_pipeline = gstreamer_pipeline_class(
                 on_new_sample_callback=self.on_new_sample_from_gstreamer_pipeline,
                 video_frame_size=self.bot_in_db.recording_dimensions(),
