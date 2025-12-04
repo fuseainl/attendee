@@ -433,9 +433,6 @@ class BotController:
                 return None
             return int(self.gstreamer_pipeline.start_time_ns / 1_000_000) + self.adapter.get_first_buffer_timestamp_ms_offset()
 
-        if self.is_rtms_meeting():
-            return self.adapter.get_first_buffer_timestamp_ms()
-
     def recording_file_saved(self, s3_storage_key):
         recording = Recording.objects.get(bot=self.bot_in_db, is_default_recording=True)
         recording.file = s3_storage_key
