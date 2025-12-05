@@ -139,7 +139,7 @@ class GoogleMeetUIMethods:
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
-        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"]'
+        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
         microphone_button = self.locate_element(
             step="turn_off_microphone_button",
             condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
@@ -149,7 +149,7 @@ class GoogleMeetUIMethods:
         self.click_element(microphone_button, "turn_off_microphone_button")
 
         logger.info("Waiting for the camera button...")
-        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"]'
+        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
         camera_button = self.locate_element(
             step="turn_off_camera_button",
             condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
