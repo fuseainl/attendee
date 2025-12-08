@@ -741,8 +741,15 @@ class ZoomSettingsJSONField(serializers.JSONField):
             },
             "max_uptime_seconds": {
                 "type": "integer",
-                "description": "Maximum number of seconds that the bot should be running before automatically leaving (infinity)",
+                "description": "Maximum number of seconds that the bot should be running before automatically leaving (infinity by default)",
                 "default": None,
+            },
+            "enable_closed_captions_timeout_seconds": {
+                "type": "integer",
+                "description": "Number of seconds to wait before leaving if bot could not enable closed captions (infinity by default). Only relevant if the bot is transcribing via closed captions.",
+                "default": None,
+                # Allowable values are 0 or None
+                "enum": [0, None],
             },
         },
         "required": [],

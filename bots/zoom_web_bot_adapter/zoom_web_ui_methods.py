@@ -55,7 +55,8 @@ class ZoomWebUIMethods:
             self.driver.execute_script("arguments[0].click();", captions_button)
             closed_captions_enabled = True
         except TimeoutException:
-            logger.info("Captions button not found, so unable to transcribe via closed-captions, continuing")
+            logger.info("Captions button not found, so unable to transcribe via closed-captions.")
+            self.could_not_enable_closed_captions()
 
         if closed_captions_enabled:
             # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
