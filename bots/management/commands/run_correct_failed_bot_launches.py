@@ -79,7 +79,10 @@ class Command(BaseCommand):
 
     def bot_pod_is_active(self, pod_name: str) -> bool:
         try:
+            logger.info(f"Checking if pod {pod_name} is active...")
             pod = self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
+            # Log all the info about the pod
+            logger.info(f"Pod {pod_name} info: {pod}")
             # Return whether pod phase is pending or running
             return pod.status.phase in ["Pending", "Running"]
         except client.ApiException as e:
