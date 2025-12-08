@@ -2435,9 +2435,6 @@ components:
                 bot is transcribing via closed captions. Currently only supports leaving
                 immediately.
               default: null
-              enum:
-              - 0
-              - null
           required: []
           additionalProperties: false
       required:

@@ -748,8 +748,6 @@ class ZoomSettingsJSONField(serializers.JSONField):
                 "type": "integer",
                 "description": "Number of seconds to wait before leaving if bot could not enable closed captions (infinity by default). Only relevant if the bot is transcribing via closed captions. Currently only supports leaving immediately.",
                 "default": None,
-                # Allowable values are 0 or None
-                "enum": [0, None],
             },
         },
         "required": [],
