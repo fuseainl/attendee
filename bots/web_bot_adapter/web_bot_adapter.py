@@ -370,6 +370,10 @@ class WebBotAdapter(BotAdapter):
                             elif json_data.get("change") == "denied":
                                 self.after_bot_recording_permission_denied()
 
+                        elif json_data.get("type") == "ClosedCaptionStatusChange":
+                            if json_data.get("change") == "save_caption_not_allowed":
+                                self.could_not_enable_closed_captions()
+
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
                 elif message_type == 3:  # AUDIO
