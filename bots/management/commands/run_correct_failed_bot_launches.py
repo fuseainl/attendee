@@ -77,10 +77,11 @@ class Command(BaseCommand):
 
         logger.info("Correct failed bot launches daemon exited")
 
-    def bot_pod_exists(self, pod_name: str) -> bool:
+    def bot_pod_is_active(self, pod_name: str) -> bool:
         try:
-            self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
-            return True
+            pod = self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
+            # Return whether pod phase is pending or running
+            return pod.status.phase in ["Pending", "Running"]
         except client.ApiException as e:
             if e.status == 404:
                 return False
@@ -109,7 +110,7 @@ class Command(BaseCommand):
             # Re-launch each bot
             for bot in problem_non_scheduled_bots:
                 try:
-                    if self.bot_pod_exists(bot.k8s_pod_name()):
+                    if self.bot_pod_is_active(bot.k8s_pod_name()):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
                     if bot.should_launch_webpage_streamer():
@@ -129,7 +130,7 @@ class Command(BaseCommand):
 
             for bot in problem_scheduled_bots:
                 try:
-                    if self.bot_pod_exists(bot.k8s_pod_name()):
+                    if self.bot_pod_is_active(bot.k8s_pod_name()):
                         logger.info(f"Bot {bot.object_id} already has a pod, skipping re-launch")
                         continue
                     if bot.should_launch_webpage_streamer():
