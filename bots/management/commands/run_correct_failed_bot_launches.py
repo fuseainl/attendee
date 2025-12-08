@@ -83,8 +83,13 @@ class Command(BaseCommand):
             pod = self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
             # Log all the info about the pod
             logger.info(f"Pod {pod_name} info: {pod}")
-            # Return whether pod phase is pending or running
-            return pod.status.phase in ["Pending", "Running"]
+            # Return that it is active if pod is not in succeeded or failed phase
+            if pod.status.phase not in ["Succeeded", "Failed"]:
+                return True
+            # Otherwise it is in one of these phases, but it needs to be deleted
+            self.v1.delete_namespaced_pod(name=pod_name, namespace=self.namespace, grace_period_seconds=5)
+            logger.info(f"Deleted pod so that it can be re-launched: {pod_name}")
+            return False
         except client.ApiException as e:
             if e.status == 404:
                 return False
