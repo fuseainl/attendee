@@ -82,7 +82,7 @@ class Command(BaseCommand):
             logger.info(f"Checking if pod {pod_name} is active...")
             pod = self.v1.read_namespaced_pod(name=pod_name, namespace=self.namespace)
             # Log all the info about the pod
-            logger.info(f"Pod {pod_name} info: {pod}")
+            logger.info(f"Pod {pod_name} phase: {pod.status.phase}")
             # Return that it is active if pod is not in succeeded or failed phase
             if pod.status.phase not in ["Succeeded", "Failed"]:
                 return True
