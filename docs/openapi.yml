@@ -2445,6 +2445,13 @@ components:
               description: Maximum number of seconds that the bot should be running
                 before automatically leaving (infinity)
               default: null
+            enable_closed_captions_timeout_seconds:
+              type: integer
+              description: Number of seconds to wait before leaving if bot could not
+                enable closed captions (infinity by default). Only relevant if the
+                bot is transcribing via closed captions. Currently only supports leaving
+                immediately.
+              default: null
           required: []
           additionalProperties: false
       required:

@@ -370,6 +370,10 @@ class WebBotAdapter(BotAdapter):
                             elif json_data.get("change") == "denied":
                                 self.after_bot_recording_permission_denied()
 
+                        elif json_data.get("type") == "ClosedCaptionStatusChange":
+                            if json_data.get("change") == "save_caption_not_allowed":
+                                self.could_not_enable_closed_captions()
+
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
                 elif message_type == 3:  # AUDIO
@@ -845,6 +849,11 @@ class WebBotAdapter(BotAdapter):
 
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
+
+    def could_not_enable_closed_captions(self):
+        if self.automatic_leave_configuration.enable_closed_captions_timeout_seconds is not None:
+            logger.info("Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
+            self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS})
 
     def get_first_buffer_timestamp_ms(self):
         if self.media_sending_enable_timestamp_ms is None:

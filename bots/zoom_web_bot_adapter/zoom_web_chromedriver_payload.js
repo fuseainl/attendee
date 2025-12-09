@@ -763,6 +763,7 @@ botOutputManager = new BotOutputManager({
     turnOffScreenshare: turnOffScreenshare,
     turnOnMic: turnOnMic,
     turnOffMic: turnOffMic,
+    callOriginalGetUserMedia: true,
 });
 
 window.botOutputManager = botOutputManager;

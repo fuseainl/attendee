@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -37,9 +37,6 @@ class ZoomWebUIMethods:
         # Call the joinMeeting function
         self.driver.execute_script("joinMeeting()")
 
-        # Click the join audio button. If we're in the waiting room, we'll get a different experience and won't need to do this.
-        self.click_join_audio_button()
-
         # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
         more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
@@ -55,7 +52,8 @@ class ZoomWebUIMethods:
             self.driver.execute_script("arguments[0].click();", captions_button)
             closed_captions_enabled = True
         except TimeoutException:
-            logger.info("Captions button not found, so unable to transcribe via closed-captions, continuing")
+            logger.info("Captions button not found, so unable to transcribe via closed-captions.")
+            self.could_not_enable_closed_captions()
 
         if closed_captions_enabled:
             # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
@@ -149,54 +147,6 @@ class ZoomWebUIMethods:
         if passcode_incorrect_element and passcode_incorrect_element.is_displayed():
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
-
-    def click_join_audio_button(self):
-        num_attempts_to_look_for_join_audio_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
-        logger.info("Waiting for join audio button...")
-        timeout_started_at = time.time()
-
-        # We can either be waiting for the host to start meeting or we can be waiting to be admitted to the meeting
-        is_waiting_for_host_to_start_meeting = False
-
-        for attempt_index in range(num_attempts_to_look_for_join_audio_button):
-            try:
-                join_audio_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button.join-audio-by-voip__join-btn")))
-                logger.info("Join audio button found")
-                self.driver.execute_script("arguments[0].click();", join_audio_button)
-                return
-            except TimeoutException as e:
-                self.check_if_passcode_incorrect()
-
-                previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
-                try:
-                    is_waiting_for_host_to_start_meeting = self.driver.find_element(
-                        By.XPATH,
-                        '//*[contains(text(), "for host to start the meeting")]',
-                    ).is_displayed()
-                except:
-                    is_waiting_for_host_to_start_meeting = False
-
-                # If we switch from waiting for the host to start the meeting to waiting to be admitted to the meeting, then we need to reset the timeout
-                if previous_is_waiting_for_host_to_start_meeting != is_waiting_for_host_to_start_meeting:
-                    timeout_started_at = time.time()
-
-                self.check_if_timeout_exceeded(timeout_started_at=timeout_started_at, step="click_join_audio_button", is_waiting_for_host_to_start_meeting=is_waiting_for_host_to_start_meeting)
-
-                last_check_timed_out = attempt_index == num_attempts_to_look_for_join_audio_button - 1
-                if last_check_timed_out:
-                    logger.info("Could not find join audio button. Timed out. Raising UiCouldNotLocateElementException")
-                    raise UiCouldNotLocateElementException(
-                        "Could not find join audio button. Timed out.",
-                        "click_join_audio_button",
-                        e,
-                    )
-            except Exception as e:
-                logger.info(f"Could not find join audio button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
-                raise UiCouldNotLocateElementException(
-                    "Could not find join audio button. Unknown error.",
-                    "click_join_audio_button",
-                    e,
-                )
 
     def set_zoom_closed_captions_language(self):
         if not self.zoom_closed_captions_language:
