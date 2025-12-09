@@ -414,6 +414,12 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": [],
             "additionalProperties": False,
         },
+        "custom_async": {
+            "type": "object",
+            "description": "Custom self-hosted transcription service with async processing. Additional properties will be sent as form data in the request. Only supported if self-hosting Attendee.",
+            "required": [],
+            "additionalProperties": True,
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -960,6 +966,9 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
         if value.get("deepgram", {}).get("callback"):
             raise serializers.ValidationError({"transcription_settings": "Deepgram callback is not available for async transcription."})
 
+        if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
+            raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
+
         if not value:
             raise serializers.ValidationError({"transcription_settings": "Please specify a transcription provider."})
 
@@ -1185,6 +1194,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         if value.get("deepgram", {}).get("callback") and value.get("deepgram", {}).get("detect_language"):
             raise serializers.ValidationError({"transcription_settings": "Language detection is not supported for streaming transcription. Please pass language='multi' instead of detect_language=true."})
+
+        if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
+            raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
         return value
 

@@ -2225,6 +2225,23 @@ components:
               required:
               - model_id
               additionalProperties: false
+            kyutai:
+              type: object
+              properties:
+                server_url:
+                  type: string
+                  description: The WebSocket URL of the Kyutai STT server (e.g., 'wss://your-domain.com/api/asr-streaming').
+                    Must start with ws:// or wss://. If not provided, will use the
+                    server_url from project credentials.
+              required: []
+              additionalProperties: false
+            custom_async:
+              type: object
+              description: Custom self-hosted transcription service with async processing.
+                Additional properties will be sent as form data in the request. Only
+                supported if self-hosting Attendee.
+              required: []
+              additionalProperties: true
           required: []
           description: 'The transcription settings for the bot, e.g. {''deepgram'':
             {''language'': ''en''}}'
