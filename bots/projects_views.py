@@ -44,6 +44,7 @@ from .models import (
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
+    SessionTypes,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
@@ -469,12 +470,17 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_bots.html"
     context_object_name = "bots"
     paginate_by = 20
+    session_type = None
+
+    def get_session_type(self):
+        """Get session type from class attribute"""
+        return self.session_type
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
-        # Start with the base queryset
-        queryset = Bot.objects.filter(project=project)
+        # Filter based on session type
+        queryset = Bot.objects.filter(project=project, session_type=self.get_session_type())
 
         # Apply date filters if provided
         start_date = self.request.GET.get("start_date")
@@ -490,6 +496,23 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
                 end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
                 end_date_obj = end_date_obj + timedelta(days=1)
                 queryset = queryset.filter(created_at__lt=end_date_obj)
+            except (ValueError, TypeError):
+                # Handle invalid date format
+                pass
+
+        # Apply join_at date filters if provided
+        join_at_start = self.request.GET.get("join_at_start")
+        join_at_end = self.request.GET.get("join_at_end")
+
+        if join_at_start:
+            queryset = queryset.filter(join_at__gte=join_at_start)
+        if join_at_end:
+            from datetime import datetime, timedelta
+
+            try:
+                join_at_end_obj = datetime.strptime(join_at_end, "%Y-%m-%d")
+                join_at_end_obj = join_at_end_obj + timedelta(days=1)
+                queryset = queryset.filter(join_at__lt=join_at_end_obj)
             except (ValueError, TypeError):
                 # Handle invalid date format
                 pass
@@ -533,11 +556,15 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
 
-        # Add BotStates for the template
+        # Add BotStates and SessionTypes for the template
         context["BotStates"] = BotStates
+        context["SessionTypes"] = SessionTypes
+
+        # Add session type to context
+        context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
@@ -756,6 +783,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             {
                 "bot": bot,
                 "BotStates": BotStates,
+                "SessionTypes": SessionTypes,
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,

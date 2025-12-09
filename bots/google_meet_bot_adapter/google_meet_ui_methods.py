@@ -87,7 +87,8 @@ class GoogleMeetUIMethods:
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
-            logger.info("Google is blocking us for whatever reason, but we can retry. Raising UiGoogleBlockingUsException")
+            element_text = cannot_join_element.text
+            logger.info(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
     def look_for_login_required_element(self, step):
@@ -101,9 +102,20 @@ class GoogleMeetUIMethods:
             By.XPATH,
             '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
         )
-        if denied_your_request_element:
-            logger.info("Someone in the call denied our request to join. Raising UiRequestToJoinDeniedException")
+        if not denied_your_request_element:
+            return
+
+        element_text = denied_your_request_element.text
+
+        if "Someone in the call denied your request to join" in element_text:
+            logger.info("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
+        elif "No one responded to your request to join the call" in element_text:
+            logger.info("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
+        else:  # "You left the meeting"
+            logger.info("Saw 'You left the meeting' element. Happens if someone actively denied our request to join. Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("You left the meeting", step)
 
     def look_for_asking_to_be_let_in_element_after_waiting_period_expired(self, step):
         asking_to_be_let_in_element = self.find_element_by_selector(
@@ -127,7 +139,7 @@ class GoogleMeetUIMethods:
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
-        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"]'
+        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
         microphone_button = self.locate_element(
             step="turn_off_microphone_button",
             condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
@@ -137,7 +149,7 @@ class GoogleMeetUIMethods:
         self.click_element(microphone_button, "turn_off_microphone_button")
 
         logger.info("Waiting for the camera button...")
-        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"]'
+        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
         camera_button = self.locate_element(
             step="turn_off_camera_button",
             condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
