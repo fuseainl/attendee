@@ -669,7 +669,7 @@ def get_transcription_via_custom_async(utterance):
     files = {"audio": ("audio.pcm", audio_blob, "audio/pcm")}
 
     # Add additional properties as form data
-    data = {}
+    data = {"sample_rate": utterance.get_sample_rate()}
     for key, value in additional_props.items():
         data[key] = value
 

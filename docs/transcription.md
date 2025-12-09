@@ -163,6 +163,7 @@ Set these environment variables on your Attendee server:
 Your transcription service must accept a `POST` request with `multipart/form-data` containing:
 
 - `audio`: The audio file (sent as raw PCM audio, 16-bit linear PCM)
+- `sample_rate`: The sample rate of the audio file in Hz
 - Any additional custom parameters you specify in `transcription_settings`
 
 **Audio format details:**
