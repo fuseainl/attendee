@@ -21,6 +21,9 @@ Third-party-based transcription is generally of higher quality than closed capti
 - OpenAI
 - Gladia
 - Assembly AI
+- Sarvam
+- ElevenLabs
+- Kyutai Labs
 - Custom Async (Bring Your Own Platform)
 
 See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for supported parameters for configuring the transcription providers.
