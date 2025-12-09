@@ -655,9 +655,9 @@ def get_transcription_via_custom_async(utterance):
     transcription_settings = utterance.transcription_settings
 
     # Get the base URL from environment variable
-    base_url = os.getenv("CUSTOM_ASYNC_URL")
+    base_url = os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL")
     if not base_url:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_ASYNC_URL environment variable not set"}
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable not set"}
 
     # Get additional properties from settings
     additional_props = transcription_settings.custom_async_additional_props()
@@ -674,7 +674,7 @@ def get_transcription_via_custom_async(utterance):
         data[key] = value
 
     # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
-    timeout = int(os.getenv("CUSTOM_ASYNC_TIMEOUT", "120"))  # 120 seconds default timeout
+    timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))  # 120 seconds default timeout
 
     try:
         # Make the POST request to the custom transcription service

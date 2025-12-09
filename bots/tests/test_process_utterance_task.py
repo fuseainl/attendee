@@ -1539,7 +1539,7 @@ class CustomAsyncProviderTest(TransactionTestCase):
 
     def _patch_env(self, url="http://test-service.com/transcribe", timeout="120"):
         """Mock environment variables."""
-        return mock.patch.dict("os.environ", {"CUSTOM_ASYNC_URL": url, "CUSTOM_ASYNC_TIMEOUT": timeout})
+        return mock.patch.dict("os.environ", {"CUSTOM_ASYNC_TRANSCRIPTION_URL": url, "CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT": timeout})
 
     # ------------------------------------------------------------------ SUCCESS PATH
 
@@ -1617,13 +1617,13 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(data["custom_param"], "test_value")
 
     def test_missing_env_url(self):
-        """No CUSTOM_ASYNC_URL env var → CREDENTIALS_NOT_FOUND."""
+        """No CUSTOM_ASYNC_TRANSCRIPTION_URL env var → CREDENTIALS_NOT_FOUND."""
         with mock.patch.dict("os.environ", {}, clear=True):
             transcript, failure = get_transcription_via_custom_async(self.utterance)
 
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
-            self.assertIn("CUSTOM_ASYNC_URL", failure["error"])
+            self.assertIn("CUSTOM_ASYNC_TRANSCRIPTION_URL", failure["error"])
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
     def test_invalid_credentials_401(self, mock_post):

@@ -155,8 +155,8 @@ Unlike other providers, this does not require credentials in the dashboard. Inst
 
 Set these environment variables on your Attendee server:
 
-- `CUSTOM_ASYNC_URL` **(required)**: The full URL of your transcription endpoint (e.g., `https://192.168.0.1/transcribe`)
-- `CUSTOM_ASYNC_TIMEOUT` (optional): Request timeout in seconds (default: 120)
+- `CUSTOM_ASYNC_TRANSCRIPTION_URL` **(required)**: The full URL of your transcription endpoint (e.g., `https://192.168.0.1/transcribe`)
+- `CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT` (optional): Request timeout in seconds (default: 120)
 
 #### Expected API format
 
