@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('bots', '0062_alter_credentials_credential_type_and_more'),
+        ('bots', '0063_bot_session_type_bot_zoom_rtms_stream_id_and_more'),
     ]
 
     operations = [
