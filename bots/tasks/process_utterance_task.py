@@ -39,8 +39,8 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_sarvam(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.ELEVENLABS:
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
-        elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_STT_LONG_POLL:
-            transcription, failure_data = get_transcription_via_custom_stt_long_poll(utterance)
+        elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC:
+            transcription, failure_data = get_transcription_via_custom_async(utterance)
         else:
             raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
@@ -605,16 +605,16 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
-def get_transcription_via_custom_stt_long_poll(utterance):
+def get_transcription_via_custom_async(utterance):
     transcription_settings = utterance.transcription_settings
 
     # Get the base URL from environment variable
-    base_url = os.getenv("CUSTOM_STT_LONG_POLL_URL")
+    base_url = os.getenv("CUSTOM_ASYNC_URL")
     if not base_url:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_STT_LONG_POLL_URL environment variable not set"}
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_ASYNC_URL environment variable not set"}
 
     # Get additional properties from settings
-    additional_props = transcription_settings.custom_stt_long_poll_additional_props()
+    additional_props = transcription_settings.custom_async_additional_props()
 
     # Get raw PCM audio data
     audio_blob = utterance.get_audio_blob().tobytes()
@@ -628,11 +628,11 @@ def get_transcription_via_custom_stt_long_poll(utterance):
         data[key] = value
 
     # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
-    timeout = int(os.getenv("CUSTOM_STT_LONG_POLL_TIMEOUT", "120"))  # 300 seconds default timeout
+    timeout = int(os.getenv("CUSTOM_ASYNC_TIMEOUT", "120"))  # 120 seconds default timeout
 
     try:
         # Make the POST request to the custom transcription service
-        logger.info(f"Sending audio to custom STT service at {base_url}")
+        logger.info(f"Sending audio to custom async service at {base_url}")
         response = requests.post(base_url, files=files, data=data if data else None, timeout=timeout)
 
         if response.status_code == 401:
@@ -642,16 +642,16 @@ def get_transcription_via_custom_stt_long_poll(utterance):
             return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
 
         if response.status_code != 200:
-            logger.error(f"Custom STT transcription failed with status code {response.status_code}: {response.text}")
+            logger.error(f"Custom async transcription failed with status code {response.status_code}: {response.text}")
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
 
         result_data = response.json()
-        logger.info("Custom STT transcription request completed")
+        logger.info("Custom async transcription request completed")
 
         status = result_data.get("status")
         if status == "done":
             transcription = result_data.get("result", {}).get("transcription", "")
-            logger.info("Custom STT transcription completed successfully")
+            logger.info("Custom async transcription completed successfully")
             transcription["transcript"] = transcription["full_transcript"]
             del transcription["full_transcript"]
 
@@ -674,14 +674,14 @@ def get_transcription_via_custom_stt_long_poll(utterance):
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
 
     except requests.exceptions.Timeout:
-        logger.error(f"Custom STT transcription request timed out after {timeout} seconds")
+        logger.error(f"Custom async transcription request timed out after {timeout} seconds")
         return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "timeout": timeout}
     except requests.exceptions.RequestException as e:
-        logger.error(f"Custom STT transcription request failed: {str(e)}")
+        logger.error(f"Custom async transcription request failed: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
     except (json.JSONDecodeError, ValueError) as e:
-        logger.error(f"Custom STT transcription response parsing failed: {str(e)}")
+        logger.error(f"Custom async transcription response parsing failed: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
-        logger.error(f"Custom STT transcription unexpected error: {str(e)}")
+        logger.error(f"Custom async transcription unexpected error: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}

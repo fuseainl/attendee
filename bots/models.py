@@ -573,8 +573,8 @@ class TranscriptionSettings:
     def elevenlabs_tag_audio_events(self):
         return self._settings.get("elevenlabs", {}).get("tag_audio_events", None)
 
-    def custom_stt_long_poll_additional_props(self):
-        return self._settings.get("custom_stt_long_poll", {})
+    def custom_async_additional_props(self):
+        return self._settings.get("custom_async", {})
 
     def deepgram_language(self):
         return self._settings.get("deepgram", {}).get("language", None)
@@ -1785,7 +1785,7 @@ class TranscriptionProviders(models.IntegerChoices):
     SARVAM = 6, "Sarvam"
     ELEVENLABS = 7, "ElevenLabs"
     KYUTAI = 8, "Kyutai"
-    CUSTOM_STT_LONG_POLL = 9, "Custom STT Long Poll"
+    CUSTOM_ASYNC = 9, "Custom Async"
 
 
 class RecordingStorage(Storage):

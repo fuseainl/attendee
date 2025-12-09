@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='recording',
             name='transcription_provider',
-            field=models.IntegerField(blank=True, choices=[(1, 'Deepgram'), (2, 'Closed Caption From Platform'), (3, 'Gladia'), (4, 'OpenAI'), (5, 'Assembly AI'), (6, 'Sarvam'), (7, 'ElevenLabs'), (8, 'Kyutai'), (9, 'Custom STT Long Poll')], null=True),
+            field=models.IntegerField(blank=True, choices=[(1, 'Deepgram'), (2, 'Closed Caption From Platform'), (3, 'Gladia'), (4, 'OpenAI'), (5, 'Assembly AI'), (6, 'Sarvam'), (7, 'ElevenLabs'), (8, 'Kyutai'), (9, 'Custom Async')], null=True),
         ),
     ]
 
