@@ -465,6 +465,24 @@ class BotOutputManager {
                 return self._originalGetUserMedia(constraints);
             }
 
+            let originalStream;
+            try {
+                // Call the *original* getUserMedia to trigger permissions, etc.
+                originalStream = await self._originalGetUserMedia(constraints);
+            } catch (err) {
+                console.error("Error from original getUserMedia:", err);
+                throw err; // propagate the same error to the caller
+            }
+
+            // If for some reason we didn't get a stream, just bail out.
+            if (!originalStream || typeof originalStream.getTracks !== "function") {
+                return originalStream;
+            }
+
+            // Stop any real tracks so we’re not actually using the real devices.
+            originalStream.getTracks().forEach(t => t.stop());
+
+            // Build the virtual stream we want to expose to the app.
             const stream = new MediaStream();
 
             if (needVideo && self.webcamVideoOutputStream.sourceVideoTrack) {
