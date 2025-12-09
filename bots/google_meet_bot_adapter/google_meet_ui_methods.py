@@ -5,11 +5,13 @@ import time
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from bots.bot_sso_utils import get_google_meet_set_cookie_url
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,8 @@ class GoogleMeetUIMethods:
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
-            logger.info("Google is blocking us for whatever reason, but we can retry. Raising UiGoogleBlockingUsException")
+            element_text = cannot_join_element.text
+            logger.info(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
     def look_for_login_required_element(self, step):
@@ -99,9 +102,20 @@ class GoogleMeetUIMethods:
             By.XPATH,
             '//*[contains(text(), "Someone in the call denied your request to join") or contains(text(), "No one responded to your request to join the call") or contains(text(), "You left the meeting")]',
         )
-        if denied_your_request_element:
-            logger.info("Someone in the call denied our request to join. Raising UiRequestToJoinDeniedException")
+        if not denied_your_request_element:
+            return
+
+        element_text = denied_your_request_element.text
+
+        if "Someone in the call denied your request to join" in element_text:
+            logger.info("Someone in the call actively denied our request to join. Raising UiRequestToJoinDeniedException")
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
+        elif "No one responded to your request to join the call" in element_text:
+            logger.info("No one responded to our request to join (timeout). Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("No one responded to your request to join the call", step)
+        else:  # "You left the meeting"
+            logger.info("Saw 'You left the meeting' element. Happens if someone actively denied our request to join. Raising UiRequestToJoinDeniedException")
+            raise UiRequestToJoinDeniedException("You left the meeting", step)
 
     def look_for_asking_to_be_let_in_element_after_waiting_period_expired(self, step):
         asking_to_be_let_in_element = self.find_element_by_selector(
@@ -125,7 +139,7 @@ class GoogleMeetUIMethods:
 
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
-        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"]'
+        MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
         microphone_button = self.locate_element(
             step="turn_off_microphone_button",
             condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
@@ -135,7 +149,7 @@ class GoogleMeetUIMethods:
         self.click_element(microphone_button, "turn_off_microphone_button")
 
         logger.info("Waiting for the camera button...")
-        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"]'
+        CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
         camera_button = self.locate_element(
             step="turn_off_camera_button",
             condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
@@ -144,18 +158,41 @@ class GoogleMeetUIMethods:
         logger.info("Clicking the camera button...")
         self.click_element(camera_button, "turn_off_camera_button")
 
+    def join_now_button_selector(self):
+        return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]'
+
+    def check_for_failed_logged_in_bot_attempt(self):
+        if not self.google_meet_bot_login_session:
+            return
+        logger.info("Bot attempted to login, but name input is present, so the bot was not logged in. Raising UiLoginAttemptFailedException")
+        raise UiLoginAttemptFailedException("Bot attempted to login, but name input is present, so the bot was not logged in.", "name_input")
+
+    def join_now_button_is_present(self):
+        join_button = self.find_element_by_selector(By.XPATH, self.join_now_button_selector())
+        if join_button:
+            return True
+        return False
+
+    def retrieve_name_input_element(self):
+        return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
         logger.info("Waiting for the name input field...")
         for attempt_to_look_for_name_input_index in range(num_attempts_to_look_for_name_input):
             try:
-                name_input = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+                name_input = self.retrieve_name_input_element()
+                self.check_for_failed_logged_in_bot_attempt()
                 logger.info("name input found")
                 name_input.send_keys(self.display_name)
                 return
             except TimeoutException as e:
                 self.look_for_blocked_element("name_input")
                 self.look_for_login_required_element("name_input")
+
+                if self.google_meet_bot_login_session and self.join_now_button_is_present():
+                    logger.info("This is a signed in bot and name input is not present but the join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
+                    return
 
                 last_check_timed_out = attempt_to_look_for_name_input_index == num_attempts_to_look_for_name_input - 1
                 if last_check_timed_out:
@@ -168,6 +205,9 @@ class GoogleMeetUIMethods:
                 if last_check_non_interactable:
                     logger.info("Could not find name input. Non interactable. Raising UiCouldNotLocateElementException")
                     raise UiCouldNotLocateElementException("Could not find name input. Non interactable.", "name_input", e)
+
+            except UiLoginAttemptFailedException as e:
+                raise e
 
             except Exception as e:
                 logger.info(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
@@ -433,8 +473,83 @@ class GoogleMeetUIMethods:
         logger.info("Clicking the close button")
         self.click_element(close_button, "close_button")
 
+    def wait_until_url_has_stopped_changing(self, stable_for: float = 1.0, timeout: float = 30.0, poll: float = 0.1) -> bool:
+        """
+        Wait until the browser URL remains unchanged for at least `stable_for` seconds.
+        Returns True if stability was achieved before `timeout`, else False.
+        """
+        last_url = self.driver.current_url
+        last_change = time.monotonic()
+        deadline = last_change + timeout
+
+        while time.monotonic() < deadline:
+            current_url = self.driver.current_url
+            if current_url != last_url:
+                # URL changed; reset the stability timer
+                last_url = current_url
+                last_change = time.monotonic()
+
+            # Has the URL been stable long enough?
+            if (time.monotonic() - last_change) >= stable_for:
+                logger.info("URL has not changed for %.2f seconds, returning (url=%s)", stable_for, current_url)
+                return True
+
+            time.sleep(poll)
+
+        logger.info("Timed out waiting for URL stability (>%.2fs). Last URL: %s", stable_for, last_url)
+        return False
+
+    def login_to_google_meet_account(self):
+        self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
+        logger.info("Logging in to Google Meet account")
+        session_id = self.google_meet_bot_login_session.get("session_id")
+        google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
+        logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
+        self.driver.get(google_meet_set_cookie_url)
+        # Then you need to navigate to http://accounts.google.com/
+        logger.info("Navigating to http://accounts.google.com/")
+        self.driver.get("http://accounts.google.com/")
+
+        # Then you need to fill in the email input
+        logger.info("Filling in the email input...")
+        # Look for input type = email and fill it in
+        session_email = self.google_meet_bot_login_session.get("login_email")
+        email_input = self.locate_element(step="email_input_for_google_account_sign_in", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]')), wait_time_seconds=10)
+        email_input.send_keys(session_email)
+
+        url_before_signin = self.driver.current_url
+        # Press the enter key to submit the email input
+        email_input.send_keys(Keys.ENTER)
+
+        logger.info("Login attempted, waiting for redirect...")
+        logger.info(f"Current URL: {self.driver.current_url}")
+
+        ## Wait until the url changes to something other than the login page or too much time has passed
+        start_waiting_at = time.time()
+        while self.driver.current_url == url_before_signin:
+            time.sleep(1)
+            if time.time() - start_waiting_at > 120:
+                logger.info("Login timed out, redirecting to meeting page")
+                # TODO Replace with error message for login failed
+                break
+
+        logger.info(f"Redirected to {self.driver.current_url}")
+
+        # Wait for the URL to include https://myaccount.google.com, this indicates that we have logged in successfully
+        start_waiting_at = time.time()
+        while "https://myaccount.google.com" not in self.driver.current_url:
+            time.sleep(1)
+            if time.time() - start_waiting_at > 120:
+                # We'll raise an exception if it's not logged in after 120 seconds
+                raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
+
+        logger.info(f"After waiting, URL is {self.driver.current_url}")
+
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
+            self.login_to_google_meet_account()
+
         layout_to_select = self.get_layout_to_select()
 
         self.driver.get(self.meeting_url)
@@ -461,7 +576,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the 'Ask to join' or 'Join now' button...")
         join_button = self.locate_element(
             step="join_button",
-            condition=EC.presence_of_element_located((By.XPATH, '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]')),
+            condition=EC.presence_of_element_located((By.XPATH, self.join_now_button_selector())),
             wait_time_seconds=60,
         )
         logger.info("Clicking the join button...")

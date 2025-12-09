@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class DeepgramStreamingTranscriber:
-    def __init__(self, *, deepgram_api_key, interim_results, language, model, sample_rate, metadata, callback, redaction_settings=None):
+    def __init__(self, *, deepgram_api_key, interim_results, language, model, sample_rate, metadata, callback, redaction_settings=None, replace_settings=None):
         # Configure the DeepgramClientOptions to enable KeepAlive for maintaining the WebSocket connection (only if necessary to your scenario)
         config = DeepgramClientOptions(options={"keepalive": "true"})
 
@@ -47,6 +47,7 @@ class DeepgramStreamingTranscriber:
             extra=metadata,
             callback=callback,
             redact=redaction_settings,
+            replace=replace_settings,
         )
 
         self.dg_connection.start(options)

@@ -607,7 +607,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         logger.info(f"Created Microsoft Calendar notification channel in database. Platform UUID: {calendar_notification_channel.platform_uuid}")
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
-        if e.response.json().get("error") == "invalid_grant":
+        if e.response.json().get("error") == "invalid_grant" or e.response.json().get("error") == "invalid_client":
             raise CalendarAPIAuthenticationError(f"Microsoft Authentication error: {e.response.json()}")
 
         if "ErrorAccessDenied" in e.response.text:

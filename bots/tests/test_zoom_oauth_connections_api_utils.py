@@ -100,3 +100,23 @@ class TestCreateZoomOAuthConnection(TestCase):
 
         # Verify no connection was created in the database
         self.assertEqual(ZoomOAuthConnection.objects.count(), 0)
+
+    def test_create_zoom_oauth_connection_invalid_metadata_integer_value(self):
+        """Test zoom oauth connection creation fails when metadata contains integer value."""
+        connection_data = {
+            "zoom_oauth_app_id": self.zoom_oauth_app.object_id,
+            "authorization_code": "test_authorization_code",
+            "redirect_uri": "https://example.com/oauth/callback",
+            "metadata": {"department": "engineering", "employee_count": 42},  # employee_count is int, not string
+        }
+
+        zoom_oauth_connection, error = create_zoom_oauth_connection(connection_data, self.project)
+
+        # Verify creation failed due to validation error
+        self.assertIsNone(zoom_oauth_connection)
+        self.assertIsNotNone(error)
+        self.assertIn("metadata", error)
+        self.assertIn("Value for key 'employee_count' must be a string", str(error["metadata"]))
+
+        # Verify no connection was created in the database
+        self.assertEqual(ZoomOAuthConnection.objects.count(), 0)

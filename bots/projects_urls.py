@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import projects_views
+from .models import SessionTypes
 
 app_name = "bots"
 
@@ -17,8 +18,13 @@ urlpatterns = [
     ),
     path(
         "<str:object_id>/bots",
-        projects_views.ProjectBotsView.as_view(),
+        projects_views.ProjectBotsView.as_view(session_type=SessionTypes.BOT),
         name="project-bots",
+    ),
+    path(
+        "<str:object_id>/app_sessions",
+        projects_views.ProjectBotsView.as_view(session_type=SessionTypes.APP_SESSION),
+        name="project-app-sessions",
     ),
     path(
         "<str:object_id>/bots/create",
@@ -29,6 +35,11 @@ urlpatterns = [
         "<str:object_id>/bots/<str:bot_object_id>",
         projects_views.ProjectBotDetailView.as_view(),
         name="project-bot-detail",
+    ),
+    path(
+        "<str:object_id>/app_sessions/<str:bot_object_id>",
+        projects_views.ProjectBotDetailView.as_view(),
+        name="project-app-session-detail",
     ),
     path(
         "<str:object_id>/bots/<str:bot_object_id>/recordings",
@@ -154,6 +165,16 @@ urlpatterns = [
         "<str:object_id>/calendars/<str:calendar_object_id>/events/<str:event_object_id>",
         projects_views.ProjectCalendarEventDetailView.as_view(),
         name="project-calendar-event-detail",
+    ),
+    path(
+        "<str:object_id>/settings/google-meet-bot-login/create/",
+        projects_views.CreateGoogleMeetBotLoginView.as_view(),
+        name="create-google-meet-bot-login",
+    ),
+    path(
+        "<str:object_id>/settings/google-meet-bot-login/<str:login_object_id>/delete/",
+        projects_views.DeleteGoogleMeetBotLoginView.as_view(),
+        name="delete-google-meet-bot-login",
     ),
     # Don't put anything after this, it will redirect to the dashboard
     path(

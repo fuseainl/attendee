@@ -34,6 +34,8 @@ from .models import (
     ChatMessage,
     Credentials,
     CreditTransaction,
+    GoogleMeetBotLogin,
+    GoogleMeetBotLoginGroup,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -42,6 +44,7 @@ from .models import (
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
+    SessionTypes,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
@@ -97,6 +100,14 @@ def get_calendar_event_for_user(user, calendar_event_object_id):
     return calendar_event
 
 
+def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
+    google_meet_bot_login = get_object_or_404(GoogleMeetBotLogin, object_id=google_meet_bot_login_object_id, group__project__organization=user.organization)
+    # If you're an admin you can access any Google Meet bot login in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
+        raise PermissionDenied
+    return google_meet_bot_login
+
+
 def get_webhook_options_for_project(project):
     trigger_types = [trigger_type for trigger_type in WebhookTriggerTypes]
     if not project.organization.is_managed_zoom_oauth_enabled:
@@ -125,6 +136,8 @@ def get_partial_for_credential_type(credential_type, request, context):
         return render(request, "projects/partials/elevenlabs_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
         return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.KYUTAI:
+        return render(request, "projects/partials/kyutai_credentials.html", context)
     elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
         return render(request, "projects/partials/external_media_storage_credentials.html", context)
     else:
@@ -314,6 +327,17 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.KYUTAI:
+                credentials_data = {
+                    "server_url": request.POST.get("server_url"),
+                }
+                # Only include api_key if it's provided
+                api_key = request.POST.get("api_key")
+                if api_key:
+                    credentials_data["api_key"] = api_key
+
+                if not credentials_data.get("server_url"):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
@@ -383,6 +407,9 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Try to get existing zoom oauth app
         zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
 
+        # Try to get existing google meet bot login group
+        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=project).first()
+
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
 
@@ -400,6 +427,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         elevenlabs_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
 
+        kyutai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.KYUTAI).first()
+
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
@@ -408,6 +437,7 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context.update(
             {
                 "zoom_oauth_app": zoom_oauth_app,
+                "google_meet_bot_login_group": google_meet_bot_login_group,
                 "zoom_credentials": zoom_credentials.get_credentials() if zoom_credentials else None,
                 "zoom_credential_type": Credentials.CredentialTypes.ZOOM_OAUTH,
                 "deepgram_credentials": deepgram_credentials.get_credentials() if deepgram_credentials else None,
@@ -424,6 +454,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
                 "elevenlabs_credentials": elevenlabs_credentials.get_credentials() if elevenlabs_credentials else None,
                 "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
+                "kyutai_credentials": kyutai_credentials.get_credentials() if kyutai_credentials else None,
+                "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
@@ -438,12 +470,17 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_bots.html"
     context_object_name = "bots"
     paginate_by = 20
+    session_type = None
+
+    def get_session_type(self):
+        """Get session type from class attribute"""
+        return self.session_type
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
-        # Start with the base queryset
-        queryset = Bot.objects.filter(project=project)
+        # Filter based on session type
+        queryset = Bot.objects.filter(project=project, session_type=self.get_session_type())
 
         # Apply date filters if provided
         start_date = self.request.GET.get("start_date")
@@ -459,6 +496,23 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
                 end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
                 end_date_obj = end_date_obj + timedelta(days=1)
                 queryset = queryset.filter(created_at__lt=end_date_obj)
+            except (ValueError, TypeError):
+                # Handle invalid date format
+                pass
+
+        # Apply join_at date filters if provided
+        join_at_start = self.request.GET.get("join_at_start")
+        join_at_end = self.request.GET.get("join_at_end")
+
+        if join_at_start:
+            queryset = queryset.filter(join_at__gte=join_at_start)
+        if join_at_end:
+            from datetime import datetime, timedelta
+
+            try:
+                join_at_end_obj = datetime.strptime(join_at_end, "%Y-%m-%d")
+                join_at_end_obj = join_at_end_obj + timedelta(days=1)
+                queryset = queryset.filter(join_at__lt=join_at_end_obj)
             except (ValueError, TypeError):
                 # Handle invalid date format
                 pass
@@ -502,11 +556,15 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
 
-        # Add BotStates for the template
+        # Add BotStates and SessionTypes for the template
         context["BotStates"] = BotStates
+        context["SessionTypes"] = SessionTypes
+
+        # Add session type to context
+        context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
@@ -725,6 +783,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             {
                 "bot": bot,
                 "BotStates": BotStates,
+                "SessionTypes": SessionTypes,
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,
@@ -1234,3 +1293,56 @@ class ProjectAutopayView(AdminRequiredMixin, View):
         except Exception as e:
             logger.error(f"Error saving autopay settings: {e}")
             return HttpResponse("Error saving autopay settings", status=500)
+
+
+class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            # Get or create GoogleMeetBotLoginGroup for this project
+            google_meet_bot_login_group, created = GoogleMeetBotLoginGroup.objects.get_or_create(project=project)
+
+            # Extract fields from request
+            workspace_domain = request.POST.get("workspace_domain", "").strip()
+            email = request.POST.get("email", "").strip()
+            private_key = request.POST.get("private_key", "").strip()
+            cert = request.POST.get("cert", "").strip()
+
+            # Validate required fields
+            if not all([workspace_domain, email, private_key, cert]):
+                return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
+
+            # Create the GoogleMeetBotLogin
+            google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+                group=google_meet_bot_login_group,
+                workspace_domain=workspace_domain,
+                email=email,
+            )
+
+            # Set the encrypted credentials
+            credentials_data = {
+                "private_key": private_key,
+                "cert": cert,
+            }
+            google_meet_bot_login.set_credentials(credentials_data)
+
+            context = self.get_project_context(object_id, project)
+            context["google_meet_bot_login_group"] = google_meet_bot_login_group
+            return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error creating Google Meet bot login (error_id={error_id}): {e}")
+            return HttpResponse(f"Error creating Google Meet bot login. Error ID: {error_id}", status=400)
+
+
+class DeleteGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id, login_object_id):
+        google_meet_bot_login = get_google_meet_bot_login_for_user(user=request.user, google_meet_bot_login_object_id=login_object_id)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        google_meet_bot_login_group = google_meet_bot_login.group
+        google_meet_bot_login.delete()
+        context = self.get_project_context(object_id, project)
+        context["google_meet_bot_login_group"] = google_meet_bot_login_group
+        return render(request, "projects/partials/google_meet_bot_login_group.html", context)

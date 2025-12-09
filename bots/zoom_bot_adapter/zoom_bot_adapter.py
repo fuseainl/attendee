@@ -190,6 +190,8 @@ class ZoomBotAdapter(BotAdapter):
         self.current_image_to_send = None
         self.recording_is_paused = False
 
+        self.ready_to_send_chat_messages = False
+
     def pause_recording(self):
         self.recording_is_paused = True
         if not self.raw_recording_active:
@@ -426,12 +428,16 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
-        builder.SetReceiver(0)
-        builder.SetMessageType(zoom.SDKChatMessageType.To_All)
+        if to_user_uuid:
+            builder.SetReceiver(to_user_uuid)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
+        else:
+            builder.SetReceiver(0)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_All)
         msg = builder.Build()
         send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
         logger.info(f"send_chat_message_result = {send_chat_message_result}")
@@ -519,6 +525,9 @@ class ZoomBotAdapter(BotAdapter):
             allow_participants_to_chat_result = self.participants_ctrl.AllowParticipantsToChat(allow_participants_to_chat)
             logger.info(f"AllowParticipantsToChat({allow_participants_to_chat}) returned {allow_participants_to_chat_result}")
 
+    def is_ready_to_send_chat_messages(self):
+        return self.ready_to_send_chat_messages
+
     def on_join(self):
         # Reset breakout room transition flag
         self.is_joining_or_leaving_breakout_room = False
@@ -543,6 +552,7 @@ class ZoomBotAdapter(BotAdapter):
         self.chat_ctrl = self.meeting_service.GetMeetingChatController()
         self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
         self.chat_ctrl.SetEvent(self.chat_ctrl_event)
+        self.ready_to_send_chat_messages = True
         self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
 
         # Breakout room controller
@@ -1113,3 +1123,19 @@ class ZoomBotAdapter(BotAdapter):
 
     def get_staged_bot_join_delay_seconds(self):
         return 0
+
+    # These webpage streaming functionality is not available for the zoom native adapter
+    def webpage_streamer_get_peer_connection_offer(self):
+        pass
+
+    def webpage_streamer_start_peer_connection(self, offer_response):
+        pass
+
+    def webpage_streamer_play_bot_output_media_stream(self, output_destination):
+        pass
+
+    def webpage_streamer_stop_bot_output_media_stream(self, output_destination):
+        pass
+
+    def is_bot_ready_for_webpage_streamer(self):
+        pass

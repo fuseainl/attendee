@@ -5,6 +5,7 @@ import os
 import random
 import secrets
 import string
+from datetime import timedelta
 
 from concurrency.exceptions import RecordModifiedError
 from concurrency.fields import IntegerVersionField
@@ -19,6 +20,7 @@ from django.utils import timezone
 from django.utils.crypto import get_random_string
 
 from accounts.models import Organization, User, UserRole
+from bots.bot_pod_creator.bot_pod_spec import BotPodSpecType
 from bots.webhook_utils import trigger_webhook
 
 # Create your models here.
@@ -57,6 +59,83 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class GoogleMeetBotLoginGroup(models.Model):
+    OBJECT_ID_PREFIX = "gbg_"
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.project.name} - {self.object_id}"
+
+
+class GoogleMeetBotLogin(models.Model):
+    OBJECT_ID_PREFIX = "gbl_"
+    group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
+    object_id = models.CharField(max_length=32, unique=True, editable=False)
+
+    _encrypted_data = models.BinaryField(
+        null=True,
+        editable=False,  # Prevents editing through admin/forms
+    )
+
+    workspace_domain = models.CharField(max_length=255)
+    email = models.CharField(max_length=255)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def cert(self):
+        return self.get_credentials().get("cert")
+
+    @property
+    def private_key(self):
+        return self.get_credentials().get("private_key")
+
+    def set_credentials(self, credentials_dict):
+        """Encrypt and save credentials"""
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        json_data = json.dumps(credentials_dict)
+        self._encrypted_data = f.encrypt(json_data.encode())
+        self.save()
+
+    def get_credentials(self):
+        """Decrypt and return credentials"""
+        if not self._encrypted_data:
+            return None
+        f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
+        decrypted_data = f.decrypt(bytes(self._encrypted_data))
+        return json.loads(decrypted_data.decode())
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.email} - {self.object_id}"
+
+    class Meta:
+        # Within a Google Meet Bot Login Group, we don't want to allow Google Meet Bot Logins with the same email
+        constraints = [
+            models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
+        ]
 
 
 class ZoomOAuthApp(models.Model):
@@ -386,6 +465,11 @@ class BotStates(models.IntegerChoices):
     LEAVING_BREAKOUT_ROOM = 15, "Leaving Breakout Room"
     JOINED_RECORDING_PERMISSION_DENIED = 16, "Joined - Recording Permission Denied"
 
+    # App session states
+    CONNECTING = 100, "Connecting"
+    CONNECTED = 101, "Connected"
+    DISCONNECTING = 102, "Disconnecting"
+
     @classmethod
     def _get_state_to_api_code_mapping(cls):
         """Get the trigger type to API code mapping"""
@@ -406,6 +490,9 @@ class BotStates(models.IntegerChoices):
             cls.JOINING_BREAKOUT_ROOM: "joining_breakout_room",
             cls.LEAVING_BREAKOUT_ROOM: "leaving_breakout_room",
             cls.JOINED_RECORDING_PERMISSION_DENIED: "joined_recording_permission_denied",
+            cls.CONNECTING: "connecting",
+            cls.CONNECTED: "connected",
+            cls.DISCONNECTING: "disconnecting",
         }
 
     @classmethod
@@ -441,6 +528,13 @@ class RecordingViews(models.TextChoices):
     SPEAKER_VIEW_NO_SIDEBAR = "speaker_view_no_sidebar"
 
 
+# Session type = BOT means you are connecting as a meeting bot (virtual participant)
+# Session type = APP_SESSION means you are connecting as an app (Zoom RTMS, Google Meet Media API)
+class SessionTypes(models.IntegerChoices):
+    BOT = 1, "Bot"
+    APP_SESSION = 2, "App Session"
+
+
 class TranscriptionSettings:
     def __init__(self, settings: dict):
         self._settings = settings or {}
@@ -454,6 +548,20 @@ class TranscriptionSettings:
 
     def openai_transcription_language(self):
         return self._settings.get("openai", {}).get("language", None)
+
+    def openai_transcription_response_format(self):
+        # Only applicable for gpt-4o-transcribe-diarize, default to diarized_json
+        model = self.openai_transcription_model()
+        if model == "gpt-4o-transcribe-diarize":
+            return self._settings.get("openai", {}).get("response_format", "diarized_json")
+        return None
+
+    def openai_transcription_chunking_strategy(self):
+        # Only applicable for gpt-4o-transcribe-diarize, default to auto
+        model = self.openai_transcription_model()
+        if model == "gpt-4o-transcribe-diarize":
+            return self._settings.get("openai", {}).get("chunking_strategy", "auto")
+        return None
 
     def gladia_code_switching_languages(self):
         return self._settings.get("gladia", {}).get("code_switching_languages", None)
@@ -508,6 +616,9 @@ class TranscriptionSettings:
     def elevenlabs_tag_audio_events(self):
         return self._settings.get("elevenlabs", {}).get("tag_audio_events", None)
 
+    def custom_async_additional_props(self):
+        return self._settings.get("custom_async", {})
+
     def deepgram_language(self):
         return self._settings.get("deepgram", {}).get("language", None)
 
@@ -545,6 +656,12 @@ class TranscriptionSettings:
 
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
+
+    def deepgram_replace_settings(self):
+        return self._settings.get("deepgram", {}).get("replace", [])
+
+    def kyutai_server_url(self):
+        return self._settings.get("kyutai", {}).get("server_url", None)
 
     def google_meet_closed_captions_language(self):
         return self._settings.get("meeting_closed_captions", {}).get("google_meet_language", None)
@@ -585,6 +702,9 @@ class Bot(models.Model):
     join_at = models.DateTimeField(null=True, blank=True, help_text="The time the bot should join the meeting")
     deduplication_key = models.CharField(max_length=1024, null=True, blank=True, help_text="Optional key for deduplicating bots")
     calendar_event = models.ForeignKey(CalendarEvent, on_delete=models.SET_NULL, null=True, blank=True, related_name="bots")
+
+    zoom_rtms_stream_id = models.CharField(max_length=255, null=True, blank=True)
+    session_type = models.IntegerField(choices=SessionTypes.choices, default=SessionTypes.BOT, db_default=SessionTypes.BOT, null=False)
 
     def delete_data(self):
         # Check if bot is in a state where the data deleted event can be created
@@ -634,6 +754,14 @@ class Bot(models.Model):
                 if retry_count >= max_retries:
                     raise
                 continue
+
+    @property
+    def bot_pod_spec_type(self) -> BotPodSpecType:
+        # If join_at is greater than SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS seconds into the future, use the scheduled pod spec
+        scheduled_bot_pod_spec_margin_seconds = int(os.getenv("SCHEDULED_BOT_POD_SPEC_MARGIN_SECONDS", 120))
+        if self.join_at and self.join_at - timedelta(seconds=scheduled_bot_pod_spec_margin_seconds) > timezone.now():
+            return BotPodSpecType.SCHEDULED
+        return BotPodSpecType.DEFAULT
 
     def bot_duration_seconds(self) -> int:
         if self.first_heartbeat_timestamp is None or self.last_heartbeat_timestamp is None:
@@ -690,6 +818,12 @@ class Bot(models.Model):
     def transcription_settings(self):
         return TranscriptionSettings(self.settings.get("transcription_settings"))
 
+    def google_meet_use_bot_login(self):
+        return self.settings.get("google_meet_settings", {}).get("use_login", False)
+
+    def google_meet_login_mode_is_always(self):
+        return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
+
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
@@ -725,10 +859,20 @@ class Bot(models.Model):
 
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
-        return voice_agent_settings.get("url", None)
+        return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
+
+    def voice_agent_video_output_destination(self):
+        voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
+        if voice_agent_settings.get("url", None):
+            return "webcam"
+        elif voice_agent_settings.get("screenshare_url", None):
+            return "screenshare"
+        else:
+            return None
 
     def should_launch_webpage_streamer(self):
-        return bool(self.voice_agent_url())
+        voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
+        return voice_agent_settings.get("reserve_resources", False)
 
     def zoom_tokens_callback_url(self):
         callback_settings = self.settings.get("callback_settings", {})
@@ -747,6 +891,12 @@ class Bot(models.Model):
         if recording_settings is None:
             recording_settings = {}
         return recording_settings.get("record_chat_messages_when_paused", False)
+
+    def reserve_additional_storage(self):
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+        return recording_settings.get("reserve_additional_storage", False)
 
     def record_async_transcription_audio_chunks(self):
         if not self.project.organization.is_async_transcription_enabled:
@@ -813,11 +963,17 @@ class Bot(models.Model):
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()
 
+    def object_id_prefix(self):
+        if self.session_type == SessionTypes.BOT:
+            return "bot_"
+        else:
+            return "app_"
+
     def save(self, *args, **kwargs):
         if not self.object_id:
             # Generate a random 16-character string
             random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
-            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+            self.object_id = f"{self.object_id_prefix()}{random_string}"
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -831,6 +987,9 @@ class Bot(models.Model):
 
     def automatic_leave_settings(self):
         return self.settings.get("automatic_leave_settings", {})
+
+    def zoom_rtms(self):
+        return self.settings.get("zoom_rtms", {})
 
     class Meta:
         # We'll have to do a periodic query to find bots that have a join_at that is within 5 minutes of now.
@@ -954,6 +1113,12 @@ class BotEventTypes(models.IntegerChoices):
     BOT_BEGAN_LEAVING_BREAKOUT_ROOM = 18, "Bot began leaving breakout room"
     BOT_RECORDING_PERMISSION_DENIED = 19, "Bot recording permission denied"
 
+    # App session events
+    APP_SESSION_CONNECTION_REQUESTED = 100, "App Session Connection Requested"
+    APP_SESSION_CONNECTED = 101, "App Session Connected"
+    APP_SESSION_DISCONNECT_REQUESTED = 102, "App Session Disconnect Requested"
+    APP_SESSION_DISCONNECTED = 103, "App Session Disconnected"
+
     @classmethod
     def type_to_api_code(cls, value):
         """Returns the API code for a given type value"""
@@ -977,6 +1142,10 @@ class BotEventTypes(models.IntegerChoices):
             cls.BOT_BEGAN_JOINING_BREAKOUT_ROOM: "began_joining_breakout_room",
             cls.BOT_BEGAN_LEAVING_BREAKOUT_ROOM: "began_leaving_breakout_room",
             cls.BOT_RECORDING_PERMISSION_DENIED: "recording_permission_denied",
+            cls.APP_SESSION_CONNECTION_REQUESTED: "app_session_connection_requested",
+            cls.APP_SESSION_CONNECTED: "app_session_connected",
+            cls.APP_SESSION_DISCONNECT_REQUESTED: "app_session_disconnect_requested",
+            cls.APP_SESSION_DISCONNECTED: "app_session_disconnected",
         }
         return mapping.get(value)
 
@@ -1042,6 +1211,7 @@ class BotEventSubTypes(models.IntegerChoices):
     BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION = 23, "Bot recording permission denied - Host denied permission"
     BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT = 24, "Bot recording permission denied - Request timed out"
     BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION = 25, "Bot recording permission denied - Host client cannot grant permission"
+    LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS = 26, "Leave requested - Auto leave could not enable closed captions"
 
     @classmethod
     def sub_type_to_api_code(cls, value):
@@ -1072,6 +1242,7 @@ class BotEventSubTypes(models.IntegerChoices):
             cls.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION: "host_denied_permission",
             cls.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT: "request_timed_out",
             cls.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION: "host_client_cannot_grant_permission",
+            cls.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: "auto_leave_could_not_enable_closed_captions",
         }
         return mapping.get(value)
 
@@ -1118,7 +1289,7 @@ class BotEvent(models.Model):
                     (Q(event_type=BotEventTypes.COULD_NOT_JOIN) & (Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_NOT_STARTED_WAITING_FOR_HOST) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_UNABLE_TO_CONNECT_TO_MEETING) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_AUTHORIZATION_FAILED) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LOGIN_REQUIRED) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BOT_LOGIN_ATTEMPT_FAILED) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_MEETING_STATUS_FAILED) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_UNPUBLISHED_ZOOM_APP) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_SDK_INTERNAL_ERROR) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_REQUEST_TO_JOIN_DENIED) | Q(event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_MEETING_NOT_FOUND)))
                     |
                     # For LEAVE_REQUESTED event type, must have one of the valid event subtypes or be null (for backwards compatibility, this will eventually be removed)
-                    (Q(event_type=BotEventTypes.LEAVE_REQUESTED) & (Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED) | Q(event_sub_type__isnull=True)))
+                    (Q(event_type=BotEventTypes.LEAVE_REQUESTED) & (Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_USER_REQUESTED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED) | Q(event_sub_type=BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS) | Q(event_sub_type__isnull=True)))
                     |
                     # For BOT_RECORDING_PERMISSION_DENIED event type, must have one of the valid event subtypes
                     (Q(event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED) & (Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_DENIED_PERMISSION) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_REQUEST_TIMED_OUT) | Q(event_sub_type=BotEventSubTypes.BOT_RECORDING_PERMISSION_DENIED_HOST_CLIENT_CANNOT_GRANT_PERMISSION)))
@@ -1174,6 +1345,9 @@ class BotEventManager:
                 BotStates.SCHEDULED,
                 BotStates.JOINING_BREAKOUT_ROOM,
                 BotStates.LEAVING_BREAKOUT_ROOM,
+                BotStates.CONNECTING,
+                BotStates.DISCONNECTING,
+                BotStates.CONNECTED,
             ],
             "to": BotStates.FATAL_ERROR,
         },
@@ -1260,6 +1434,23 @@ class BotEventManager:
             "from": [BotStates.JOINED_NOT_RECORDING, BotStates.JOINED_RECORDING_PERMISSION_DENIED, BotStates.JOINED_RECORDING, BotStates.JOINED_RECORDING_PAUSED],
             "to": BotStates.JOINED_RECORDING_PERMISSION_DENIED,
         },
+        # App session events
+        BotEventTypes.APP_SESSION_CONNECTION_REQUESTED: {
+            "from": BotStates.READY,
+            "to": BotStates.CONNECTING,
+        },
+        BotEventTypes.APP_SESSION_CONNECTED: {
+            "from": BotStates.CONNECTING,
+            "to": BotStates.CONNECTED,
+        },
+        BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED: {
+            "from": [BotStates.CONNECTED, BotStates.CONNECTING],
+            "to": BotStates.DISCONNECTING,
+        },
+        BotEventTypes.APP_SESSION_DISCONNECTED: {
+            "from": BotStates.DISCONNECTING,
+            "to": BotStates.POST_PROCESSING,
+        },
     }
 
     @classmethod
@@ -1271,6 +1462,8 @@ class BotEventManager:
         event_type = {
             BotStates.JOINING: BotEventTypes.JOIN_REQUESTED,
             BotStates.LEAVING: BotEventTypes.LEAVE_REQUESTED,
+            BotStates.CONNECTING: BotEventTypes.APP_SESSION_CONNECTION_REQUESTED,
+            BotStates.DISCONNECTING: BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED,
         }.get(bot.state)
 
         if event_type is None:
@@ -1300,6 +1493,14 @@ class BotEventManager:
 
     @classmethod
     def is_state_that_can_update_transcription_settings(cls, state: int):
+        return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
+
+    @classmethod
+    def is_state_that_can_change_gallery_view_page(cls, state: int):
+        return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
+
+    @classmethod
+    def is_state_that_can_update_voice_agent_settings(cls, state: int):
         return state == BotStates.JOINED_RECORDING or state == BotStates.JOINED_NOT_RECORDING or state == BotStates.JOINED_RECORDING_PERMISSION_DENIED or state == BotStates.JOINED_RECORDING_PAUSED
 
     @classmethod
@@ -1351,6 +1552,26 @@ class BotEventManager:
         return ~(pre_meeting_q | post_meeting_q)
 
     @classmethod
+    def after_new_state_is_fatal_error(cls, bot: Bot, event_type: BotEventTypes, event_sub_type: BotEventSubTypes, new_state: BotStates):
+        from bots.tasks import send_slack_alert
+
+        # Make sure the event type is FATAL_ERROR, this indicates an unexpected failure
+        if event_type != BotEventTypes.FATAL_ERROR:
+            return
+
+        if not os.getenv("SLACK_WEBHOOK_URL"):
+            return
+
+        # Send a slack webhook if the event type is FATAL_ERROR.
+        # It will include the bot's object id and the event sub type and the last bot resource snapshot.
+        last_bot_resource_snapshot_data = "None found."
+        last_bot_resource_snapshot = bot.resource_snapshots.order_by("-created_at").first()
+        if last_bot_resource_snapshot:
+            last_bot_resource_snapshot_data = json.dumps(last_bot_resource_snapshot.data)
+        message = f"Bot {bot.object_id} encountered a fatal error. Site Domain: {settings.SITE_DOMAIN}. Event sub type: {BotEventSubTypes.sub_type_to_api_code(event_sub_type)}. Last bot resource snapshot: {last_bot_resource_snapshot_data}"
+        send_slack_alert.delay(message)
+
+    @classmethod
     def after_new_state_is_joined_recording(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
         pending_recordings = bot.recordings.filter(state__in=[RecordingStates.NOT_STARTED, RecordingStates.PAUSED])
         if pending_recordings.count() != 1:
@@ -1361,6 +1582,11 @@ class BotEventManager:
             raise ValidationError(f"Expected exactly one pending recording for bot {bot.object_id} in state {BotStates.state_to_api_code(new_state)}, but found {pending_recordings.count()}")
         pending_recording = pending_recordings.first()
         RecordingManager.set_recording_in_progress(pending_recording)
+
+    @classmethod
+    def after_new_state_is_connected(cls, bot: Bot, event_type: BotEventTypes, new_state: BotStates):
+        # It's the same thing as if we moved to joined recording
+        cls.after_new_state_is_joined_recording(bot, event_type, new_state)
 
     @classmethod
     def after_new_state_is_joined_recording_paused(cls, bot: Bot, new_state: BotStates):
@@ -1494,11 +1720,17 @@ class BotEventManager:
                     if new_state == BotStates.JOINED_RECORDING:
                         cls.after_new_state_is_joined_recording(bot=bot, event_type=event_type, new_state=new_state)
 
+                    if new_state == BotStates.CONNECTED:
+                        cls.after_new_state_is_connected(bot=bot, event_type=event_type, new_state=new_state)
+
                     if new_state == BotStates.JOINED_RECORDING_PAUSED:
                         cls.after_new_state_is_joined_recording_paused(bot=bot, new_state=new_state)
 
                     if new_state == BotStates.JOINED_RECORDING_PERMISSION_DENIED:
                         cls.after_new_state_is_joined_recording_permission_denied(bot=bot, new_state=new_state)
+
+                    if new_state == BotStates.FATAL_ERROR:
+                        cls.after_new_state_is_fatal_error(bot=bot, event_type=event_type, event_sub_type=event_sub_type, new_state=new_state)
 
                     # If we transitioned to a post meeting state
                     transitioned_to_post_meeting_state = cls.is_post_meeting_state(new_state) and not cls.is_post_meeting_state(old_state)
@@ -1576,6 +1808,7 @@ class Participant(models.Model):
 class ParticipantEventTypes(models.IntegerChoices):
     JOIN = 1, "Join"
     LEAVE = 2, "Leave"
+    UPDATE = 5, "Update"  # Leave space for possible speech start / stop events
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1583,6 +1816,7 @@ class ParticipantEventTypes(models.IntegerChoices):
         mapping = {
             cls.JOIN: "join",
             cls.LEAVE: "leave",
+            cls.UPDATE: "update",
         }
         return mapping.get(value)
 
@@ -1678,6 +1912,8 @@ class TranscriptionProviders(models.IntegerChoices):
     ASSEMBLY_AI = 5, "Assembly AI"
     SARVAM = 6, "Sarvam"
     ELEVENLABS = 7, "ElevenLabs"
+    KYUTAI = 8, "Kyutai"
+    CUSTOM_ASYNC = 9, "Custom Async"
 
 
 class RecordingStorage(Storage):
@@ -2118,6 +2354,7 @@ class Credentials(models.Model):
         TEAMS_BOT_LOGIN = 8, "Teams Bot Login"
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
+        KYUTAI = 11, "Kyutai"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
