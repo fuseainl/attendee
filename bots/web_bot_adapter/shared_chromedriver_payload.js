@@ -363,6 +363,7 @@ class BotOutputManager {
      * @param {Function} [callbacks.turnOffWebcam]
      * @param {Function} [callbacks.turnOnMic]
      * @param {Function} [callbacks.turnOffMic]
+     * @param {boolean} [callOriginalGetUserMedia=false]
      */
     constructor({
         turnOnWebcam = () => {},
@@ -371,6 +372,7 @@ class BotOutputManager {
         turnOffScreenshare = () => {},
         turnOnMic = () => {},
         turnOffMic = () => {},
+        callOriginalGetUserMedia = false,
     } = {}) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             throw new Error("navigator.mediaDevices.getUserMedia is not available in this context.");
@@ -382,7 +384,8 @@ class BotOutputManager {
         this.turnOffScreenshare = turnOffScreenshare;
         this.turnOnMic = turnOnMic;
         this.turnOffMic = turnOffMic;
-
+        this.callOriginalGetUserMedia = callOriginalGetUserMedia;
+        
         // We don't create the sourceAudioTrack until we need it. Otherwise it will play through the speakers. Not sure why this happens.
         this.sourceAudioTrack = null;
 
@@ -466,21 +469,23 @@ class BotOutputManager {
             }
 
             let originalStream;
-            try {
-                // Call the *original* getUserMedia to trigger permissions, etc.
-                originalStream = await self._originalGetUserMedia(constraints);
-            } catch (err) {
-                console.error("Error from original getUserMedia:", err);
-                throw err; // propagate the same error to the caller
-            }
+            if (self.callOriginalGetUserMedia) {
+                try {
+                    // Call the *original* getUserMedia to trigger permissions, etc.
+                    originalStream = await self._originalGetUserMedia(constraints);
+                } catch (err) {
+                    console.error("Error from original getUserMedia:", err);
+                    throw err; // propagate the same error to the caller
+                }
 
-            // If for some reason we didn't get a stream, just bail out.
-            if (!originalStream || typeof originalStream.getTracks !== "function") {
-                return originalStream;
-            }
+                // If for some reason we didn't get a stream, just bail out.
+                if (!originalStream || typeof originalStream.getTracks !== "function") {
+                    return originalStream;
+                }
 
-            // Stop any real tracks so we’re not actually using the real devices.
-            originalStream.getTracks().forEach(t => t.stop());
+                // Stop any real tracks so we’re not actually using the real devices.
+                originalStream.getTracks().forEach(t => t.stop());
+            }
 
             // Build the virtual stream we want to expose to the app.
             const stream = new MediaStream();
