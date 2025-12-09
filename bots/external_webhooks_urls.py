@@ -2,7 +2,7 @@ from django.urls import path
 
 from . import external_webhooks_views
 
-app_name = "bots"
+app_name = "external_webhooks"
 
 urlpatterns = [
     path(
