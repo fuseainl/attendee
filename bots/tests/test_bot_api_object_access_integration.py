@@ -294,8 +294,10 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         # API key A can delete bot A's async transcription
         response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_a.object_id}/transcript?async_transcription_id={self.async_transcription_a.object_id}", self.api_key_a_plain)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Verify the async transcription was deleted
-        self.assertFalse(AsyncTranscription.objects.filter(object_id=self.async_transcription_a.object_id).exists())
+        # Verify the async transcription was not deleted
+        self.assertTrue(AsyncTranscription.objects.filter(object_id=self.async_transcription_a.object_id).exists())
+        # Verify the utterances were deleted
+        self.assertFalse(Utterance.objects.filter(recording=self.recording_a, async_transcription=self.async_transcription_a).exists())
 
         # API key A cannot delete bot A's transcript with bot B's async transcription (should fail because async transcription belongs to different recording)
         response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_a.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_a_plain)
@@ -310,8 +312,10 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         # API key B can delete bot B's async transcription
         response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_b.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_b_plain)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Verify the async transcription was deleted
-        self.assertFalse(AsyncTranscription.objects.filter(object_id=self.async_transcription_b.object_id).exists())
+        # Verify the async transcription was not deleted
+        self.assertTrue(AsyncTranscription.objects.filter(object_id=self.async_transcription_b.object_id).exists())
+        # Verify the utterances were deleted
+        self.assertFalse(Utterance.objects.filter(recording=self.recording_b, async_transcription=self.async_transcription_b).exists())
 
     # Tests for Recording View (GET /api/bots/<object_id>/recording)
     def test_recording_access_control(self):
