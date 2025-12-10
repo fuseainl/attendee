@@ -144,4 +144,4 @@ Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whis
 
 ### Custom Async (Bring Your Own Platform)
 
-Let's you use your own self-hosted transcription service. This is ideal if you want full control over your transcription infrastructure, need to keep audio data on-premises, or want to use a custom transcription model. See the [Custom Async Transcription](custom_async_transcription.md) page for more details.
+For Attendee self-hosters only. Lets you use your own self-hosted transcription service. See the [Custom Async Transcription](custom_async_transcription.md) page for more details.
