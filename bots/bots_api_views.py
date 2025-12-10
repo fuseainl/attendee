@@ -847,6 +847,63 @@ class TranscriptView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
+    @extend_schema(
+        operation_id="Delete Bot Transcript",
+        summary="Delete the transcript for a bot",
+        description="Deletes transcript utterances. If async_transcription_id is provided, deletes utterances for that async transcription. Otherwise, deletes the default (real-time) transcription utterances.",
+        responses={
+            200: OpenApiResponse(
+                description="Transcript deleted successfully",
+            ),
+            404: OpenApiResponse(description="Bot, recording, or async transcription not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+            OpenApiParameter(
+                name="async_transcription_id",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Optional. If provided, deletes the utterances for the specified async transcription. If not provided, deletes the default (real-time) transcription utterances.",
+                required=False,
+                examples=[OpenApiExample("Async Transcription ID Example", value="tran_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def delete(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            recording = Recording.objects.filter(bot=bot, is_default_recording=True).first()
+            if not recording:
+                return Response(
+                    {"error": "No recording found for bot"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            async_transcription = None
+            if request.query_params.get("async_transcription_id"):
+                async_transcription = recording.async_transcriptions.get(
+                    object_id=request.query_params.get("async_transcription_id"),
+                )
+
+            # Delete all utterances with transcriptions for the given async_transcription
+            Utterance.objects.filter(recording=recording, async_transcription=async_transcription).delete()
+
+            return Response(status=status.HTTP_200_OK)
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+        except AsyncTranscription.DoesNotExist:
+            return Response({"error": "Async Transcription not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class BotDetailView(APIView):
     authentication_classes = [ApiKeyAuthentication]
