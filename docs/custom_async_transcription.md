@@ -1,6 +1,6 @@
 ## Custom Async Transcription
 
-**Bring Your Own Platform** - This provider allows you to use your own self-hosted transcription service. This is ideal if you want full control over your transcription infrastructure, need to keep audio data on-premises, or want to use a custom transcription model.
+The custom async transcription provider allows you to use your own self-hosted transcription service. This is ideal if you want full control over your transcription infrastructure, need to keep audio data on-premises, or want to use a custom transcription model.
 
 Unlike other providers, this does not require credentials in the dashboard. Instead, you configure your service endpoint using environment variables.
 
