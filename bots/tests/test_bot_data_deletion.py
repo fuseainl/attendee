@@ -254,6 +254,12 @@ class TestBotDataDeletion(TransactionTestCase):
         # Create API key for the project
         api_key, api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
 
+        # Set recordings as default recordings (required by the endpoint)
+        self.recording1.is_default_recording = True
+        self.recording1.save()
+        self.recording2.is_default_recording = True
+        self.recording2.save()
+
         # Add transcriptions to utterances so they are considered transcript entries
         self.utterance1.transcription = {"transcript": "Hello from bot 1"}
         self.utterance1.save()
