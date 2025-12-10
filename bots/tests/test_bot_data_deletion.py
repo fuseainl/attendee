@@ -2,10 +2,11 @@ import uuid
 from unittest.mock import PropertyMock, patch
 
 from django.core.files.base import ContentFile
-from django.test import TransactionTestCase
+from django.test import Client, TransactionTestCase
 from django.test.utils import override_settings
+from rest_framework import status
 
-from bots.models import AudioChunk, Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, Utterance, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
+from bots.models import ApiKey, AudioChunk, Bot, BotDebugScreenshot, BotEvent, BotEventTypes, BotStates, ChatMessage, ChatMessageToOptions, Organization, Participant, ParticipantEvent, ParticipantEventTypes, Project, Recording, RecordingStates, Utterance, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes
 
 
 def mock_file_field_delete_sets_name_to_none(instance, save=True):
@@ -247,3 +248,34 @@ class TestBotDataDeletion(TransactionTestCase):
         # Verify state changed to DATA_DELETED
         self.bot1.refresh_from_db()
         self.assertEqual(self.bot1.state, BotStates.DATA_DELETED)
+
+    def test_delete_transcript_deletes_specific_bot_utterances_only(self):
+        """Test that DELETE /transcript only deletes utterances for the specified bot"""
+        # Create API key for the project
+        api_key, api_key_plain = ApiKey.create(project=self.project, name="Test API Key")
+
+        # Add transcriptions to utterances so they are considered transcript entries
+        self.utterance1.transcription = {"transcript": "Hello from bot 1"}
+        self.utterance1.save()
+        self.utterance2.transcription = {"transcript": "Hello from bot 2"}
+        self.utterance2.save()
+
+        # Verify initial state
+        self.assertEqual(Utterance.objects.filter(recording=self.recording1).count(), 1)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording2).count(), 1)
+
+        # Make DELETE request for bot1's transcript
+        client = Client()
+        response = client.delete(
+            f"/api/v1/bots/{self.bot1.object_id}/transcript",
+            HTTP_AUTHORIZATION=f"Token {api_key_plain}",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # Verify bot1's utterances are deleted
+        self.assertEqual(Utterance.objects.filter(recording=self.recording1).count(), 0)
+
+        # Verify bot2's utterances are NOT deleted
+        self.assertEqual(Utterance.objects.filter(recording=self.recording2).count(), 1)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording2).first().transcription, {"transcript": "Hello from bot 2"})
