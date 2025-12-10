@@ -266,6 +266,7 @@ def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
             "zak_token": None,
             "join_token": None,
             "app_privilege_token": local_recording_token,
+            "onbehalf_token": None,
         }
 
     except ZoomAPIAuthenticationError as e:

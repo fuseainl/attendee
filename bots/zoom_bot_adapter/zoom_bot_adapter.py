@@ -902,6 +902,8 @@ class ZoomBotAdapter(BotAdapter):
             param.join_token = self.zoom_tokens.get("join_token")
         if self.zoom_tokens.get("app_privilege_token"):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
+        if self.zoom_tokens.get("onbehalf_token"):
+            param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 

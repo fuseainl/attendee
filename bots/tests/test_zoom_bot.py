@@ -2883,6 +2883,7 @@ class TestZoomBot(TransactionTestCase):
             "zak_token": "fake_zak_token",
             "join_token": "fake_join_token",
             "app_privilege_token": "fake_app_privilege_token",
+            "onbehalf_token": "fake_onbehalf_token",
         }
         mock_requests_post.return_value = mock_response
 
@@ -2930,6 +2931,7 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(join_param.param.userZAK, "fake_zak_token")
         self.assertEqual(join_param.param.join_token, "fake_join_token")
         self.assertEqual(join_param.param.app_privilege_token, "fake_app_privilege_token")
+        self.assertEqual(join_param.param.onBehalfToken, "fake_onbehalf_token")
 
         # Cleanup
         controller.cleanup()
@@ -3050,6 +3052,7 @@ class TestZoomBot(TransactionTestCase):
         # ZAK and join tokens should be MagicMocks when using OAuth
         self.assertIsInstance(join_param.param.userZAK, MagicMock)
         self.assertIsInstance(join_param.param.join_token, MagicMock)
+        self.assertIsInstance(join_param.param.onBehalfToken, MagicMock)
 
         # Cleanup
         controller.cleanup()

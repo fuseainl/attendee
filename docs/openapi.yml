@@ -1872,7 +1872,7 @@ components:
                 tokens the bot will use when it joins the meeting. Our server will
                 make a POST request to this URL with information about the bot and
                 expects a JSON response with the format: {"zak_token": "<zak_token>",
-                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>"}.
+                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}.
                 Not every token needs to be provided, i.e. you can reply with {"zak_token":
                 "<zak_token>"}.'
           required: []
