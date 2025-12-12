@@ -44,6 +44,7 @@ from .models import (
     TranscriptionProviders,
     ZoomOAuthConnection,
     ZoomOAuthConnectionStates,
+    ZoomOAuthConnectionValidScopeSets,
 )
 
 
@@ -2074,11 +2075,23 @@ class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
     zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for")
     authorization_code = serializers.CharField(help_text="The authorization code received from Zoom during the OAuth flow")
     redirect_uri = serializers.CharField(help_text="The redirect URI used to obtain the authorization code")
+    scopes = serializers.CharField(help_text="The scopes requested for the OAuth flow as a comma-separated string.", required=False, default=None)
 
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the Zoom OAuth Connection", required=False, default=None)
 
     def validate_metadata(self, value):
         return _validate_metadata_attribute(value)
+
+    def validate_scopes(self, value):
+        if value is None:
+            value = ZoomOAuthConnectionValidScopeSets.LOCAL_RECORDING_TOKEN
+
+        value = " ".join(sorted(value.split(" ")))
+
+        if value not in ZoomOAuthConnectionValidScopeSets.values:
+            raise serializers.ValidationError(f"Invalid scope set: {value}. Valid scope sets are: {' or '.join(ZoomOAuthConnectionValidScopeSets.values)}")
+
+        return value
 
     def validate(self, data):
         """Validate that no unexpected fields are provided."""

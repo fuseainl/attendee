@@ -74,7 +74,8 @@ def create_zoom_oauth_connection(data, project):
 
     # Validate that the tokens have the required scopes
     scopes_for_token = zoom_oauth_tokens.get("scope", "").split(" ")
-    minimum_scopes_for_token = ["user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"]
+    # Minimum scopes for the token are coming in through the serializer. If it passed validation, it will be one of the scope sets in ZoomOAuthConnectionValidScopeSets.
+    minimum_scopes_for_token = validated_data["scopes"].split(" ")
     missing_scopes = [scope for scope in minimum_scopes_for_token if scope not in scopes_for_token]
     if missing_scopes:
         return None, {"error": f"The authorization is missing the following required scopes: {missing_scopes}."}

@@ -193,6 +193,12 @@ class ZoomOAuthConnectionStates(models.IntegerChoices):
     DISCONNECTED = 2
 
 
+# Valid sets of scopes for a Zoom OAuth Connection. Stored as a comma-separated string. Items are sorted alphabetically to normalize them.
+class ZoomOAuthConnectionValidScopeSets(models.TextChoices):
+    LOCAL_RECORDING_TOKEN = " ".join(sorted(["user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"]))
+    LOCAL_RECORDING_TOKEN_AND_ONBEHALF_TOKEN = " ".join(sorted(["user:read:token", "user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"]))
+
+
 class ZoomOAuthConnection(models.Model):
     OBJECT_ID_PREFIX = "zoc_"
 
