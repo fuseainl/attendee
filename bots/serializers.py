@@ -708,6 +708,15 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "Settings for various aspects of the Zoom Meeting. To use these settings, the bot must have host privileges.",
             },
+            "onbehalf_token": {
+                "type": "object",
+                "properties": {
+                    "zoom_oauth_connection_user_id": {"type": "string"},
+                },
+                "required": ["zoom_oauth_connection_user_id"],
+                "additionalProperties": False,
+                "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1421,6 +1430,15 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 },
                 "required": [],
                 "additionalProperties": False,
+            },
+            "onbehalf_token": {
+                "type": "object",
+                "properties": {
+                    "zoom_oauth_connection_user_id": {"type": "string"},
+                },
+                "required": ["zoom_oauth_connection_user_id"],
+                "additionalProperties": False,
+                "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
         },
         "required": [],

@@ -954,6 +954,9 @@ class Bot(models.Model):
             external_media_storage_settings = {}
         return external_media_storage_settings.get("recording_file_name", None)
 
+    def zoom_onbehalf_token_zoom_oauth_connection_user_id(self):
+        return self.settings.get("zoom_settings", {}).get("onbehalf_token", {}).get("zoom_oauth_connection_user_id", None)
+
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()
 
