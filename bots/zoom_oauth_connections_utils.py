@@ -272,6 +272,7 @@ def get_local_recording_token_via_zoom_oauth_app(bot: Bot) -> str | None:
 
     except ZoomAPIAuthenticationError as e:
         _handle_zoom_api_authentication_error(zoom_oauth_connection, e)
+        logger.exception(f"Failed to get local recording token via zoom oauth app for {meeting_url}: {e}. This was considered an authentication error.")
         return None
 
     except Exception as e:
@@ -300,6 +301,7 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
 
     except ZoomAPIAuthenticationError as e:
         _handle_zoom_api_authentication_error(zoom_oauth_connection, e)
+        logger.exception(f"Failed to get onbehalf token via zoom oauth app with user id {user_id_for_onbehalf_token}: {e}. This was considered an authentication error.")
         return None
 
     except Exception as e:
@@ -308,8 +310,8 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
 
 
 def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
-    local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)
     onbehalf_token = get_onbehalf_token_via_zoom_oauth_app(bot)
+    local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)
 
     return {
         "zak_token": None,
