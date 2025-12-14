@@ -1749,6 +1749,12 @@ class ChatMessageSerializer(serializers.Serializer):
     def get_timestamp_ms(self, obj):
         return obj.timestamp * 1000
 
+class LogSerializer(serializers.Serializer):
+    id = serializers.CharField(source="object_id")
+    message = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+
 
 class ParticipantSerializer(serializers.Serializer):
     id = serializers.CharField(source="object_id")

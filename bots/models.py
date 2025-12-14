@@ -1774,6 +1774,41 @@ class BotEventManager:
                     raise
                 continue
 
+class Log(models.Model):
+    bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
+
+    OBJECT_ID_PREFIX = "log_"
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.bot.object_id} - {self.message}"
+
+class LogManager:
+    @classmethod
+    def create_log(cls, bot: Bot, message: str):
+        log = Log.objects.create(bot=bot, message=message)
+
+        trigger_webhook(
+            webhook_trigger_type=WebhookTriggerTypes.LOG_MESSAGE,
+            bot=bot,
+            payload={
+                "id": log.object_id,
+                "message": log.message,
+                "created_at": log.created_at.isoformat(),
+                "bot_id": bot.object_id,
+            }
+        )
+
+        return log
 
 class Participant(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="participants")
@@ -2711,6 +2746,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     ASYNC_TRANSCRIPTION_STATE_CHANGE = 7, "Async Transcription State Change"
     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
+    LOG_MESSAGE = 9, "Log Message"
     # add other event types here
 
     @classmethod
@@ -2725,6 +2761,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
             cls.ASYNC_TRANSCRIPTION_STATE_CHANGE: "async_transcription.state_change",
             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
+            cls.LOG_MESSAGE: "log.message",
         }
 
     @classmethod
