@@ -265,6 +265,10 @@ def get_local_recording_token_via_zoom_oauth_app(bot: Bot) -> str | None:
 
     zoom_oauth_connection = mapping_for_meeting_id.zoom_oauth_connection
 
+    if not zoom_oauth_connection.is_local_recording_token_supported:
+        logger.info(f"Zoom oauth connection {zoom_oauth_connection.object_id} does not support local recording tokens, skipping")
+        return None
+
     try:
         access_token = _get_access_token(zoom_oauth_connection)
         local_recording_token = _get_local_recording_token(meeting_id, access_token)
@@ -290,8 +294,12 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
     if not zoom_oauth_app:
         return None
 
-    zoom_oauth_connection = ZoomOAuthConnection.objects.filter(zoom_oauth_app=zoom_oauth_app, user_id=user_id_for_onbehalf_token, is_onbehalf_token_supported=True).first()
+    zoom_oauth_connection = ZoomOAuthConnection.objects.filter(zoom_oauth_app=zoom_oauth_app, user_id=user_id_for_onbehalf_token).first()
     if not zoom_oauth_connection:
+        return None
+
+    if not zoom_oauth_connection.is_onbehalf_token_supported:
+        logger.info(f"Zoom oauth connection {zoom_oauth_connection.object_id} does not support onbehalf tokens, skipping")
         return None
 
     try:
