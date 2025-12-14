@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 from celery import shared_task
 
 
-def enqueue_refresh_zoom_oauth_connection_token_task(zoom_oauth_connection: ZoomOAuthConnection):
-    """Enqueue a refresh zoom oauth connection token task for a zoom oauth connection."""
+def enqueue_refresh_zoom_oauth_connection_task(zoom_oauth_connection: ZoomOAuthConnection):
+    """Enqueue a refresh zoom oauth connection task for a zoom oauth connection."""
 
     with transaction.atomic():
         zoom_oauth_connection.token_refresh_task_enqueued_at = timezone.now()
         zoom_oauth_connection.token_refresh_task_requested_at = None
         zoom_oauth_connection.save()
-        refresh_zoom_oauth_connection_token.delay(zoom_oauth_connection.id)
+        refresh_zoom_oauth_connection.delay(zoom_oauth_connection.id)
 
 
 @shared_task(
@@ -27,7 +27,7 @@ def enqueue_refresh_zoom_oauth_connection_token_task(zoom_oauth_connection: Zoom
     retry_backoff=True,  # Enable exponential backoff
     max_retries=6,
 )
-def refresh_zoom_oauth_connection_token(self, zoom_oauth_connection_id):
+def refresh_zoom_oauth_connection(self, zoom_oauth_connection_id):
     """Celery task to refresh the token for a zoom oauth connection."""
     logger.info(f"Refreshing zoom oauth connection token for zoom oauth connection {zoom_oauth_connection_id}")
     zoom_oauth_connection = ZoomOAuthConnection.objects.get(id=zoom_oauth_connection_id)

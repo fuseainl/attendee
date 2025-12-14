@@ -9,7 +9,7 @@ from .send_slack_alert_task import send_slack_alert
 from .sync_calendar_task import sync_calendar
 from .sync_zoom_oauth_connection_task import sync_zoom_oauth_connection
 from .validate_zoom_oauth_connections_task import validate_zoom_oauth_connections
-from .zoom_oauth_connection_token_refresh_task import zoom_oauth_connection_token_refresh
+from .refresh_zoom_oauth_connection_task import refresh_zoom_oauth_connection
 
 # Expose the tasks and any necessary utilities at the module level
 __all__ = [
@@ -22,7 +22,7 @@ __all__ = [
     "autopay_charge",
     "process_async_transcription",
     "sync_zoom_oauth_connection",
-    "zoom_oauth_connection_token_refresh",
+    "refresh_zoom_oauth_connection",
     "validate_zoom_oauth_connections",
     "send_slack_alert",
 ]

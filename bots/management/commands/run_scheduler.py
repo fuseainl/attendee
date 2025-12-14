@@ -11,7 +11,7 @@ from accounts.models import Organization
 from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
-from bots.tasks.refresh_zoom_oauth_connection_token_task import enqueue_refresh_zoom_oauth_connection_token_task
+from bots.tasks.refresh_zoom_oauth_connection_task import enqueue_refresh_zoom_oauth_connection_task
 from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
 from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_connection_task
 
@@ -110,7 +110,7 @@ class Command(BaseCommand):
         for zoom_oauth_connection in zoom_oauth_connections:
             last_enqueued = zoom_oauth_connection.token_refresh_task_enqueued_at.isoformat() if zoom_oauth_connection.token_refresh_task_enqueued_at else "never"
             log.info("Launching zoom oauth connection token refresh for zoom oauth connection %s (last enqueued: %s)", zoom_oauth_connection.object_id, last_enqueued)
-            enqueue_refresh_zoom_oauth_connection_token_task(zoom_oauth_connection)
+            enqueue_refresh_zoom_oauth_connection_task(zoom_oauth_connection)
 
         log.info("Launched %d zoom oauth connection token refresh tasks", len(zoom_oauth_connections))
 
