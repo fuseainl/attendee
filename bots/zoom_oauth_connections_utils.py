@@ -290,7 +290,7 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
     if not zoom_oauth_app:
         return None
 
-    zoom_oauth_connection = ZoomOAuthConnection.objects.filter(zoom_oauth_app=zoom_oauth_app, user_id=user_id_for_onbehalf_token).first()
+    zoom_oauth_connection = ZoomOAuthConnection.objects.filter(zoom_oauth_app=zoom_oauth_app, user_id=user_id_for_onbehalf_token, is_onbehalf_token_supported=True).first()
     if not zoom_oauth_connection:
         return None
 

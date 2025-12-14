@@ -193,12 +193,6 @@ class ZoomOAuthConnectionStates(models.IntegerChoices):
     DISCONNECTED = 2
 
 
-# Valid sets of scopes for a Zoom OAuth Connection. Stored as a comma-separated string. Items are sorted alphabetically to normalize them.
-class ZoomOAuthConnectionValidScopeSets(models.TextChoices):
-    LOCAL_RECORDING_TOKEN = " ".join(sorted(["user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"]))
-    LOCAL_RECORDING_TOKEN_AND_ONBEHALF_TOKEN = " ".join(sorted(["user:read:token", "user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"]))
-
-
 class ZoomOAuthConnection(models.Model):
     OBJECT_ID_PREFIX = "zoc_"
 
@@ -221,10 +215,18 @@ class ZoomOAuthConnection(models.Model):
     sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
     sync_task_requested_at = models.DateTimeField(null=True, blank=True)
 
+    last_attempted_token_refresh_at = models.DateTimeField(null=True, blank=True)
+    last_successful_token_refresh_at = models.DateTimeField(null=True, blank=True)
+    token_refresh_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    token_refresh_task_requested_at = models.DateTimeField(null=True, blank=True)
+
     _encrypted_data = models.BinaryField(
         null=True,
         editable=False,  # Prevents editing through admin/forms
     )
+
+    is_local_recording_token_supported = models.BooleanField(default=True)
+    is_onbehalf_token_supported = models.BooleanField(default=False)
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
