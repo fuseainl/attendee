@@ -2125,6 +2125,8 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
     state = serializers.SerializerMethodField()
     metadata = serializers.SerializerMethodField()
     zoom_oauth_app_id = serializers.CharField(source="zoom_oauth_app.object_id")
+    is_local_recording_token_supported = serializers.BooleanField()
+    is_onbehalf_token_supported = serializers.BooleanField()
 
     @extend_schema_field(
         {
@@ -2153,6 +2155,8 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
             "account_id",
             "state",
             "metadata",
+            "is_local_recording_token_supported",
+            "is_onbehalf_token_supported",
             "connection_failure_data",
             "created_at",
             "updated_at",
