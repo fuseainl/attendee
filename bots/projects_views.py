@@ -181,7 +181,7 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             return redirect("/")
 
         # Quick start guide status checks
-        zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).exists()
+        zoom_credentials = project.zoom_oauth_apps.exists() or Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).exists()
 
         deepgram_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.DEEPGRAM).exists()
 
