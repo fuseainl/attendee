@@ -215,10 +215,18 @@ class ZoomOAuthConnection(models.Model):
     sync_task_enqueued_at = models.DateTimeField(null=True, blank=True)
     sync_task_requested_at = models.DateTimeField(null=True, blank=True)
 
+    last_attempted_token_refresh_at = models.DateTimeField(null=True, blank=True)
+    last_successful_token_refresh_at = models.DateTimeField(null=True, blank=True)
+    token_refresh_task_enqueued_at = models.DateTimeField(null=True, blank=True)
+    token_refresh_task_requested_at = models.DateTimeField(null=True, blank=True)
+
     _encrypted_data = models.BinaryField(
         null=True,
         editable=False,  # Prevents editing through admin/forms
     )
+
+    is_local_recording_token_supported = models.BooleanField(default=True)
+    is_onbehalf_token_supported = models.BooleanField(default=False)
 
     def set_credentials(self, credentials_dict):
         """Encrypt and save credentials"""
@@ -947,6 +955,9 @@ class Bot(models.Model):
         if external_media_storage_settings is None:
             external_media_storage_settings = {}
         return external_media_storage_settings.get("recording_file_name", None)
+
+    def zoom_onbehalf_token_zoom_oauth_connection_user_id(self):
+        return self.settings.get("zoom_settings", {}).get("onbehalf_token", {}).get("zoom_oauth_connection_user_id", None)
 
     def last_bot_event(self):
         return self.bot_events.order_by("-created_at").first()

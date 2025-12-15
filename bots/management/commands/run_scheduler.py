@@ -11,6 +11,7 @@ from accounts.models import Organization
 from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
 from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
+from bots.tasks.refresh_zoom_oauth_connection_task import enqueue_refresh_zoom_oauth_connection_task
 from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
 from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_connection_task
 
@@ -49,6 +50,7 @@ class Command(BaseCommand):
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
                 self._run_periodic_zoom_oauth_connection_syncs()
+                self._run_periodic_zoom_oauth_connection_token_refreshs()
                 self._run_autopay_tasks()
             except Exception:
                 log.exception("Scheduler cycle failed")
@@ -93,6 +95,25 @@ class Command(BaseCommand):
 
         log.info("Launched %d calendar sync tasks", len(calendars))
 
+    def _run_periodic_zoom_oauth_connection_token_refreshs(self):
+        """
+        Run periodic zoom oauth connection token refreshs.
+        Launch token refresh tasks for zoom oauth connections that haven't had a token refresh task enqueued in the last 30 days.
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(days=30)
+
+        zoom_oauth_connections = ZoomOAuthConnection.objects.filter(
+            state=ZoomOAuthConnectionStates.CONNECTED,
+        ).filter(Q(token_refresh_task_enqueued_at__isnull=True) | Q(token_refresh_task_enqueued_at__lte=cutoff_time) | Q(token_refresh_task_requested_at__isnull=False))
+
+        for zoom_oauth_connection in zoom_oauth_connections:
+            last_enqueued = zoom_oauth_connection.token_refresh_task_enqueued_at.isoformat() if zoom_oauth_connection.token_refresh_task_enqueued_at else "never"
+            log.info("Launching zoom oauth connection token refresh for zoom oauth connection %s (last enqueued: %s)", zoom_oauth_connection.object_id, last_enqueued)
+            enqueue_refresh_zoom_oauth_connection_task(zoom_oauth_connection)
+
+        log.info("Launched %d zoom oauth connection token refresh tasks", len(zoom_oauth_connections))
+
     def _run_periodic_zoom_oauth_connection_syncs(self):
         """
         Run periodic zoom oauth connection syncs.
@@ -104,6 +125,7 @@ class Command(BaseCommand):
         # Find connected zoom oauth connections that haven't had a sync task enqueued in the last 7 days
         zoom_oauth_connections = ZoomOAuthConnection.objects.filter(
             state=ZoomOAuthConnectionStates.CONNECTED,
+            is_local_recording_token_supported=True,
         ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))
 
         for zoom_oauth_connection in zoom_oauth_connections:

@@ -2883,6 +2883,7 @@ class TestZoomBot(TransactionTestCase):
             "zak_token": "fake_zak_token",
             "join_token": "fake_join_token",
             "app_privilege_token": "fake_app_privilege_token",
+            "onbehalf_token": "fake_onbehalf_token",
         }
         mock_requests_post.return_value = mock_response
 
@@ -2930,6 +2931,7 @@ class TestZoomBot(TransactionTestCase):
         self.assertEqual(join_param.param.userZAK, "fake_zak_token")
         self.assertEqual(join_param.param.join_token, "fake_join_token")
         self.assertEqual(join_param.param.app_privilege_token, "fake_app_privilege_token")
+        self.assertEqual(join_param.param.onBehalfToken, "fake_onbehalf_token")
 
         # Cleanup
         controller.cleanup()
@@ -2944,7 +2946,130 @@ class TestZoomBot(TransactionTestCase):
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
     @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
-    def test_bot_uses_zoom_oauth_app_tokens(
+    def test_bot_uses_zoom_oauth_app_onbehalf_token(
+        self,
+        MockFileUploader,
+        mock_jwt,
+        mock_zoom_sdk_adapter,
+        mock_zoom_sdk_video,
+        mock_zoom_api_request,
+        mock_requests_post,
+    ):
+        # Configure the mock class to return our mock instance
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the JWT token generation
+        mock_jwt.encode.return_value = "fake_jwt_token"
+
+        # Create ZoomOAuthApp
+        zoom_oauth_app = self.zoom_oauth_app
+
+        # Create ZoomOAuthConnection
+        zoom_oauth_connection = ZoomOAuthConnection.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            user_id="test_user_id",
+            account_id="test_account_id",
+            is_onbehalf_token_supported=True,
+        )
+        zoom_oauth_connection.set_credentials(
+            {
+                "access_token": "test_access_token",
+                "refresh_token": "test_refresh_token",
+            }
+        )
+
+        # Create mapping for the meeting
+        meeting_id = "123456789"
+        self.bot.meeting_url = f"https://zoom.us/j/{meeting_id}"
+        self.bot.settings = {
+            "zoom_settings": {
+                "onbehalf_token": {
+                    "zoom_oauth_connection_user_id": "test_user_id",
+                },
+            },
+        }
+        self.bot.save()
+
+        # Mock the token refresh response
+        mock_token_response = MagicMock()
+        mock_token_response.status_code = 200
+        mock_token_response.json.return_value = {
+            "access_token": "refreshed_access_token",
+            "refresh_token": "new_refresh_token",
+        }
+        mock_requests_post.return_value = mock_token_response
+
+        # Mock the local recording token API response
+        mock_zoom_api_request.return_value = {
+            "token": "fake_onbehalf_token",
+        }
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        def simulate_auth_flow():
+            # Allow some time for the bot to initialize
+            time.sleep(2)
+
+            # The adapter should be created by now
+            if not hasattr(controller, "adapter") or not controller.adapter:
+                connection.close()
+                return  # fail silently and let the main thread assertions fail
+
+            # Simulate successful auth, which will then trigger the Join call
+            controller.adapter.auth_event.onAuthenticationReturnCallback(mock_zoom_sdk_adapter.AUTHRET_SUCCESS)
+
+            # Clean up connections in thread
+            connection.close()
+
+        # Run auth flow simulation after a short delay
+        threading.Timer(1, simulate_auth_flow).start()
+
+        # Give the bot some time to process. It will be in the main loop.
+        time.sleep(4)
+
+        # Verify token refresh was called
+        mock_requests_post.assert_called_once()
+        call_args = mock_requests_post.call_args
+        self.assertEqual(call_args.kwargs["data"]["grant_type"], "refresh_token")
+        self.assertEqual(call_args.kwargs["data"]["refresh_token"], "test_refresh_token")
+
+        # Verify Zoom API request for local recording token was called
+        mock_zoom_api_request.assert_called_once()
+        api_call_args = mock_zoom_api_request.call_args
+        self.assertIn("/users/me/token", api_call_args[0][0])
+        self.assertEqual(api_call_args[0][1], "refreshed_access_token")
+
+        # Verify that meeting_service.Join was called with the correct tokens
+        controller.adapter.meeting_service.Join.assert_called_once()
+        join_call_args = controller.adapter.meeting_service.Join.call_args
+        join_param = join_call_args.args[0]
+        self.assertEqual(join_param.param.onBehalfToken, "fake_onbehalf_token")
+        # ZAK and join tokens should be MagicMocks when using OAuth
+        self.assertIsInstance(join_param.param.userZAK, MagicMock)
+        self.assertIsInstance(join_param.param.join_token, MagicMock)
+        self.assertIsInstance(join_param.param.app_privilege_token, MagicMock)
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+    @patch("bots.zoom_oauth_connections_utils.requests.post")
+    @patch("bots.zoom_oauth_connections_utils._make_zoom_api_request")
+    @patch(
+        "bots.zoom_bot_adapter.video_input_manager.zoom",
+        new_callable=create_mock_zoom_sdk,
+    )
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.zoom", new_callable=create_mock_zoom_sdk)
+    @patch("bots.zoom_bot_adapter.zoom_bot_adapter.jwt")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_bot_uses_zoom_oauth_app_local_recording_token(
         self,
         MockFileUploader,
         mock_jwt,
@@ -3050,6 +3175,7 @@ class TestZoomBot(TransactionTestCase):
         # ZAK and join tokens should be MagicMocks when using OAuth
         self.assertIsInstance(join_param.param.userZAK, MagicMock)
         self.assertIsInstance(join_param.param.join_token, MagicMock)
+        self.assertIsInstance(join_param.param.onBehalfToken, MagicMock)
 
         # Cleanup
         controller.cleanup()
