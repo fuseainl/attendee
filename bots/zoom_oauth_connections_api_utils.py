@@ -55,9 +55,15 @@ def create_zoom_oauth_connection(data, project):
     # Validate that the Zoom OAuth App exists in the project
     zoom_oauth_app = None
     try:
-        zoom_oauth_app = ZoomOAuthApp.objects.get(object_id=validated_data["zoom_oauth_app_id"], project=project)
+        if validated_data["zoom_oauth_app_id"]:
+            zoom_oauth_app = ZoomOAuthApp.objects.get(object_id=validated_data["zoom_oauth_app_id"], project=project)
+        else:
+            zoom_oauth_app = ZoomOAuthApp.objects.get(project=project)
     except ZoomOAuthApp.DoesNotExist:
-        return None, {"error": f"Zoom OAuth App with id {validated_data['zoom_oauth_app_id']} does not exist in this project."}
+        if validated_data["zoom_oauth_app_id"]:
+            return None, {"error": f"Zoom OAuth App with id {validated_data['zoom_oauth_app_id']} does not exist in this project ({project.name})."}
+        else:
+            return None, {"error": f"No Zoom OAuth App found in this project ({project.name}). Please add a Zoom OAuth App first."}
 
     # Exchange the access code for tokens
     zoom_oauth_tokens = None
