@@ -662,7 +662,6 @@ def get_transcription_via_custom_async(utterance):
     # Get additional properties from settings
     additional_props = transcription_settings.custom_async_additional_props()
 
-
     payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
 
     files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}

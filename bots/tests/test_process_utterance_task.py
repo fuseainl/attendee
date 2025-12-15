@@ -1630,6 +1630,7 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(data["custom_param"], "test_value")
             # Verify nested dict/list are converted to JSON string
             import json
+
             self.assertEqual(data["nested_param"], json.dumps({"key": "value", "list": [1, 2, 3]}))
 
     def test_missing_env_url(self):
