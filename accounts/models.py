@@ -16,7 +16,7 @@ class Organization(models.Model):
     version = IntegerVersionField()
     is_webhooks_enabled = models.BooleanField(default=True)
     is_async_transcription_enabled = models.BooleanField(default=False)
-    is_managed_zoom_oauth_enabled = models.BooleanField(default=False)
+    is_managed_zoom_oauth_enabled = models.BooleanField(default=True)
     is_app_sessions_enabled = models.BooleanField(default=False)
 
     autopay_enabled = models.BooleanField(default=False)

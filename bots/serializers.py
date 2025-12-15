@@ -2089,7 +2089,7 @@ class AsyncTranscriptionSerializer(serializers.ModelSerializer):
 
 
 class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
-    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for")
+    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for", required=False, default=None)
     authorization_code = serializers.CharField(help_text="The authorization code received from Zoom during the OAuth flow")
     redirect_uri = serializers.CharField(help_text="The redirect URI used to obtain the authorization code")
     is_local_recording_token_supported = serializers.BooleanField(help_text="Whether the Zoom OAuth Connection supports generating local recording tokens", required=False, default=True)

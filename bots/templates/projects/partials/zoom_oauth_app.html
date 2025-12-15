@@ -1,10 +1,13 @@
 <div id="zoom-oauth-app-partial">
     <div class="card mt-4" id="zoom-oauth-app-container">
         <div class="card-header">
-            <h5 class="mb-0">Zoom OAuth App</h5>
-            {% if zoom_oauth_app %}
-            <code class="me-2">{{ zoom_oauth_app.object_id }}</code>
-            {% endif %}
+            <h5 class="mb-0">Zoom OAuth App Credentials</h5>
+            <!-- Simplify UI for now, no need to show the object id since we are assuming one zoom oauth app per project -->
+            {% comment %}
+                {% if zoom_oauth_app %}
+                <code class="me-2">{{ zoom_oauth_app.object_id }}</code>
+                {% endif %}
+            {% endcomment %}
         </div>
         <div class="card-body">
             <div id="credentials-status">
@@ -104,7 +107,7 @@
                         </div>
                         
                         <div class="mb-3">
-                            <label for="webhook_secret" class="form-label">Webhook Secret</label>
+                            <label for="webhook_secret" class="form-label">Webhook Secret (optional)</label>
                             <input type="text" 
                                 class="form-control" 
                                 id="webhook_secret" 

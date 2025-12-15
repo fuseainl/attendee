@@ -55,9 +55,15 @@ def create_zoom_oauth_connection(data, project):
     # Validate that the Zoom OAuth App exists in the project
     zoom_oauth_app = None
     try:
-        zoom_oauth_app = ZoomOAuthApp.objects.get(object_id=validated_data["zoom_oauth_app_id"], project=project)
+        if validated_data["zoom_oauth_app_id"]:
+            zoom_oauth_app = ZoomOAuthApp.objects.get(object_id=validated_data["zoom_oauth_app_id"], project=project)
+        else:
+            zoom_oauth_app = ZoomOAuthApp.objects.get(project=project)
     except ZoomOAuthApp.DoesNotExist:
-        return None, {"error": f"Zoom OAuth App with id {validated_data['zoom_oauth_app_id']} does not exist in this project."}
+        if validated_data["zoom_oauth_app_id"]:
+            return None, {"error": f"Zoom OAuth App with id {validated_data['zoom_oauth_app_id']} does not exist in this project ({project.name})."}
+        else:
+            return None, {"error": f"No Zoom OAuth App found in this project ({project.name}). Please add a Zoom OAuth App first."}
 
     # Exchange the access code for tokens
     zoom_oauth_tokens = None
@@ -80,7 +86,9 @@ def create_zoom_oauth_connection(data, project):
     if validated_data.get("is_local_recording_token_supported"):
         minimum_scopes_for_token.extend(["user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"])
     if validated_data.get("is_onbehalf_token_supported"):
-        minimum_scopes_for_token.extend(["user:read:token"])
+        minimum_scopes_for_token.extend(["user:read:user", "user:read:token"])
+    # Uniqify the scopes
+    minimum_scopes_for_token = list(set(minimum_scopes_for_token))
 
     missing_scopes = [scope for scope in minimum_scopes_for_token if scope not in scopes_for_token]
     if missing_scopes:
