@@ -1774,6 +1774,7 @@ class BotEventManager:
                     raise
                 continue
 
+
 class LogLevels(models.IntegerChoices):
     DEBUG = 1, "Debug"
     INFO = 2, "Info"
@@ -1788,7 +1789,7 @@ class LogLevels(models.IntegerChoices):
             cls.WARNING: "warning",
             cls.ERROR: "error",
         }.get(value)
-    
+
     @classmethod
     def api_code_to_level(cls, api_code):
         return {
@@ -1797,6 +1798,7 @@ class LogLevels(models.IntegerChoices):
             "warning": cls.WARNING,
             "error": cls.ERROR,
         }.get(api_code)
+
 
 class Log(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
@@ -1817,6 +1819,7 @@ class Log(models.Model):
     def __str__(self):
         return f"{self.bot.object_id} - {self.message}"
 
+
 class LogManager:
     @classmethod
     def create_log(cls, bot: Bot, message: str):
@@ -1830,10 +1833,11 @@ class LogManager:
                 "level": LogLevels.level_to_api_code(log.level),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
-            }
+            },
         )
 
         return log
+
 
 class Participant(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="participants")
