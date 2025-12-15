@@ -19,7 +19,7 @@ from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
-from bots.models import ParticipantEventTypes, RecordingViews
+from bots.models import LogEventTypes, LogLevels, LogManager, ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
@@ -852,7 +852,9 @@ class WebBotAdapter(BotAdapter):
 
     def could_not_enable_closed_captions(self):
         if self.automatic_leave_configuration.enable_closed_captions_timeout_seconds is not None:
-            logger.info("Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
+            message = "Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting"   
+            logger.info(message)
+            LogManager.create_log(bot=self.bot_in_db, level=LogLevels.WARNING, event_type=LogEventTypes.CLOSED_CAPTIONS_DISABLED, message=message)
             self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS})
 
     def get_first_buffer_timestamp_ms(self):

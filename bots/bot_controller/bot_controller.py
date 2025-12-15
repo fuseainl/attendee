@@ -1658,9 +1658,6 @@ class BotController:
                 BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS,
             }[message.get("leave_reason")]
 
-            if message.get("leave_reason") == BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS:
-                LogManager.create_log(bot=self.bot_in_db, level=LogLevels.WARNING, message="Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
-
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=event_sub_type_for_reason)
             BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
             self.adapter.leave()

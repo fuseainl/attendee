@@ -1790,19 +1790,25 @@ class LogLevels(models.IntegerChoices):
             cls.ERROR: "error",
         }.get(value)
 
+class LogEventTypes(models.IntegerChoices):
+    """These are events that have to do with a bot that aren't big enough to merit a bot state change, but a user may care about"""
+    UNCATEGORIZED = 0, "Uncategorized"
+    CLOSED_CAPTIONS_DISABLED = 1, "Closed captions disabled"
+
     @classmethod
-    def api_code_to_level(cls, api_code):
-        return {
-            "debug": cls.DEBUG,
-            "info": cls.INFO,
-            "warning": cls.WARNING,
-            "error": cls.ERROR,
-        }.get(api_code)
+    def type_to_api_code(cls, value):
+        """Returns the API code for a given type value"""
+        mapping = {
+            cls.UNCATEGORIZED: "uncategorized",
+            cls.CLOSED_CAPTIONS_DISABLED: "closed_captions_disabled",
+        }
+        return mapping.get(value)
 
 
 class Log(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
     level = models.IntegerField(choices=LogLevels.choices, default=LogLevels.INFO, null=False)
+    event_type = models.IntegerField(choices=LogEventTypes.choices, default=LogEventTypes.UNCATEGORIZED, null=False)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
@@ -1831,6 +1837,7 @@ class LogManager:
             payload={
                 "id": log.object_id,
                 "level": LogLevels.level_to_api_code(log.level),
+                "event_type": LogEventTypes.type_to_api_code(log.event_type),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
             },
