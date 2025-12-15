@@ -87,6 +87,8 @@ def create_zoom_oauth_connection(data, project):
         minimum_scopes_for_token.extend(["user:read:user", "user:read:zak", "meeting:read:list_meetings", "meeting:read:local_recording_token"])
     if validated_data.get("is_onbehalf_token_supported"):
         minimum_scopes_for_token.extend(["user:read:user", "user:read:token"])
+    # Uniqify the scopes
+    minimum_scopes_for_token = list(set(minimum_scopes_for_token))
 
     missing_scopes = [scope for scope in minimum_scopes_for_token if scope not in scopes_for_token]
     if missing_scopes:
