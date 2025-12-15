@@ -851,10 +851,13 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
 
     def could_not_enable_closed_captions(self):
+        LogManager.create_log(
+            bot=self.bot_in_db,
+            level=LogLevels.WARNING, 
+            event_type=LogEventTypes.CLOSED_CAPTIONS_DISABLED, 
+            message="Bot could not enable closed captions")    
         if self.automatic_leave_configuration.enable_closed_captions_timeout_seconds is not None:
-            message = "Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting"   
-            logger.info(message)
-            LogManager.create_log(bot=self.bot_in_db, level=LogLevels.WARNING, event_type=LogEventTypes.CLOSED_CAPTIONS_DISABLED, message=message)
+            logger.info("Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
             self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS})
 
     def get_first_buffer_timestamp_ms(self):
