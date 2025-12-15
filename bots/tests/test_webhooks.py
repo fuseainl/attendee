@@ -11,8 +11,8 @@ from accounts.models import User
 from bots.models import (
     Bot,
     BotStates,
-    LogLevels,
-    LogManager,
+    BotLogLevels,
+    BotLogManager,
     Organization,
     Project,
     WebhookDeliveryAttempt,
@@ -512,7 +512,7 @@ class WebhookDeliveryTest(TransactionTestCase):
         mock_post.return_value.status_code = 200
         mock_post.return_value.text = "OK"
 
-        log = LogManager.create_log(bot=self.bot, level=LogLevels.WARNING, message="Test log message")
+        log = BotLogManager.create_bot_log(bot=self.bot, level=BotLogLevels.WARNING, message="Test log message")
 
         # Call delivery task
         deliver_webhook.apply(args=[log.id])

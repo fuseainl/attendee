@@ -39,8 +39,6 @@ from bots.models import (
     Credentials,
     GoogleMeetBotLogin,
     GoogleMeetBotLoginGroup,
-    LogLevels,
-    LogManager,
     MeetingTypes,
     Participant,
     ParticipantEvent,
@@ -241,6 +239,7 @@ class BotController:
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomWebBotAdapter(
+            bot=self.bot_in_db,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=add_audio_chunk_callback,

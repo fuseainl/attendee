@@ -1775,7 +1775,7 @@ class BotEventManager:
                 continue
 
 
-class LogLevels(models.IntegerChoices):
+class BotLogLevels(models.IntegerChoices):
     DEBUG = 1, "Debug"
     INFO = 2, "Info"
     WARNING = 3, "Warning"
@@ -1790,7 +1790,7 @@ class LogLevels(models.IntegerChoices):
             cls.ERROR: "error",
         }.get(value)
 
-class LogEventTypes(models.IntegerChoices):
+class BotLogEventTypes(models.IntegerChoices):
     """These are events that have to do with a bot that aren't big enough to merit a bot state change, but a user may care about"""
     UNCATEGORIZED = 0, "Uncategorized"
     CLOSED_CAPTIONS_DISABLED = 1, "Closed captions disabled"
@@ -1805,10 +1805,10 @@ class LogEventTypes(models.IntegerChoices):
         return mapping.get(value)
 
 
-class Log(models.Model):
+class BotLog(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
-    level = models.IntegerField(choices=LogLevels.choices, default=LogLevels.INFO, null=False)
-    event_type = models.IntegerField(choices=LogEventTypes.choices, default=LogEventTypes.UNCATEGORIZED, null=False)
+    level = models.IntegerField(choices=BotLogLevels.choices, default=BotLogLevels.INFO, null=False)
+    event_type = models.IntegerField(choices=BotLogEventTypes.choices, default=BotLogEventTypes.UNCATEGORIZED, null=False)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
@@ -1826,18 +1826,18 @@ class Log(models.Model):
         return f"{self.bot.object_id} - {self.message}"
 
 
-class LogManager:
+class BotLogManager:
     @classmethod
-    def create_log(cls, bot: Bot, message: str):
-        log = Log.objects.create(bot=bot, message=message)
+    def create_bot_log(cls, bot: Bot, message: str):
+        log = BotLog.objects.create(bot=bot, message=message)
 
         trigger_webhook(
             webhook_trigger_type=WebhookTriggerTypes.LOG_MESSAGE,
             bot=bot,
             payload={
                 "id": log.object_id,
-                "level": LogLevels.level_to_api_code(log.level),
-                "event_type": LogEventTypes.type_to_api_code(log.event_type),
+                "level": BotLogLevels.level_to_api_code(log.level),
+                "event_type": BotLogEventTypes.type_to_api_code(log.event_type),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
             },
