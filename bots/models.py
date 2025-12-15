@@ -1774,8 +1774,33 @@ class BotEventManager:
                     raise
                 continue
 
+class LogLevels(models.IntegerChoices):
+    DEBUG = 1, "Debug"
+    INFO = 2, "Info"
+    WARNING = 3, "Warning"
+    ERROR = 4, "Error"
+
+    @classmethod
+    def level_to_api_code(cls, value):
+        return {
+            cls.DEBUG: "debug",
+            cls.INFO: "info",
+            cls.WARNING: "warning",
+            cls.ERROR: "error",
+        }.get(value)
+    
+    @classmethod
+    def api_code_to_level(cls, api_code):
+        return {
+            "debug": cls.DEBUG,
+            "info": cls.INFO,
+            "warning": cls.WARNING,
+            "error": cls.ERROR,
+        }.get(api_code)
+
 class Log(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
+    level = models.IntegerField(choices=LogLevels.choices, default=LogLevels.INFO, null=False)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
@@ -1802,9 +1827,9 @@ class LogManager:
             bot=bot,
             payload={
                 "id": log.object_id,
+                "level": LogLevels.level_to_api_code(log.level),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
-                "bot_id": bot.object_id,
             }
         )
 

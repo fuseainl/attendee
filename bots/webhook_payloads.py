@@ -1,4 +1,4 @@
-from bots.serializers import CalendarSerializer, ChatMessageSerializer, LogSerializer, ParticipantEventSerializer, ZoomOAuthConnectionSerializer
+from bots.serializers import CalendarSerializer, ChatMessageSerializer, ParticipantEventSerializer, ZoomOAuthConnectionSerializer
 
 
 def chat_message_webhook_payload(chat_message):
@@ -15,10 +15,6 @@ def utterance_webhook_payload(utterance):
         "duration_ms": utterance.duration_ms,
         "transcription": {"transcript": utterance.transcription.get("transcript")} if utterance.transcription else None,
     }
-
-
-def log_webhook_payload(log):
-    return LogSerializer(log).data
 
 
 def participant_event_webhook_payload(participant_event):
