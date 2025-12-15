@@ -21,10 +21,12 @@ def convert_zoom_credentials_to_zoom_oauth_apps(apps, schema_editor):
     for credential in zoom_credentials:
         # Check if a ZoomOAuthApp already exists for this project
         if ZoomOAuthApp.objects.filter(project=credential.project).exists():
+            print(f"ZoomOAuthApp already exists for project {credential.project.name}, skipping")
             continue
 
         # Decrypt the credential data
         if not credential._encrypted_data:
+            print(f"No encrypted data for credential {credential.id} in project {credential.project.name}, skipping")
             continue
 
         f = Fernet(settings.CREDENTIALS_ENCRYPTION_KEY)
@@ -35,6 +37,7 @@ def convert_zoom_credentials_to_zoom_oauth_apps(apps, schema_editor):
         client_secret = credentials_dict.get('client_secret')
 
         if not client_id or not client_secret:
+            print(f"No client id or client secret for credential {credential.id} in project {credential.project.name}, skipping")
             continue
 
         # Generate object_id for the new ZoomOAuthApp
