@@ -118,14 +118,14 @@ class ZoomWebUIMethods:
                 try:
                     is_waiting_for_host_to_start_meeting = self.driver.find_element(
                         By.XPATH,
-                        '//*[contains(text(), "for host to start the meeting")]',
+                        '//*[contains(text(), "host to start the meeting")]',
                     ).is_displayed()
                 except:
                     is_waiting_for_host_to_start_meeting = False
 
                 # If we switch from waiting for the host to start the meeting to waiting to be admitted to the meeting, then we need to reset the timeout
                 if previous_is_waiting_for_host_to_start_meeting != is_waiting_for_host_to_start_meeting:
-                    logger.info("Switching from waiting for the host to start the meeting to waiting to be admitted to the meeting. Resetting timeout")
+                    logger.info(f"is_waiting_for_host_to_start_meeting changed from {previous_is_waiting_for_host_to_start_meeting} to {is_waiting_for_host_to_start_meeting}. Resetting timeout")
                     timeout_started_at = time.time()
 
                 self.check_if_timeout_exceeded(timeout_started_at=timeout_started_at, step="wait_to_be_admitted_to_meeting", is_waiting_for_host_to_start_meeting=is_waiting_for_host_to_start_meeting)
