@@ -1828,8 +1828,8 @@ class BotLog(models.Model):
 
 class BotLogManager:
     @classmethod
-    def create_bot_log(cls, bot: Bot, message: str):
-        log = BotLog.objects.create(bot=bot, message=message)
+    def create_bot_log(cls, bot: Bot, level: BotLogLevels, event_type: BotLogEventTypes, message: str):
+        log = BotLog.objects.create(bot=bot, level=level, event_type=event_type, message=message)
 
         trigger_webhook(
             webhook_trigger_type=WebhookTriggerTypes.LOG_MESSAGE,
