@@ -10,9 +10,6 @@ from django.test import TransactionTestCase
 from accounts.models import User
 from bots.models import (
     Bot,
-    BotLogEventTypes,
-    BotLogLevels,
-    BotLogManager,
     BotStates,
     Organization,
     Project,
