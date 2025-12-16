@@ -30,6 +30,9 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogEventTypes,
+    BotLogLevels,
+    BotLogManager,
     BotMediaRequestManager,
     BotMediaRequestMediaTypes,
     BotMediaRequestStates,
@@ -239,7 +242,6 @@ class BotController:
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomWebBotAdapter(
-            bot=self.bot_in_db,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
             add_audio_chunk_callback=add_audio_chunk_callback,
@@ -1645,6 +1647,11 @@ class BotController:
                     )
 
             self.cleanup()
+            return
+        
+        if message.get("message") == BotAdapter.Messages.LOG_COULD_NOT_ENABLE_CLOSED_CAPTIONS:
+            logger.info("Received message that bot could not enable closed captions")
+            BotLogManager.create_bot_log(bot=self.bot_in_db, level=BotLogLevels.WARNING, event_type=BotLogEventTypes.CLOSED_CAPTIONS_DISABLED, message="Bot could not enable closed captions")
             return
 
         if message.get("message") == BotAdapter.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING:

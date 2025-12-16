@@ -19,7 +19,7 @@ from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
-from bots.models import BotLogEventTypes, BotLogLevels, BotLogManager, ParticipantEventTypes, RecordingViews
+from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
@@ -32,7 +32,6 @@ class WebBotAdapter(BotAdapter):
     def __init__(
         self,
         *,
-        bot=None,
         display_name,
         send_message_callback,
         meeting_url,
@@ -53,7 +52,6 @@ class WebBotAdapter(BotAdapter):
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
     ):
-        self.bot = bot
         self.display_name = display_name
         self.send_message_callback = send_message_callback
         self.add_audio_chunk_callback = add_audio_chunk_callback
@@ -853,16 +851,8 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
 
     def could_not_enable_closed_captions(self):
-        if getattr(self, "bot", None) is not None:
-            BotLogManager.create_bot_log(
-                bot=self.bot,
-                level=BotLogLevels.WARNING,
-                event_type=BotLogEventTypes.CLOSED_CAPTIONS_DISABLED,
-                message="Bot could not enable closed captions",
-            )
-        else:
-            logger.warning("Bot could not enable closed captions (no bot model provided to adapter)")
-        
+        self.send_message_callback({"message": self.Messages.LOG_COULD_NOT_ENABLE_CLOSED_CAPTIONS})
+        # Leave meeting if configured to do so
         if self.automatic_leave_configuration.enable_closed_captions_timeout_seconds is not None:
             logger.info("Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
             self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS})
