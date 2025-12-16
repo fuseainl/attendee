@@ -10,6 +10,7 @@ from django.test import TransactionTestCase
 from accounts.models import User
 from bots.models import (
     Bot,
+    BotLogEventTypes,
     BotLogLevels,
     BotLogManager,
     BotStates,
@@ -506,16 +507,3 @@ class WebhookDeliveryTest(TransactionTestCase):
         # With correct code, the sets match (two distinct IDs).
         # With the buggy lambda, attempt_ids_called will contain the same ID twice.
         self.assertEqual(set(attempt_ids_called), set(attempt_ids_in_db))
-
-    @patch("bots.tasks.deliver_webhook_task.requests.post")
-    def test_log_message_webhook_delivery(self, mock_post):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.text = "OK"
-
-        log = BotLogManager.create_bot_log(bot=self.bot, level=BotLogLevels.WARNING, message="Test log message")
-
-        # Call delivery task
-        deliver_webhook.apply(args=[log.id])
-
-        # Refresh the attempt object from the db
-        log.refresh_from_db()

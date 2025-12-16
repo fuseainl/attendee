@@ -1649,11 +1649,6 @@ class BotController:
             self.cleanup()
             return
 
-        if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
-            logger.info("Received message that bot could not enable closed captions")
-            BotLogManager.create_bot_log(bot=self.bot_in_db, level=BotLogLevels.WARNING, event_type=BotLogEventTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
-            return
-
         if message.get("message") == BotAdapter.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING:
             logger.info(f"Received message that adapter requested bot leave meeting reason={message.get('leave_reason')}")
 
@@ -1828,6 +1823,12 @@ class BotController:
             self.flush_utterances()
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECTED)
             self.cleanup()
+            return
+
+        # Bot log events, these do not indicate bot state change
+        if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
+            logger.info("Received message that bot could not enable closed captions")
+            BotLogManager.create_bot_log(bot=self.bot_in_db, level=BotLogLevels.WARNING, event_type=BotLogEventTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")
