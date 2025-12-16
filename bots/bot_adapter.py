@@ -25,7 +25,7 @@ class BotAdapter:
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
         # Bot log event, does not indicate bot state change
-        LOG_COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
+        COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

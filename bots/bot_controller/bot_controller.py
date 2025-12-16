@@ -1648,10 +1648,10 @@ class BotController:
 
             self.cleanup()
             return
-        
-        if message.get("message") == BotAdapter.Messages.LOG_COULD_NOT_ENABLE_CLOSED_CAPTIONS:
+
+        if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
             logger.info("Received message that bot could not enable closed captions")
-            BotLogManager.create_bot_log(bot=self.bot_in_db, level=BotLogLevels.WARNING, event_type=BotLogEventTypes.CLOSED_CAPTIONS_DISABLED, message="Bot could not enable closed captions")
+            BotLogManager.create_bot_log(bot=self.bot_in_db, level=BotLogLevels.WARNING, event_type=BotLogEventTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
             return
 
         if message.get("message") == BotAdapter.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING:

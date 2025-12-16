@@ -1790,17 +1790,19 @@ class BotLogLevels(models.IntegerChoices):
             cls.ERROR: "error",
         }.get(value)
 
+
 class BotLogEventTypes(models.IntegerChoices):
     """These are events that have to do with a bot that aren't big enough to merit a bot state change, but a user may care about"""
+
     UNCATEGORIZED = 0, "Uncategorized"
-    CLOSED_CAPTIONS_DISABLED = 1, "Closed captions disabled"
+    COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
 
     @classmethod
     def type_to_api_code(cls, value):
         """Returns the API code for a given type value"""
         mapping = {
             cls.UNCATEGORIZED: "uncategorized",
-            cls.CLOSED_CAPTIONS_DISABLED: "closed_captions_disabled",
+            cls.COULD_NOT_ENABLE_CLOSED_CAPTIONS: "could_not_enable_closed_captions",
         }
         return mapping.get(value)
 
