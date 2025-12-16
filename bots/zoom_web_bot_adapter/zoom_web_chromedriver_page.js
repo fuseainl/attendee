@@ -59,6 +59,12 @@ function joinMeeting() {
     startMeeting(signature);
 }
 
+function userHasEnteredMeeting() {
+    return userEnteredMeeting;
+}
+
+window.userHasEnteredMeeting = userHasEnteredMeeting;
+
 function startMeeting(signature) {
 
   document.getElementById('zmmtg-root').style.display = 'block'

@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiCouldNotLocateElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -36,6 +36,8 @@ class ZoomWebUIMethods:
 
         # Call the joinMeeting function
         self.driver.execute_script("joinMeeting()")
+
+        self.wait_to_be_admitted_to_meeting()
 
         # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
@@ -91,6 +93,58 @@ class ZoomWebUIMethods:
 
     def click_leave_button(self):
         self.driver.execute_script("leaveMeeting()")
+
+    def wait_to_be_admitted_to_meeting(self):
+        num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
+        logger.info("Waiting to be admitted to the meeting...")
+        timeout_started_at = time.time()
+
+        # We can either be waiting for the host to start meeting or we can be waiting to be admitted to the meeting
+        is_waiting_for_host_to_start_meeting = False
+
+        for attempt_index in range(num_attempts_to_look_for_more_meeting_control_button):
+            try:
+                # Query the userHasEnteredMeeting function (handle case where it's undefined)
+                user_has_entered_meeting = self.driver.execute_script("return window.userHasEnteredMeeting && window.userHasEnteredMeeting()")
+                if user_has_entered_meeting:
+                    logger.info("We have been admitted to the meeting")
+                    return
+                time.sleep(1)
+                raise TimeoutException("User has not entered the meeting")
+            except TimeoutException as e:
+                self.check_if_passcode_incorrect()
+
+                previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
+                try:
+                    is_waiting_for_host_to_start_meeting = self.driver.find_element(
+                        By.XPATH,
+                        '//*[contains(text(), "for host to start the meeting")]',
+                    ).is_displayed()
+                except:
+                    is_waiting_for_host_to_start_meeting = False
+
+                # If we switch from waiting for the host to start the meeting to waiting to be admitted to the meeting, then we need to reset the timeout
+                if previous_is_waiting_for_host_to_start_meeting != is_waiting_for_host_to_start_meeting:
+                    logger.info("Switching from waiting for the host to start the meeting to waiting to be admitted to the meeting. Resetting timeout")
+                    timeout_started_at = time.time()
+
+                self.check_if_timeout_exceeded(timeout_started_at=timeout_started_at, step="wait_to_be_admitted_to_meeting", is_waiting_for_host_to_start_meeting=is_waiting_for_host_to_start_meeting)
+
+                last_check_timed_out = attempt_index == num_attempts_to_look_for_more_meeting_control_button - 1
+                if last_check_timed_out:
+                    logger.info("Could not find more meeting control button. Timed out. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException(
+                        "Could not find more meeting control button. Timed out.",
+                        "wait_to_be_admitted_to_meeting",
+                        e,
+                    )
+            except Exception as e:
+                logger.info(f"Could not find more meeting control button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
+                raise UiCouldNotLocateElementException(
+                    "Could not find more meeting control button. Unknown error.",
+                    "wait_to_be_admitted_to_meeting",
+                    e,
+                )
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for more meeting control button to disable incoming video")
