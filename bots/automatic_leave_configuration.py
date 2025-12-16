@@ -13,6 +13,7 @@ class AutomaticLeaveConfiguration:
         waiting_room_timeout_seconds: Number of seconds to wait before leaving if the bot is in the waiting room
         max_uptime_seconds: Maximum number of seconds that the bot should be running before automatically leaving (infinite by default)
         enable_closed_captions_timeout_seconds: Number of seconds to wait before leaving if bot could not enable closed captions (infinite by default)
+        onbehalf_token_user_not_in_meeting_timeout_seconds: Number of seconds to wait before leaving if the onbehalf token user is not in the meeting
     """
 
     silence_timeout_seconds: int = 600
@@ -22,3 +23,4 @@ class AutomaticLeaveConfiguration:
     waiting_room_timeout_seconds: int = 900
     max_uptime_seconds: int | None = None
     enable_closed_captions_timeout_seconds: int | None = None
+    onbehalf_token_user_not_in_meeting_timeout_seconds: int = 600
