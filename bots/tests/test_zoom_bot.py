@@ -416,15 +416,15 @@ class TestZoomBot(TransactionTestCase):
         settings.CELERY_TASK_ALWAYS_EAGER = True
         settings.CELERY_TASK_EAGER_PROPAGATES = True
 
-    @patch("bots.bot_controller.bot_controller.BotLogManager.create_bot_log")
-    def test_could_not_enable_closed_captions_creates_warning_bot_log(self, mock_create_bot_log):
+    @patch("bots.bot_controller.bot_controller.BotLogManager.create_bot_log_entry")
+    def test_could_not_enable_closed_captions_creates_warning_bot_log(self, mock_create_bot_log_entry):
         controller = BotController(self.bot.id)
         starting_state = controller.bot_in_db.state
 
         controller.take_action_based_on_message_from_adapter({"message": BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS})
 
-        mock_create_bot_log.assert_called_once()
-        _, kwargs = mock_create_bot_log.call_args
+        mock_create_bot_log_entry.assert_called_once()
+        _, kwargs = mock_create_bot_log_entry.call_args
 
         self.assertEqual(kwargs["bot"].id, self.bot.id)
         self.assertEqual(kwargs["level"], BotLogLevels.WARNING)
