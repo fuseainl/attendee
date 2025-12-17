@@ -1792,8 +1792,6 @@ class BotLogLevels(models.IntegerChoices):
 
 
 class BotLogTypes(models.IntegerChoices):
-    """Bot logs are created for events that are not big enough to merit a bot state change, but a user may care about"""
-
     UNCATEGORIZED = 0, "Uncategorized"
     COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
 
@@ -1808,9 +1806,11 @@ class BotLogTypes(models.IntegerChoices):
 
 
 class BotLogEntry(models.Model):
+    """Bot logs are created for events that are not big enough to merit a bot state change, but a user may care about"""
+
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
     level = models.IntegerField(choices=BotLogLevels.choices, default=BotLogLevels.INFO, null=False)
-    log_type = models.IntegerField(choices=BotLogTypes.choices, default=BotLogTypes.UNCATEGORIZED, null=False)
+    entry_type = models.IntegerField(choices=BotLogTypes.choices, default=BotLogTypes.UNCATEGORIZED, null=False)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
@@ -1830,8 +1830,8 @@ class BotLogEntry(models.Model):
 
 class BotLogManager:
     @classmethod
-    def create_bot_log_entry(cls, bot: Bot, level: BotLogLevels, log_type: BotLogTypes, message: str):
-        log = BotLogEntry.objects.create(bot=bot, level=level, log_type=log_type, message=message)
+    def create_bot_log_entry(cls, bot: Bot, level: BotLogLevels, entry_type: BotLogTypes, message: str):
+        log = BotLogEntry.objects.create(bot=bot, level=level, entry_type=entry_type, message=message)
 
         trigger_webhook(
             webhook_trigger_type=WebhookTriggerTypes.BOT_LOGS_UPDATE,
@@ -1839,7 +1839,7 @@ class BotLogManager:
             payload={
                 "id": log.object_id,
                 "level": BotLogLevels.level_to_api_code(log.level),
-                "log_type": BotLogTypes.type_to_api_code(log.log_type),
+                "entry_type": BotLogTypes.type_to_api_code(log.entry_type),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
             },

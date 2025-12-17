@@ -1827,7 +1827,7 @@ class BotController:
 
         if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
             logger.info("Received message that bot could not enable closed captions")
-            BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogLevels.WARNING, log_type=BotLogTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
+            BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogLevels.WARNING, entry_type=BotLogTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")
