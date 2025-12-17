@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import requests
 from django.db import connection
 from django.test import TransactionTestCase
+from selenium.common.exceptions import NoSuchElementException
 
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
@@ -431,6 +432,304 @@ class TestZoomWebBot(TransactionTestCase):
         webhook_attempt = webhook_attempts.first()
         self.assertEqual(webhook_attempt.payload["state"], "disconnected")
         self.assertIsNotNone(webhook_attempt.payload["connection_failure_data"])
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_waiting_room_timeout(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+    ):
+        """Test that bot times out if waiting room timeout is exceeded."""
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        self.bot.settings = {
+            "zoom_settings": {
+                "sdk": "web",
+            },
+            "automatic_leave_settings": {
+                "waiting_room_timeout_seconds": 3,
+            },
+        }
+        self.bot.save()
+
+        # Mock execute_script to handle different script calls
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                return False  # User has NOT entered the meeting
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False  # No onbehalf token error
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Mock find_element to not find the "host to start meeting" text (so we're in waiting room, not waiting for host)
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Give the bot time to process
+        bot_thread.join(timeout=10)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the FATAL_ERROR state after timeout
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        # Verify bot events in sequence
+        bot_events = self.bot.bot_events.all()
+
+        # Should have at least 2 events: JOIN_REQUESTED and COULD_NOT_JOIN
+        self.assertGreaterEqual(len(bot_events), 2)
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Find the COULD_NOT_JOIN event
+        could_not_join_events = [e for e in bot_events if e.event_type == BotEventTypes.COULD_NOT_JOIN]
+        self.assertGreaterEqual(len(could_not_join_events), 1)
+
+        # Verify the event has the correct subtype
+        could_not_join_event = could_not_join_events[0]
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_WAITING_ROOM_TIMEOUT_EXCEEDED)
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_authorized_user_not_in_meeting_timeout(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+    ):
+        """Test that bot times out if authorized user (onbehalf token user) is not in the meeting."""
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        self.bot.settings = {
+            "zoom_settings": {
+                "sdk": "web",
+            },
+            "automatic_leave_settings": {
+                "authorized_user_not_in_meeting_timeout_seconds": 3,
+            },
+        }
+        self.bot.save()
+
+        # Mock execute_script to handle different script calls
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                return False  # User has NOT entered the meeting
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return True  # The onbehalf token user is NOT in the meeting
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Mock find_element to not find the "host to start meeting" text
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Give the bot time to process
+        bot_thread.join(timeout=15)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the FATAL_ERROR state after timeout
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        # Verify bot events in sequence
+        bot_events = self.bot.bot_events.all()
+
+        # Should have at least 2 events: JOIN_REQUESTED and COULD_NOT_JOIN
+        self.assertGreaterEqual(len(bot_events), 2)
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Find the COULD_NOT_JOIN event
+        could_not_join_events = [e for e in bot_events if e.event_type == BotEventTypes.COULD_NOT_JOIN]
+        self.assertGreaterEqual(len(could_not_join_events), 1)
+
+        # Verify the event has the correct subtype
+        could_not_join_event = could_not_join_events[0]
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED)
+
+        # Cleanup
+        controller.cleanup()
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.WebDriverWait")
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_transition_from_waiting_for_host_to_waiting_room_then_admitted(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+        MockWebDriverWait,
+    ):
+        """Test that bot successfully joins after transitioning from waiting for host to waiting room."""
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Mock WebDriverWait to return mock elements for post-admission UI
+        mock_wait_instance = MagicMock()
+        mock_element = MagicMock()
+        mock_element.is_displayed.return_value = True
+        mock_wait_instance.until.return_value = mock_element
+        MockWebDriverWait.return_value = mock_wait_instance
+
+        # Track the state transitions
+        call_count = [0]
+        # Phase 0: waiting for host (calls 0-2)
+        # Phase 1: waiting room (calls 3-5)
+        # Phase 2: admitted (call 6+)
+
+        # Mock execute_script to handle different script calls
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                call_count[0] += 1
+                # After 6 calls, user has entered the meeting
+                if call_count[0] >= 6:
+                    return True
+                return False
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False
+            if "joinMeeting" in script:
+                return None
+            # For clicking elements
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Mock find_element to simulate phase transitions
+        find_element_call_count = [0]
+
+        def find_element_side_effect(by, value):
+            find_element_call_count[0] += 1
+            if "host to start the meeting" in value:
+                # First 2 calls: waiting for host (element found)
+                # After that: waiting room (element not found)
+                if find_element_call_count[0] <= 2:
+                    mock_host_element = MagicMock()
+                    mock_host_element.is_displayed.return_value = True
+                    return mock_host_element
+                else:
+                    raise NoSuchElementException("Element not found")
+            raise NoSuchElementException("Element not found")
+
+        mock_driver.find_element.side_effect = find_element_side_effect
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Allow time for the join process
+        time.sleep(10)
+
+        # Verify the bot successfully joined (should be in a joined state, not FATAL_ERROR)
+        self.bot.refresh_from_db()
+        self.assertEqual(self.bot.state, BotStates.JOINED_NOT_RECORDING)
+
+        # Verify bot events include a successful join
+        bot_events = self.bot.bot_events.all()
+
+        # Verify join_requested_event
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Verify that a BOT_JOINED_MEETING event was created
+        joined_events = [e for e in bot_events if e.event_type == BotEventTypes.BOT_JOINED_MEETING]
+        self.assertGreaterEqual(len(joined_events), 1, "A BOT_JOINED_MEETING event should be created")
+
+        # Simulate meeting ending to trigger cleanup
+        controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+        time.sleep(4)
+
+        # Now wait for the thread to finish naturally
+        bot_thread.join(timeout=5)
+
+        # If thread is still running after timeout, that's a problem to report
+        if bot_thread.is_alive():
+            print("WARNING: Bot thread did not terminate properly after cleanup")
 
         # Close the database connection since we're in a thread
         connection.close()

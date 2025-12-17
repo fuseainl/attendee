@@ -192,6 +192,9 @@ class ZoomBotAdapter(BotAdapter):
 
         self.ready_to_send_chat_messages = False
 
+        self.should_retry_after_meeting_ends = False
+        self.attempts_to_join_started_at = time.time()
+
     def pause_recording(self):
         self.recording_is_paused = True
         if not self.raw_recording_active:
@@ -962,6 +965,16 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds")
         GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
 
+    def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
+        if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+            self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
+            return
+
+        # We don't explicitly retry here because the retry will fail if we do it immediately
+        # Instead, we set a flag to retry after the meeting ends
+        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+        self.should_retry_after_meeting_ends = True
+
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
         self.meeting_status = status
@@ -988,10 +1001,20 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
+            if self.should_retry_after_meeting_ends:
+                self.should_retry_after_meeting_ends = False
+                logger.info("Meeting ended. Will retry to join meeting in 3 seconds...")
+                GLib.timeout_add_seconds(3, self.join_meeting)
+                return
+
             # We get the MEETING_STATUS_ENDED regardless of whether we initiated the leave or not
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
         if status == zoom.MEETING_STATUS_FAILED:
+            # This is a hacky way to determine if the bot failed to join because the onbehalf token user is not in the meeting.
+            # On our current version of the Zoom SDK, there is no specific error code for this.
+            failed_because_onbehalf_token_user_not_in_meeting = iResult == 65535 and self.zoom_tokens.get("onbehalf_token")
+
             # Since the unable to join external meeting issue is so common, we'll handle it separately
             if iResult == zoom.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING:
                 self.send_message_callback(
@@ -1000,6 +1023,8 @@ class ZoomBotAdapter(BotAdapter):
                         "zoom_result_code": iResult,
                     }
                 )
+            elif failed_because_onbehalf_token_user_not_in_meeting:
+                self.handle_failed_to_join_because_onbehalf_token_user_not_in_meeting()
             else:
                 self.send_message_callback(
                     {
