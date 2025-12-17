@@ -55,6 +55,14 @@ class ZoomWebUIMethods:
             logger.info("Captions button not found, so unable to transcribe via closed-captions.")
             self.could_not_enable_closed_captions()
 
+        if not closed_captions_enabled:
+            # If closed captions was not enabled, then click the more meeting control button again to close it
+            # This resets the UI state
+            logger.info("Closing the more meeting control button since closed captions was not enabled")
+            more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+            logger.info("More meeting control button found, clicking")
+            self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
+
         if closed_captions_enabled:
             # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
             logger.info("Waiting for your caption settings grouping Show Captions button")
