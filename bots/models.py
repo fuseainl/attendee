@@ -1791,8 +1791,8 @@ class BotLogLevels(models.IntegerChoices):
         }.get(value)
 
 
-class BotLogEventTypes(models.IntegerChoices):
-    """These are events that have to do with a bot that aren't big enough to merit a bot state change, but a user may care about"""
+class BotLogTypes(models.IntegerChoices):
+    """Bot logs are created for events that are not big enough to merit a bot state change, but a user may care about"""
 
     UNCATEGORIZED = 0, "Uncategorized"
     COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
@@ -1807,10 +1807,10 @@ class BotLogEventTypes(models.IntegerChoices):
         return mapping.get(value)
 
 
-class BotLog(models.Model):
+class BotLogEntry(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
     level = models.IntegerField(choices=BotLogLevels.choices, default=BotLogLevels.INFO, null=False)
-    event_type = models.IntegerField(choices=BotLogEventTypes.choices, default=BotLogEventTypes.UNCATEGORIZED, null=False)
+    log_type = models.IntegerField(choices=BotLogTypes.choices, default=BotLogTypes.UNCATEGORIZED, null=False)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
@@ -1830,16 +1830,16 @@ class BotLog(models.Model):
 
 class BotLogManager:
     @classmethod
-    def create_bot_log(cls, bot: Bot, level: BotLogLevels, event_type: BotLogEventTypes, message: str):
-        log = BotLog.objects.create(bot=bot, level=level, event_type=event_type, message=message)
+    def create_bot_log_entry(cls, bot: Bot, level: BotLogLevels, log_type: BotLogTypes, message: str):
+        log = BotLogEntry.objects.create(bot=bot, level=level, log_type=log_type, message=message)
 
         trigger_webhook(
-            webhook_trigger_type=WebhookTriggerTypes.LOG_MESSAGE,
+            webhook_trigger_type=WebhookTriggerTypes.BOT_LOGS_UPDATE,
             bot=bot,
             payload={
                 "id": log.object_id,
                 "level": BotLogLevels.level_to_api_code(log.level),
-                "event_type": BotLogEventTypes.type_to_api_code(log.event_type),
+                "event_type": BotLogTypes.type_to_api_code(log.log_type),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
             },
@@ -2784,7 +2784,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     ASYNC_TRANSCRIPTION_STATE_CHANGE = 7, "Async Transcription State Change"
     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
-    LOG_MESSAGE = 9, "Log Message"
+    BOT_LOGS_UPDATE = 9, "Bot Logs Update"
     # add other event types here
 
     @classmethod
@@ -2799,7 +2799,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
             cls.ASYNC_TRANSCRIPTION_STATE_CHANGE: "async_transcription.state_change",
             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
-            cls.LOG_MESSAGE: "log.message",
+            cls.BOT_LOGS_UPDATE: "bot_logs.update",
         }
 
     @classmethod

@@ -30,7 +30,7 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
-    BotLogEventTypes,
+    BotLogTypes,
     BotLogLevels,
     BotLogManager,
     BotMediaRequestManager,
@@ -1825,10 +1825,9 @@ class BotController:
             self.cleanup()
             return
 
-        # Bot log events, these do not indicate bot state change
         if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
             logger.info("Received message that bot could not enable closed captions")
-            BotLogManager.create_bot_log(bot=self.bot_in_db, level=BotLogLevels.WARNING, event_type=BotLogEventTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
+            BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogLevels.WARNING, log_type=BotLogTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")

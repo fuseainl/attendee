@@ -15,7 +15,7 @@ To create a project-level webhook via the UI:
 1. Click on "Settings → Webhooks" in the sidebar
 2. Click "Create Webhook" 
 3. Provide an HTTPS URL that will receive webhook events
-4. Select the triggers you want to receive notifications for (we currently have six triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `calendar.events_update`, and `calendar.state_change`)
+4. Select the triggers you want to receive notifications for (we currently have seven triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `calendar.events_update`, `calendar.state_change`, and `bot_logs.update`)
 5. Click "Create" to save your subscription
 
 ## Creating Bot-Level Webhooks
@@ -49,6 +49,7 @@ Bot-level webhooks are created via the API when creating a bot. Include a `webho
 | `participant_events.join_leave` | A participant joins or leaves the meeting |
 | `calendar.events_update` | Calendar events have been synced and updated |
 | `calendar.state_change` | Calendar connection state has changed (connected/disconnected) |
+| `bot_logs.update` | A log entry associated with a bot has been created |
 
 ## Webhook Delivery Priority
 
@@ -209,6 +210,23 @@ This webhook is triggered when a calendar's connection state changes, typically 
   "timestamp": "2023-07-15T14:30:45.123456Z"
 }
 ```
+
+### Payload for `bot_logs.update` trigger
+
+For webhooks triggered by `bot_logs.update`, the `data` field contains information about a log entry associated with a bot:
+
+```
+{
+  "id": <The ID of the log entry>,
+  "level": <The severity level of the log entry (e.g., "debug", "info", "warning", "error")>,
+  "log_type": <The type of log event (e.g., "uncategorized", "could_not_enable_closed_captions")>,
+  "message": <The log message>,
+  "created_at": <The timestamp when the log entry was created>
+}
+```
+
+This webhook fires every time a new log entry is recorded for a bot. Use these events to keep track of errors, warnings, or other relevant activities occurring on your bots — especially issues that matter but don't rise to the level of a state change. Monitoring these log webhooks helps you catch and investigate noteworthy bot events in real time.
+
 
 ## Debugging Webhook Deliveries
 
