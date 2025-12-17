@@ -1775,7 +1775,7 @@ class BotEventManager:
                 continue
 
 
-class BotLogLevels(models.IntegerChoices):
+class BotLogEntryLevels(models.IntegerChoices):
     DEBUG = 1, "Debug"
     INFO = 2, "Info"
     WARNING = 3, "Warning"
@@ -1791,7 +1791,7 @@ class BotLogLevels(models.IntegerChoices):
         }.get(value)
 
 
-class BotLogTypes(models.IntegerChoices):
+class BotLogEntryTypes(models.IntegerChoices):
     UNCATEGORIZED = 0, "Uncategorized"
     COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
 
@@ -1806,11 +1806,11 @@ class BotLogTypes(models.IntegerChoices):
 
 
 class BotLogEntry(models.Model):
-    """Bot logs are created for events that are not big enough to merit a bot state change, but a user may care about"""
+    """Bot log entries are created for events that are not big enough to merit a bot state change, but a user may care about"""
 
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
-    level = models.IntegerField(choices=BotLogLevels.choices, default=BotLogLevels.INFO, null=False)
-    entry_type = models.IntegerField(choices=BotLogTypes.choices, default=BotLogTypes.UNCATEGORIZED, null=False)
+    level = models.IntegerField(choices=BotLogEntryLevels.choices, default=BotLogEntryLevels.INFO, null=False)
+    entry_type = models.IntegerField(choices=BotLogEntryTypes.choices, default=BotLogEntryTypes.UNCATEGORIZED, null=False)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
@@ -1830,7 +1830,7 @@ class BotLogEntry(models.Model):
 
 class BotLogManager:
     @classmethod
-    def create_bot_log_entry(cls, bot: Bot, level: BotLogLevels, entry_type: BotLogTypes, message: str):
+    def create_bot_log_entry(cls, bot: Bot, level: BotLogEntryLevels, entry_type: BotLogEntryTypes, message: str):
         log = BotLogEntry.objects.create(bot=bot, level=level, entry_type=entry_type, message=message)
 
         trigger_webhook(
@@ -1838,8 +1838,8 @@ class BotLogManager:
             bot=bot,
             payload={
                 "id": log.object_id,
-                "level": BotLogLevels.level_to_api_code(log.level),
-                "entry_type": BotLogTypes.type_to_api_code(log.entry_type),
+                "level": BotLogEntryLevels.level_to_api_code(log.level),
+                "entry_type": BotLogEntryTypes.type_to_api_code(log.entry_type),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
             },

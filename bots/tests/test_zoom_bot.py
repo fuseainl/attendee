@@ -23,8 +23,8 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
-    BotLogLevels,
-    BotLogTypes,
+    BotLogEntryLevels,
+    BotLogEntryTypes,
     BotMediaRequest,
     BotMediaRequestMediaTypes,
     BotMediaRequestStates,
@@ -427,8 +427,8 @@ class TestZoomBot(TransactionTestCase):
         _, kwargs = mock_create_bot_log_entry.call_args
 
         self.assertEqual(kwargs["bot"].id, self.bot.id)
-        self.assertEqual(kwargs["level"], BotLogLevels.WARNING)
-        self.assertEqual(kwargs["entry_type"], BotLogTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS)
+        self.assertEqual(kwargs["level"], BotLogEntryLevels.WARNING)
+        self.assertEqual(kwargs["entry_type"], BotLogEntryTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS)
         self.assertEqual(kwargs["message"], "Bot could not enable closed captions")
 
         controller.bot_in_db.refresh_from_db()
