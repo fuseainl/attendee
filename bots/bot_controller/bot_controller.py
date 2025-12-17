@@ -30,6 +30,9 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogEntryLevels,
+    BotLogEntryTypes,
+    BotLogManager,
     BotMediaRequestManager,
     BotMediaRequestMediaTypes,
     BotMediaRequestStates,
@@ -1820,6 +1823,11 @@ class BotController:
             self.flush_utterances()
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECTED)
             self.cleanup()
+            return
+
+        if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
+            logger.info("Received message that bot could not enable closed captions")
+            BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.WARNING, entry_type=BotLogEntryTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")

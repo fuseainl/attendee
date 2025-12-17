@@ -1775,6 +1775,79 @@ class BotEventManager:
                 continue
 
 
+class BotLogEntryLevels(models.IntegerChoices):
+    DEBUG = 1, "Debug"
+    INFO = 2, "Info"
+    WARNING = 3, "Warning"
+    ERROR = 4, "Error"
+
+    @classmethod
+    def level_to_api_code(cls, value):
+        return {
+            cls.DEBUG: "debug",
+            cls.INFO: "info",
+            cls.WARNING: "warning",
+            cls.ERROR: "error",
+        }.get(value)
+
+
+class BotLogEntryTypes(models.IntegerChoices):
+    UNCATEGORIZED = 0, "Uncategorized"
+    COULD_NOT_ENABLE_CLOSED_CAPTIONS = 1, "Could not enable closed captions"
+
+    @classmethod
+    def type_to_api_code(cls, value):
+        """Returns the API code for a given type value"""
+        mapping = {
+            cls.UNCATEGORIZED: "uncategorized",
+            cls.COULD_NOT_ENABLE_CLOSED_CAPTIONS: "could_not_enable_closed_captions",
+        }
+        return mapping.get(value)
+
+
+class BotLogEntry(models.Model):
+    """Bot log entries are created for events that are not big enough to merit a bot state change, but a user may care about"""
+
+    bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="logs")
+    level = models.IntegerField(choices=BotLogEntryLevels.choices, default=BotLogEntryLevels.INFO, null=False)
+    entry_type = models.IntegerField(choices=BotLogEntryTypes.choices, default=BotLogEntryTypes.UNCATEGORIZED, null=False)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    object_id = models.CharField(max_length=255, unique=True, editable=False, blank=True, null=True)
+
+    OBJECT_ID_PREFIX = "log_"
+
+    def save(self, *args, **kwargs):
+        if not self.object_id:
+            # Generate a random 16-character string
+            random_string = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.bot.object_id} - {self.message}"
+
+
+class BotLogManager:
+    @classmethod
+    def create_bot_log_entry(cls, bot: Bot, level: BotLogEntryLevels, entry_type: BotLogEntryTypes, message: str):
+        log = BotLogEntry.objects.create(bot=bot, level=level, entry_type=entry_type, message=message)
+
+        trigger_webhook(
+            webhook_trigger_type=WebhookTriggerTypes.BOT_LOGS_UPDATE,
+            bot=bot,
+            payload={
+                "id": log.object_id,
+                "level": BotLogEntryLevels.level_to_api_code(log.level),
+                "entry_type": BotLogEntryTypes.type_to_api_code(log.entry_type),
+                "message": log.message,
+                "created_at": log.created_at.isoformat(),
+            },
+        )
+
+        return log
+
+
 class Participant(models.Model):
     bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="participants")
     uuid = models.CharField(max_length=255)
@@ -2711,6 +2784,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
     CALENDAR_STATE_CHANGE = 6, "Calendar State Change"
     ASYNC_TRANSCRIPTION_STATE_CHANGE = 7, "Async Transcription State Change"
     ZOOM_OAUTH_CONNECTION_STATE_CHANGE = 8, "Zoom OAuth Connection State Change"
+    BOT_LOGS_UPDATE = 9, "Bot Logs Update"
     # add other event types here
 
     @classmethod
@@ -2725,6 +2799,7 @@ class WebhookTriggerTypes(models.IntegerChoices):
             cls.CALENDAR_STATE_CHANGE: "calendar.state_change",
             cls.ASYNC_TRANSCRIPTION_STATE_CHANGE: "async_transcription.state_change",
             cls.ZOOM_OAUTH_CONNECTION_STATE_CHANGE: "zoom_oauth_connection.state_change",
+            cls.BOT_LOGS_UPDATE: "bot_logs.update",
         }
 
     @classmethod

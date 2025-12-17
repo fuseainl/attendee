@@ -24,6 +24,7 @@ class BotAdapter:
         JOINING_BREAKOUT_ROOM = "Joining breakout room"
         LEAVING_BREAKOUT_ROOM = "Leaving breakout room"
         BOT_RECORDING_PERMISSION_DENIED = "Bot recording permission denied"
+        COULD_NOT_ENABLE_CLOSED_CAPTIONS = "Could not enable closed captions"
 
         # App session messages
         APP_SESSION_CONNECTED = "App session connected"

@@ -851,6 +851,8 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
 
     def could_not_enable_closed_captions(self):
+        self.send_message_callback({"message": self.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS})
+        # Leave meeting if configured to do so
         if self.automatic_leave_configuration.enable_closed_captions_timeout_seconds is not None:
             logger.info("Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
             self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS})

@@ -39,7 +39,7 @@ class ZoomWebUIMethods:
 
         # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
-        more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
         logger.info("More meeting control button found, clicking")
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
@@ -55,10 +55,18 @@ class ZoomWebUIMethods:
             logger.info("Captions button not found, so unable to transcribe via closed-captions.")
             self.could_not_enable_closed_captions()
 
+        if not closed_captions_enabled:
+            # If closed captions was not enabled, then click the more meeting control button again to close it
+            # This resets the UI state
+            logger.info("Closing the more meeting control button since closed captions was not enabled")
+            more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+            logger.info("More meeting control button found, clicking")
+            self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
+
         if closed_captions_enabled:
             # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
             logger.info("Waiting for your caption settings grouping Show Captions button")
-            your_caption_settings_grouping_show_captions_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your caption settings grouping Show Captions']")))
+            your_caption_settings_grouping_show_captions_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your caption settings grouping Show Captions']")))
             logger.info("Your caption settings grouping Show Captions button found, clicking")
             self.driver.execute_script("arguments[0].click();", your_caption_settings_grouping_show_captions_button)
 
@@ -94,12 +102,12 @@ class ZoomWebUIMethods:
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for more meeting control button to disable incoming video")
-        more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
         logger.info("More meeting control button found, clicking")
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
         logger.info("Waiting for turn off incoming video button to disable incoming video")
-        turn_off_incoming_video_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
+        turn_off_incoming_video_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
         logger.info("Turn off incoming video button found, clicking")
         self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
 
