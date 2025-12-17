@@ -764,9 +764,9 @@ class ZoomSettingsJSONField(serializers.JSONField):
                 "description": "Number of seconds to wait before leaving if bot could not enable closed captions (infinity by default). Only relevant if the bot is transcribing via closed captions. Currently only supports leaving immediately.",
                 "default": None,
             },
-            "onbehalf_token_user_not_in_meeting_timeout_seconds": {
+            "authorized_user_not_in_meeting_timeout_seconds": {
                 "type": "integer",
-                "description": "Number of seconds to wait before leaving if the onbehalf token user is not in the meeting. Only relevant if this is a Zoom bot using an onbehalf token.",
+                "description": "Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.",
                 "default": 600,
             },
         },

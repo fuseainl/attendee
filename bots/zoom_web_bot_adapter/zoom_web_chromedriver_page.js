@@ -16,6 +16,7 @@ var zakToken = zoomInitialData.zakToken;
 var onBehalfToken = zoomInitialData.onBehalfToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var userEncounteredOnBehalfTokenUserNotInMeetingError = false;
 var recordingPermissionGranted = false;
 var madeInitialRequestForRecordingPermission = false;
 var sentSaveCaptionNotAllowed = false;
@@ -64,6 +65,12 @@ function userHasEnteredMeeting() {
 }
 
 window.userHasEnteredMeeting = userHasEnteredMeeting;
+
+function userHasEncounteredOnBehalfTokenUserNotInMeetingError() {
+    return userEncounteredOnBehalfTokenUserNotInMeetingError;
+}
+
+window.userHasEncounteredOnBehalfTokenUserNotInMeetingError = userHasEncounteredOnBehalfTokenUserNotInMeetingError;
 
 function startMeeting(signature) {
 
@@ -351,6 +358,15 @@ function startMeeting(signature) {
 }
 
 function handleJoinFailureFromConsoleIntercept(code, reason) {
+    // Hacky way to determine if we are being rejected because the onbehalf token user is not in the meeting
+    // There currently seems to be no specific error code for this.
+    if (code == 1 && onBehalfToken && !userEnteredMeeting)
+    {
+        userEncounteredOnBehalfTokenUserNotInMeetingError = true;
+        console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+        return;
+    }
+
     window.ws.sendJson({
         type: 'MeetingStatusChange',
         change: 'failed_to_join',

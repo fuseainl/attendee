@@ -23,7 +23,7 @@ from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
-from .ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -616,6 +616,8 @@ class WebBotAdapter(BotAdapter):
         num_expected_exceptions = 0
         num_retries = 0
         max_retries = 3
+        attempts_to_join_started_at = time.time()
+
         while num_retries <= max_retries:
             try:
                 self.init_driver()
@@ -651,6 +653,14 @@ class WebBotAdapter(BotAdapter):
             except UiIncorrectPasswordException:
                 self.send_incorrect_password_message()
                 return
+
+            except UiAuthorizedUserNotInMeetingTimeoutExceededException:
+                # If the timeout has exceeded, send the message. If not, we will retry again.
+                if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+                    self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
+                    return
+                else:
+                    logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
 
             except UiRetryableExpectedException as e:
                 if num_retries >= max_retries:

@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiCouldNotLocateElementException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -94,6 +94,13 @@ class ZoomWebUIMethods:
     def click_leave_button(self):
         self.driver.execute_script("leaveMeeting()")
 
+    def check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
+        failed_to_join_because_onbehalf_token_user_not_in_meeting = self.driver.execute_script("return window.userHasEncounteredOnBehalfTokenUserNotInMeetingError && window.userHasEncounteredOnBehalfTokenUserNotInMeetingError()")
+        if failed_to_join_because_onbehalf_token_user_not_in_meeting:
+            logger.info("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
+            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+            raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
+
     def wait_to_be_admitted_to_meeting(self):
         num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
         logger.info("Waiting to be admitted to the meeting...")
@@ -113,6 +120,7 @@ class ZoomWebUIMethods:
                 raise TimeoutException("User has not entered the meeting")
             except TimeoutException as e:
                 self.check_if_passcode_incorrect()
+                self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
 
                 previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
                 try:

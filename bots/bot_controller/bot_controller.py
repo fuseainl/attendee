@@ -1558,6 +1558,16 @@ class BotController:
             self.cleanup()
             return
 
+        if message.get("message") == BotAdapter.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED:
+            logger.info("Received message that authorized user not in meeting timeout exceeded")
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED,
+            )
+            self.cleanup()
+            return
+
         if message.get("message") == BotAdapter.Messages.LOGIN_ATTEMPT_FAILED:
             logger.info("Received message that login attempt failed")
             new_bot_event = BotEventManager.create_event(

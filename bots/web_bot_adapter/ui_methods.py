@@ -39,6 +39,11 @@ class UiRetryableException(UiException):
         super().__init__(message, step, inner_exception)
 
 
+class UiAuthorizedUserNotInMeetingTimeoutExceededException(UiException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 class UiRetryableExpectedException(UiRetryableException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
