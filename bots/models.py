@@ -1839,7 +1839,7 @@ class BotLogManager:
             payload={
                 "id": log.object_id,
                 "level": BotLogLevels.level_to_api_code(log.level),
-                "event_type": BotLogTypes.type_to_api_code(log.log_type),
+                "log_type": BotLogTypes.type_to_api_code(log.log_type),
                 "message": log.message,
                 "created_at": log.created_at.isoformat(),
             },
