@@ -65,7 +65,7 @@
                 </div>
                 <div class="modal-body">
                     <div id="zoom-oauth-error" class="alert alert-danger d-none" role="alert"></div>
-                    <form id="zoomOAuthAppForm"
+                    <form id="zoomOAuthAppForm" autocomplete="off"
                         hx-post="{% url 'projects:create-zoom-oauth-app' project.object_id %}"
                         hx-target="#zoom-oauth-app-partial"
                         hx-select="#zoom-oauth-app-partial"
@@ -85,7 +85,7 @@
                         
                         <div class="mb-3">
                             <label for="client_id" class="form-label">Client ID</label>
-                            <input type="text" 
+                            <input type="text"
                                 class="form-control" 
                                 id="client_id" 
                                 name="client_id" 
@@ -97,7 +97,7 @@
                         
                         <div class="mb-3">
                             <label for="client_secret" class="form-label">Client Secret</label>
-                            <input type="text" 
+                            <input type="text"
                                 class="form-control" 
                                 id="client_secret" 
                                 name="client_secret" 
@@ -108,7 +108,7 @@
                         
                         <div class="mb-3">
                             <label for="webhook_secret" class="form-label">Webhook Secret (optional)</label>
-                            <input type="text" 
+                            <input type="text"
                                 class="form-control" 
                                 id="webhook_secret" 
                                 name="webhook_secret" 
