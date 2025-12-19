@@ -1510,6 +1510,178 @@ paths:
           description: Calendar deleted successfully
         '404':
           description: Calendar not found
+/api/v1/zoom_oauth_connections:
+    get:
+      operationId: List Zoom OAuth Connections
+      description: Returns a list of zoom oauth connections for the authenticated
+        project. Results are paginated using cursor pagination.
+      summary: List zoom oauth connections
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      tags:
+      - Zoom OAuth Connections
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedZoomOAuthConnectionList'
+          description: List of zoom oauth connections
+    post:
+      operationId: Create Zoom OAuth Connection
+      description: After being created, the zoom oauth connection will be used.
+      summary: Create a new zoom oauth connection
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Zoom OAuth Connections
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateZoomOAuthConnectionRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoomOAuthConnection'
+              examples:
+                NewlyCreatedZoomOAuthConnection:
+                  value:
+                    id: zoc_abcdef1234567890
+                    zoom_oauth_app: zoa_abcdef1234567890
+                    state: connected
+                    metadata:
+                      tenant_id: '1234567890'
+                    user_id: user_abcdef1234567890
+                    account_id: account_abcdef1234567890
+                    connection_failure_data: null
+                    created_at: '2025-01-13T10:30:00.123456Z'
+                    updated_at: '2025-01-13T10:30:00.123456Z'
+                  summary: Newly Created Zoom OAuth Connection
+                  description: Example response when a zoom oauth connection is successfully
+                    created
+          description: Zoom OAuth Connection created successfully
+        '400':
+          description: Invalid input
+  /api/v1/zoom_oauth_connections/{object_id}:
+    get:
+      operationId: Get Zoom OAuth Connection
+      description: Gets a zoom oauth connection.
+      summary: Get a zoom oauth connection
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Zoom OAuth Connection ID
+        required: true
+        examples:
+          ZoomOAuthConnectionIDExample:
+            value: zoc_abcdef1234567890
+            summary: Zoom OAuth Connection ID Example
+      tags:
+      - api
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoomOAuthConnection'
+          description: Zoom OAuth Connection retrieved successfully
+        '404':
+          description: Zoom OAuth Connection not found
+    delete:
+      operationId: Delete Zoom OAuth Connection
+      description: Deletes a zoom oauth connection.
+      summary: Delete a zoom oauth connection
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Zoom OAuth Connection ID
+        required: true
+        examples:
+          ZoomOAuthConnectionIDExample:
+            value: zoc_abcdef1234567890
+            summary: Zoom OAuth Connection ID Example
+      tags:
+      - api
+      security:
+      - {}
+      responses:
+        '200':
+          description: Zoom OAuth Connection deleted successfully
+        '404':
+          description: Zoom OAuth Connection not found
 components:
   schemas:
     Bot:
@@ -2523,6 +2695,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Bot'
+    CreateZoomOAuthConnectionRequest:
+      type: object
+      properties:
+        zoom_oauth_app_id:
+          type: string
+          minLength: 1
+          description: The Zoom Oauth App the connection is for
+        authorization_code:
+          type: string
+          minLength: 1
+          description: The authorization code received from Zoom during the OAuth
+            flow
+        redirect_uri:
+          type: string
+          minLength: 1
+          description: The redirect URI used to obtain the authorization code
+        is_local_recording_token_supported:
+          type: boolean
+          default: true
+          description: Whether the Zoom OAuth Connection supports generating local
+            recording tokens
+        is_onbehalf_token_supported:
+          type: boolean
+          default: false
+          description: Whether the Zoom OAuth Connection supports generating onbehalf
+            tokens
+        metadata:
+          description: JSON object containing metadata to associate with the Zoom
+            OAuth Connection
+      required:
+      - authorization_code
+      - redirect_uri
     PaginatedCalendarEventList:
       type: object
       required:
@@ -2618,6 +2822,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Participant'
+    PaginatedZoomOAuthConnectionList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ZoomOAuthConnection'
     Participant:
       type: object
       properties:
@@ -2808,6 +3031,66 @@ components:
       - image/png
       type: string
       description: '* `image/png` - image/png'
+    ZoomOAuthConnection:
+      type: object
+      properties:
+        id:
+          type: string
+        zoom_oauth_app_id:
+          type: string
+        user_id:
+          type: string
+          readOnly: true
+        account_id:
+          type: string
+          readOnly: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/StateFeeEnum'
+          readOnly: true
+        metadata:
+          type: object
+          description: Metadata associated with the zoom oauth connection
+          readOnly: true
+        is_local_recording_token_supported:
+          type: boolean
+        is_onbehalf_token_supported:
+          type: boolean
+        connection_failure_data:
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        last_successful_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_attempted_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - account_id
+      - connection_failure_data
+      - created_at
+      - id
+      - is_local_recording_token_supported
+      - is_onbehalf_token_supported
+      - last_attempted_sync_at
+      - last_successful_sync_at
+      - metadata
+      - state
+      - updated_at
+      - user_id
+      - zoom_oauth_app_id
 servers:
 - url: https://app.attendee.dev
   description: Production server
