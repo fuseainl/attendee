@@ -98,7 +98,7 @@ Yes, this is Zoom's [official deadline](https://developers.zoom.us/blog/transiti
 
 ### Why can't I delete the Zoom OAuth App credentials?
 
-We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first.
+We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first. You can do this by [listing](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/get/api/v1/zoom_oauth_connections) all the associated Zoom OAuth connections and then [deleting](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/delete/api/v1/zoom_oauth_connections/{object_id}) them one by one.
 
 ### Are there any alternatives to implementing the onbehalf token?
 
