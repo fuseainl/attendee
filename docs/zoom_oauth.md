@@ -80,7 +80,7 @@ See the `/zoom_oauth_callback` route in the [example app](https://github.com/att
 
 ## Change your code for launching Zoom bots
 
-For Attendee to use the onbehalf token, you need to specify the zoom user the bot is joining on behalf of. You can do this by passing the user's zoom user id to Attendee in the bot creation request in `zoom_settings.onbehalf_token.zoom_oauth_connection_user_id` parameter. See the `/api/launch-bot` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example.
+For Attendee to use the onbehalf token, you need to specify the zoom user the bot is joining on behalf of. You can do this by passing the user's zoom user id in the `zoom_settings.onbehalf_token.zoom_oauth_connection_user_id` parameter when launching the bot. See the `/api/launch-bot` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example.
 
 ## Add Webhook processing logic to your application for the zoom_oauth_connection.state_change trigger
 
@@ -100,5 +100,7 @@ Yes, this is Zoom's [official deadline](https://developers.zoom.us/blog/transiti
 
 We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first.
 
+### Are there any alternatives to implementing the onbehalf token?
 
+Yes, you can switch your application to use [Zoom RTMS](https://developers.zoom.us/docs/rtms/). RTMS is a different method for getting recordings and transcripts from meetings which involves an app running in the Zoom client instead of a bot. Attendee has beta support for RTMS, for more information see the example programs for building a [notetaker](https://github.com/attendee-labs/rtms-notetaker-example) and [sales coach](https://github.com/attendee-labs/rtms-sales-coach-example) with Attendee and RTMS.
 
