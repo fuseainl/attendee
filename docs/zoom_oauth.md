@@ -1,122 +1,92 @@
-# Zoom OAuth Integration
+# Attendee-managed Zoom OAuth
 
-Attendee's Zoom OAuth integration allows your bots to record Zoom meetings without asking permission from the host. This is accomplished by storing your users' Zoom OAuth credentials in Attendee, which are then used to generate local recording tokens for meetings hosted by those users.
+Attendee's managed Zoom OAuth feature gives your Zoom Bots additional capabilities by generating certain Zoom SDK tokens when they join meetings. Currently, two token types are supported:
+- *Local Recording Token*: Lets the bot record meetings without asking permission from the host
+- *Onbehalf Token*: Associates the bot with the user it is joining the meeting on behalf of. After February 23, 2026, all bots joining external meetings will be required to use this token. See [here](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) for the official announcement from Zoom.
 
-The guide below walks through how to set up Zoom OAuth integration in your app.
+Attendee will store your users' Zoom OAuth credentials and use them to generate these tokens. If you'd prefer to manage the credentials yourself and pass the raw tokens to Attendee instead, use the `callback_settings.zoom_tokens_url` parameter when calling the `POST /api/v1/bots` [endpoint](https://docs.attendee.dev/api-reference#tag/bots/post/api/v1/bots).
+
+The guide below walks through how to set up Attendee-managed Zoom OAuth in your app. For a reference implementation, see the [Attendee Managed Zoom OAuth Example](https://github.com/attendee-labs/managed-zoom-oauth-example).
 
 ## How it works
 
 When a user authorizes your Zoom app through OAuth:
-1. Your application sends the authorization code to Attendee
+1. Your application sends the OAuth authorization code to Attendee
 2. Attendee exchanges it for OAuth credentials and stores them in Attendee
-3. When your bot joins a meeting hosted by that user, Attendee generates a join token using the stored credentials
-4. Due to the join token, the bot has its recording permissions pre-approved, so it does not need to ask permission from the host.
+3. When your bot joins a meeting hosted by that user, Attendee generates a local recording token using the stored credentials.
+4. When your app launches a bot on behalf of a user, you pass that user's zoom user id to Attendee in the bot creation request. Attendee will then generate an onbehalf token using the stored credentials.
 
 ## Create a Zoom App
 
 You'll need to create a Zoom OAuth App that your users will authorize. We recommend creating separate apps for development and production.
 
-1. Go to the [Zoom App Marketplace](https://marketplace.zoom.us/) and click "Develop" → "Build App"
-2. Choose "General App" as the app type
-3. Fill in your app information (name, description, etc.)
-4. In the "Scopes" section, add the required scopes:
-   - `meeting:read` - to read meeting information
-   - `user:read` - to read user information
-5. In the "Redirect URL for OAuth" section, add your application's OAuth callback URL
-6. In the "Event Subscriptions" section, you'll configure webhooks (see below)
-7. Note your **Client ID** and **Client Secret**—you'll need these in the next step
+1. Go to the [Zoom Developer Portal](https://marketplace.zoom.us/user/build) and create a new General app.
+2. On the sidebar select 'Basic Information'.
+3. For the OAuth redirect URL, enter your application's OAuth callback URL.
+4. On the sidebar select 'Features -> Embed'.
+5. Toggle 'Meeting SDK' to on.
+6. On the sidebar select 'Scopes'.
+7. Add the following scopes if you want to use the local recording token:
+   - `user:read:user`
+   - `meeting:read:list_meetings`
+   - `meeting:read:local_recording_token`
+   - `user:read:zak`
+8. Add the following scopes if you want to use the onbehalf token:
+   - `user:read:token`
+   - `user:read:zak`
 
 ## Register your Zoom App with Attendee
 
-Once you've created your Zoom app, you need to register it with Attendee:
+Once you've created your Zoom app, you need to register it with Attendee. We recommend creating Attendee projects for development and production. These projects will correspond to your development and production Zoom applications.
 
-1. Make a POST request to the Attendee API to create a Zoom OAuth App:
-   ```
-   POST /api/v1/zoom_oauth_apps
-   ```
-   Include your Zoom app's `client_id` and `client_secret` in the request body.
-
-2. Save the `zoom_oauth_app_id` from the response—you'll need this when creating Zoom OAuth Connections.
+1. Go to **Settings → Credentials**
+2. Under Zoom OAuth App Credentials, click **"Add OAuth App"**
+3. Enter your Zoom Client ID, Client Secret and Webhook Secret *(Note: Webhook secret is only needed if you are using the local recording token)*
 
 ## Configure Zoom App Webhooks
 
-Your Zoom app needs to send webhook events to Attendee so that Attendee knows when meetings are starting and can manage OAuth connections.
+*Note: These steps are only needed if you are using the local recording token.*
 
-1. In your Zoom App settings, go to the "Event Subscriptions" section
-2. Add the Attendee webhook endpoint as your Event notification endpoint URL:
-   ```
-   https://api.attendee.dev/api/v1/zoom_oauth/webhooks
-   ```
-   (Replace with your Attendee instance URL if you're self-hosting)
-3. Subscribe to these event types:
-   - `meeting.started`
-   - `meeting.ended`
-   - `endpoint.url_validation` (required by Zoom)
-4. Save your changes
+If you are using the local recording token, Attendee will keep track of the meetings that are hosted by users who have authorized your app. This is necessary so that Attendee can map a meeting URL to the OAuth credentials that belong to the meeting's host. The host's credentials are used to generate the local recording token for the meeting. In order to keep track of your users' meetings, Attendee needs to be notified when meetings are created.
+
+1. In the Attendee dashboard, click the **Webhook url** button on your newly created Zoom OAuth App credentials.
+2. Go back to the Zoom Developer Portal and go to **Features -> Access** in the sidebar.
+3. Toggle **Event subscription** and click **Add new Event Subscription**.
+4. For the **Event notification endpoint URL**, enter the webhook url you copied earlier from the Attendee dashboard.
+5. Select these event types:
+   - `Meeting has been created`
+   - `User's profile info has been updated`
+6. Click **"Save"**
+7. If you are creating a production app, validate the webhook by clicking the **Validate** button.
+
+## Configure Attendee webhooks
+
+1. Go to **Settings -> Webhooks**.
+2. Click on 'Create Webhook' and select the `zoom_oauth_connection.state_change` trigger. This will be triggered when one your users' Zoom credentials becomes invalid, usually because they uninstalled your app.
+3. Click **"Create"** to save your webhook.
 
 ## Add OAuth Flow Logic to Your Application
 
-You'll need to add code to handle the OAuth flow for users to authorize your Zoom app. Here's the typical flow:
+You will need to add code to your application that handles the OAuth flow and calls the Attendee API to create a Zoom OAuth connection for your user.
 
-1. **Add an auth endpoint** that redirects users to Zoom's OAuth authorization URL:
-   ```
-   https://zoom.us/oauth/authorize?response_type=code&client_id={YOUR_CLIENT_ID}&redirect_uri={YOUR_REDIRECT_URI}
-   ```
+Follow these steps:
 
-2. **Add a callback endpoint** that handles the OAuth callback from Zoom. When the user authorizes your app, Zoom will redirect to this endpoint with an authorization code.
+1. Add an `auth` endpoint that your application will use to redirect users to the OAuth flow.
+2. Add a `callback` endpoint that your application will use to handle the OAuth callback.
+3. In your callback endpoint, you'll take the access code and make a [POST /zoom_oauth_connections](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/post/api/v1/zoom_oauth_connections) request to the Attendee API to create a new Zoom OAuth connection for the user who just authorized your application.
+5. After you make the API request to Attendee, you'll receive a [Zoom OAuth connection object](https://docs.attendee.dev/api-reference#model/zoom-oauth-connection) in the response. Save this object to your database and associate it with the user who just authorized your application.
 
-3. **In your callback endpoint**, after receiving the authorization code from Zoom, make a POST request to Attendee to create a Zoom OAuth Connection:
-   ```
-   POST /api/v1/zoom_oauth_connections
-   ```
-   Include in the request body:
-   - `zoom_oauth_app_id` - The ID of the Zoom OAuth App you registered with Attendee
-   - `authorization_code` - The authorization code from Zoom
-   - `redirect_uri` - The redirect URI used in the OAuth flow
-   - `deduplication_key` - (Optional but recommended) A unique identifier for this user (e.g., their email or internal user ID) to prevent duplicate connections
+See the `/zoom_oauth_callback` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example implementation of these steps.
 
-4. **Save the connection**: Attendee will exchange the authorization code for OAuth credentials and return a Zoom OAuth Connection object. Save this connection object (particularly the `zoom_oauth_connection_id`) to your database associated with the user.
+## Add code to specify the user the bot is joining on behalf of
 
-## Using Zoom OAuth Connections with Bots
+For Attendee to use the onbehalf token, you need to specify the zoom user the bot is joining on behalf of. You can do this by passing the user's zoom user id to Attendee in the bot creation request in `zoom_settings.onbehalf_token.zoom_oauth_connection_user_id` parameter. See the `/api/launch-bot` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example.
 
-Once a Zoom OAuth Connection is created, any bots joining meetings hosted by that user will automatically use join tokens (no permission prompt required).
+## Add Webhook processing logic to your application for the zoom_oauth_connection.state_change trigger
 
-When creating a bot for a Zoom meeting, you can optionally include the `zoom_oauth_connection_id` parameter in your bot creation request:
+When you receive a webhook with trigger type `zoom_oauth_connection.state_change`, it means that the Zoom OAuth connection has moved to the `disconnected` state. This can happen if the user revokes access to the Zoom app or their Zoom account is deleted.
 
-```
-POST /api/v1/bots
-{
-  "meeting_url": "https://zoom.us/j/123456789",
-  "zoom_oauth_connection_id": "zoauth_abc123",
-  ...
-}
-```
+In your application, you should update the Zoom OAuth connection in your database to reflect the disconnected state.
 
-If you don't specify a `zoom_oauth_connection_id`, Attendee will automatically try to find an appropriate connection based on the meeting host. However, explicitly providing the connection ID ensures the correct credentials are used.
+See the `/attendee-webhook` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example implementation.
 
-## Handling Disconnected Connections
-
-Zoom OAuth Connections can become disconnected if:
-- The user revokes access to your Zoom app
-- The OAuth credentials expire and cannot be refreshed
-- The user's Zoom account is deleted
-
-To monitor connection health, you can:
-1. Periodically check the `state` field of your Zoom OAuth Connections via a GET request to `/api/v1/zoom_oauth_connections/{connection_id}`
-2. Set up webhooks to be notified when a connection becomes disconnected (if this webhook type is available)
-
-When a connection becomes disconnected, bots will fall back to the standard join flow (with permission prompts).
-
-## FAQ
-
-### Do I need to create a Zoom OAuth Connection for every user?
-
-Only for users who will be hosting meetings that your bots need to join without permission prompts. If your bots are joining meetings where the host hasn't authorized your app, the bots will use the standard join flow.
-
-### Can I use the same Zoom App for multiple Attendee projects?
-
-While technically possible, we recommend creating separate Zoom apps for different environments (development, staging, production) and corresponding Attendee projects for better isolation and security.
-
-### What happens if the Zoom OAuth credentials expire?
-
-Attendee automatically refreshes OAuth credentials when they expire. If refresh fails (e.g., user revoked access), the connection will move to a `disconnected` state.
