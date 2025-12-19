@@ -173,6 +173,7 @@ class ZoomBotAdapter(BotAdapter):
         # more than 10 seconds, we should send a message to the bot controller that we could not connect to the meeting
         # https://devforum.zoom.us/t/linux-sdk-gets-stuck-in-meeting-status-connecting-when-the-provided-password-is-incorrect/130441
         self.stuck_in_connecting_state_timeout = 60
+        self.stuck_in_connecting_state_timeout_id = None
 
         # Breakout room controller
         self.breakout_room_ctrl = None
@@ -961,9 +962,16 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"We've been in the connecting state for more than {self.stuck_in_connecting_state_timeout} seconds, going to return could not connect to meeting message")
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
+    def clear_stuck_in_connecting_state_timeout(self):
+        if self.stuck_in_connecting_state_timeout_id is not None:
+            removed = GLib.source_remove(self.stuck_in_connecting_state_timeout_id)
+            logger.info(f"Cleared stuck in connecting state timeout id={self.stuck_in_connecting_state_timeout_id} removed={removed}")
+            self.stuck_in_connecting_state_timeout_id = None
+
     def wait_to_get_out_of_connecting_state(self):
-        logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds")
-        GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
+        self.clear_stuck_in_connecting_state_timeout()
+        self.stuck_in_connecting_state_timeout_id = GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
+        logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
 
     def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
         if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
