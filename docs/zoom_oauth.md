@@ -18,7 +18,7 @@ When a user authorizes your Zoom app through OAuth:
 
 ## Create a Zoom App
 
-You'll need to create a Zoom OAuth App that your users will authorize. We recommend creating separate apps for development and production.
+You'll need to create a Zoom OAuth App that your users will authorize. We recommend creating separate apps for development and production. You will need to choose whether you want to use the local recording token or the onbehalf token or both. Since the onbehalf token will be required after February 23, 2026, we highly recommend you use it. The local recording token is only needed if your bots are recording meetings and you want to record meetings without asking permission from the host.
 
 1. Go to the [Zoom Developer Portal](https://marketplace.zoom.us/user/build) and create a new General app.
 2. On the sidebar select 'Basic Information'.
@@ -78,7 +78,7 @@ Follow these steps:
 
 See the `/zoom_oauth_callback` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example implementation of these steps.
 
-## Add code to specify the user the bot is joining on behalf of
+## Change your code for launching Zoom bots
 
 For Attendee to use the onbehalf token, you need to specify the zoom user the bot is joining on behalf of. You can do this by passing the user's zoom user id to Attendee in the bot creation request in `zoom_settings.onbehalf_token.zoom_oauth_connection_user_id` parameter. See the `/api/launch-bot` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example.
 
@@ -89,4 +89,16 @@ When you receive a webhook with trigger type `zoom_oauth_connection.state_change
 In your application, you should update the Zoom OAuth connection in your database to reflect the disconnected state.
 
 See the `/attendee-webhook` route in the [example app](https://github.com/attendee-labs/managed-zoom-oauth-example/blob/main/server.js) for an example implementation.
+
+## FAQ
+
+### Will my Zoom app stop working after February 23, 2026, if we don't use the onbehalf token?
+
+Yes, this is Zoom's [official deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). However, Attendee is in contact with Zoom and can request extensions for individual apps that are using Attendee. Please reach out on Slack if you need help getting an extension.
+
+### Why can't I delete the Zoom OAuth App credentials?
+
+We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first.
+
+
 
