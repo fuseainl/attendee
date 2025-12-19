@@ -143,6 +143,7 @@ class VideoInputStream:
 
         self.last_frame_time = time.time()
         self.black_frame_timer_id = GLib.timeout_add(250, self.send_black_frame)
+        self.black_frame_debug_print_ticker = 0
 
     def on_raw_data_status_changed_callback(self, status):
         self.raw_data_status = status
@@ -157,7 +158,10 @@ class VideoInputStream:
             # Create a black frame of the same dimensions
             black_frame = create_black_i420_frame(self.video_input_manager.video_frame_size)
             self.video_input_manager.new_frame_callback(black_frame, time.time_ns())
-            logger.info(f"In VideoInputStream.send_black_frame for user {self.user_id} sent black frame")
+
+            if self.black_frame_debug_print_ticker % 10 == 0:
+                logger.info(f"In VideoInputStream.send_black_frame for user {self.user_id} sent black frame")
+            self.black_frame_debug_print_ticker += 1
 
         return not self.renderer_destroyed  # Continue timer if not cleaned up
 
