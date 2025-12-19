@@ -2,7 +2,7 @@
 
 Attendee's managed Zoom OAuth feature gives your Zoom Bots additional capabilities by generating certain Zoom SDK tokens when they join meetings. Currently, two token types are supported:
 - *Local Recording Token*: Lets the bot record meetings without asking permission from the host
-- *Onbehalf Token*: Associates the bot with the user it is joining the meeting on behalf of. After February 23, 2026, all bots joining external meetings will be required to use this token. See [here](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) for the official announcement from Zoom.
+- *Onbehalf Token*: Associates the bot with the user it is joining the meeting on behalf of. After February 23, 2026, all bots joining *external* meetings will be required to use this token. See [here](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/) for the official announcement from Zoom.
 
 Attendee will store your users' Zoom OAuth credentials and use them to generate these tokens. If you'd prefer to manage the credentials yourself and pass the raw tokens to Attendee instead, use the `callback_settings.zoom_tokens_url` parameter when calling the `POST /api/v1/bots` [endpoint](https://docs.attendee.dev/api-reference#tag/bots/post/api/v1/bots).
 
@@ -94,11 +94,17 @@ See the `/attendee-webhook` route in the [example app](https://github.com/attend
 
 ### Will my Zoom app stop working after February 23, 2026, if we don't use the onbehalf token?
 
-Yes, this is Zoom's [official deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). However, Attendee is in contact with Zoom and can request extensions for individual apps that are using Attendee. Please reach out on Slack if you need help getting an extension.
+Yes, this is Zoom's [official deadline](https://developers.zoom.us/blog/transition-to-obf-token-meetingsdk-apps/). However, Attendee is in contact with Zoom and can request extensions for individual apps that are using Attendee. Please reach out on Slack if you need help getting an extension. Note that if your bot only joins meetings within your Zoom account, you don't need to use the onbehalf token.
 
 ### Why can't I delete the Zoom OAuth App credentials?
 
 We don't allow you to delete the Zoom OAuth App credentials if there are any Zoom OAuth connections associated with it. You will need to intentionally delete all the associated Zoom OAuth connections first. You can do this by [listing](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/get/api/v1/zoom_oauth_connections) all the associated Zoom OAuth connections and then [deleting](https://docs.attendee.dev/api-reference#tag/zoom-oauth-connections/delete/api/v1/zoom_oauth_connections/{object_id}) them one by one.
+
+### What happens if the onbehalf token user is not in the meeting when the bot joins?
+
+The bot will not be able to join until this user has entered the meeting. Attendee will keep trying to join until a timeout is reached. The timeout can be configured in the `automatic_leave_settings.authorized_user_not_in_meeting_timeout_seconds` parameter when launching the bot. It defaults to 600 seconds.
+
+For more details on onbehalf token related behavior see [here](https://devforum.zoom.us/t/updates-to-meeting-sdk-authorization-faq).
 
 ### Are there any alternatives to implementing the onbehalf token?
 
