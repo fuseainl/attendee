@@ -1510,7 +1510,7 @@ paths:
           description: Calendar deleted successfully
         '404':
           description: Calendar not found
-/api/v1/zoom_oauth_connections:
+  /api/v1/zoom_oauth_connections:
     get:
       operationId: List Zoom OAuth Connections
       description: Returns a list of zoom oauth connections for the authenticated
@@ -1549,7 +1549,7 @@ paths:
           description: List of zoom oauth connections
     post:
       operationId: Create Zoom OAuth Connection
-      description: After being created, the zoom oauth connection will be used.
+      description: After being created, the zoom oauth connection will be used to generate tokens for the user.
       summary: Create a new zoom oauth connection
       parameters:
       - in: header
@@ -1632,7 +1632,7 @@ paths:
             value: zoc_abcdef1234567890
             summary: Zoom OAuth Connection ID Example
       tags:
-      - api
+      - Zoom OAuth Connections
       security:
       - {}
       responses:
@@ -1674,7 +1674,7 @@ paths:
             value: zoc_abcdef1234567890
             summary: Zoom OAuth Connection ID Example
       tags:
-      - api
+      - Zoom OAuth Connections
       security:
       - {}
       responses:
