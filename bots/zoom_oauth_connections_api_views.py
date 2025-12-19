@@ -102,7 +102,7 @@ class ZoomOAuthConnectionListCreateView(GenericAPIView):
     @extend_schema(
         operation_id="Create Zoom OAuth Connection",
         summary="Create a new zoom oauth connection",
-        description="After being created, the zoom oauth connection will be used.",
+        description="After being created, the zoom oauth connection will be used to generate tokens for the user.",
         request=CreateZoomOAuthConnectionSerializer,
         responses={
             201: OpenApiResponse(
@@ -149,6 +149,7 @@ class ZoomOAuthConnectionDetailPatchDeleteView(GenericAPIView):
             200: OpenApiResponse(description="Zoom OAuth Connection deleted successfully"),
             404: OpenApiResponse(description="Zoom OAuth Connection not found"),
         },
+        tags=["Zoom OAuth Connections"],
     )
     def delete(self, request, object_id):
         try:
@@ -176,6 +177,7 @@ class ZoomOAuthConnectionDetailPatchDeleteView(GenericAPIView):
             200: OpenApiResponse(response=ZoomOAuthConnectionSerializer, description="Zoom OAuth Connection retrieved successfully"),
             404: OpenApiResponse(description="Zoom OAuth Connection not found"),
         },
+        tags=["Zoom OAuth Connections"],
     )
     def get(self, request, object_id):
         try:

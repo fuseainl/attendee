@@ -42,8 +42,19 @@
           "type": "page"
         },
         {
-          "path": "docs/zoom_app_review.md",
-          "type": "page"
+          "name": "Zoom",
+          "type": "folder",
+          "defaultOpen": true,
+          "children": [
+            {
+              "path": "docs/zoom_app_review.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/zoom_oauth.md",
+              "type": "page"
+            }
+          ]
         },
         {
           "path": "docs/faq.md",
