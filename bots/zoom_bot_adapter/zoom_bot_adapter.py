@@ -969,7 +969,6 @@ class ZoomBotAdapter(BotAdapter):
             self.stuck_in_connecting_state_timeout_id = None
 
     def wait_to_get_out_of_connecting_state(self):
-        self.clear_stuck_in_connecting_state_timeout()
         self.stuck_in_connecting_state_timeout_id = GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
         logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
 
@@ -985,6 +984,7 @@ class ZoomBotAdapter(BotAdapter):
 
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
+        self.clear_stuck_in_connecting_state_timeout()
         self.meeting_status = status
 
         if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
