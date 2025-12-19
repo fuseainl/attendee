@@ -116,26 +116,33 @@ class VideoInputStream:
             onRawDataStatusChangedCallback=self.on_raw_data_status_changed_callback,
         )
 
-        self.renderer = zoom.createRenderer(self.renderer_delegate)
-        set_resolution_result = self.renderer.setRawDataResolution(zoom.ZoomSDKResolution_360P)
-        raw_data_type = {
-            VideoInputManager.StreamType.SCREENSHARE: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_SHARE,
-            VideoInputManager.StreamType.VIDEO: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_VIDEO,
-        }[stream_type]
+        self.renderer = None
 
-        if stream_type == VideoInputManager.StreamType.SCREENSHARE:
-            subscribe_result = self.renderer.subscribe(self.share_source_id, raw_data_type)
-        else:
-            subscribe_result = self.renderer.subscribe(self.user_id, raw_data_type)
+        try:
+            self.renderer = zoom.createRenderer(self.renderer_delegate)
+        except Exception as e:
+            logger.error(f"Error creating renderer for user {self.user_id} and share source id {self.share_source_id}: {e}. Will emit black frames for this user.")
+
+        if self.renderer:
+            set_resolution_result = self.renderer.setRawDataResolution(zoom.ZoomSDKResolution_360P)
+            raw_data_type = {
+                VideoInputManager.StreamType.SCREENSHARE: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_SHARE,
+                VideoInputManager.StreamType.VIDEO: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_VIDEO,
+            }[stream_type]
+
+            if stream_type == VideoInputManager.StreamType.SCREENSHARE:
+                subscribe_result = self.renderer.subscribe(self.share_source_id, raw_data_type)
+            else:
+                subscribe_result = self.renderer.subscribe(self.user_id, raw_data_type)
+
+            logger.info(f"In VideoInputStream.init self.renderer = {self.renderer}")
+            logger.info(f"In VideoInputStream.init set_resolution_result for user {self.user_id} and share source id {self.share_source_id} is {set_resolution_result}")
+            logger.info(f"In VideoInputStream.init subscribe_result for user {self.user_id} and share source id {self.share_source_id} is {subscribe_result}")
 
         self.raw_data_status = zoom.RawData_Off
 
         self.last_frame_time = time.time()
         self.black_frame_timer_id = GLib.timeout_add(250, self.send_black_frame)
-
-        logger.info(f"In VideoInputStream.init self.renderer = {self.renderer}")
-        logger.info(f"In VideoInputStream.init set_resolution_result for user {self.user_id} and share source id {self.share_source_id} is {set_resolution_result}")
-        logger.info(f"In VideoInputStream.init subscribe_result for user {self.user_id} and share source id {self.share_source_id} is {subscribe_result}")
 
     def on_raw_data_status_changed_callback(self, status):
         self.raw_data_status = status
@@ -162,9 +169,10 @@ class VideoInputStream:
             GLib.source_remove(self.black_frame_timer_id)
             self.black_frame_timer_id = None
 
-        logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
-        self.renderer.unSubscribe()
-        logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+        if self.renderer:
+            logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+            self.renderer.unSubscribe()
+            logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
 
     def on_renderer_destroyed_callback(self):
         self.renderer_destroyed = True
