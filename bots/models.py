@@ -931,6 +931,9 @@ class Bot(models.Model):
         return str(save_resource_snapshots_env_var_value).lower() == "true"
 
     def create_debug_recording(self):
+        if os.getenv("SAVE_DEBUG_RECORDINGS", "false") == "true":
+            return True
+
         from bots.meeting_url_utils import meeting_type_from_url
 
         # Temporarily enabling this for all google meet meetings
