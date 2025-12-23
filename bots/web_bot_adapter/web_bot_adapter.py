@@ -867,9 +867,15 @@ class WebBotAdapter(BotAdapter):
         # Compile regex patterns
         patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.automatic_leave_configuration.only_bots_in_meeting_name_patterns]
         
+        # Get all active participants
+        active_participants = [participant for participant in self.participants_info.values() if participant.get("active", False)]
+        
+        if len(active_participants) == 0:
+            return False
+        
         # Check all participants
-        for participant_uuid, participant in self.participants.items():
-            participant_name = participant.get("name", "")
+        for participant in active_participants:
+            participant_name = participant.get("fullName", "")
             
             # Check if this participant matches any bot pattern
             is_bot = any(pattern.search(participant_name) for pattern in patterns)
@@ -878,8 +884,8 @@ class WebBotAdapter(BotAdapter):
             if not is_bot:
                 return False
         
-        # All participants are bots (or no participants)
-        return len(self.participants) > 0
+        # All participants are bots
+        return True
 
     def is_ready_to_send_chat_messages(self):
         return self.ready_to_send_chat_messages
