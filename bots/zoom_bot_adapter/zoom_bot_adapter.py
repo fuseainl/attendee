@@ -7,6 +7,7 @@ import jwt
 import numpy as np
 import zoom_meeting_sdk as zoom
 
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
@@ -235,47 +236,23 @@ class ZoomBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if self.number_of_participants_ever_in_meeting() <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        # Get human participants (excluding bots matching bot_name_patterns)
-        human_participant_ids = self._get_human_participant_ids()
+        all_participant_ids = self.participants_ctrl.GetParticipantsList()
 
-        # If only our bot or no humans remain, start timer
-        if len(human_participant_ids) <= 1:
+        all_participant_ids_excluding_other_bots = []
+        for participant_id in all_participant_ids:
+            participant = self.get_participant(participant_id)
+            if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
+                all_participant_ids_excluding_other_bots.append(participant_id)
+
+        if len(all_participant_ids_excluding_other_bots) == 1:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
         else:
             self.only_one_participant_in_meeting_at = None
-
-    def _get_human_participant_ids(self):
-        """Get list of participant IDs excluding bots matching bot_name_patterns"""
-        if not self.participants_ctrl:
-            return []
-
-        all_participant_ids = self.participants_ctrl.GetParticipantsList()
-
-        # If no bot patterns configured, return all participants
-        if not self.automatic_leave_configuration.bot_name_patterns:
-            return all_participant_ids
-
-        # Filter out bots
-        import re
-
-        patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.automatic_leave_configuration.bot_name_patterns]
-
-        human_ids = []
-        for participant_id in all_participant_ids:
-            user = self.participants_ctrl.GetUserByUserID(participant_id)
-            if user:
-                participant_name = user.GetUserName()
-                # Check if this participant matches any bot pattern
-                is_bot = any(pattern.search(participant_name) for pattern in patterns)
-                if not is_bot:
-                    human_ids.append(participant_id)
-
-        return human_ids
 
     def on_user_left_callback(self, left_user_ids, _):
         logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
@@ -443,8 +420,8 @@ class ZoomBotAdapter(BotAdapter):
             logger.info(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
 
-    def number_of_participants_ever_in_meeting(self):
-        return len(self._participant_cache)
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self._participant_cache.values() if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid

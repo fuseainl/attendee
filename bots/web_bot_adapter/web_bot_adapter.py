@@ -251,39 +251,25 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
+
+
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if len(self.participants_info) <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        # Get human participants (excluding bots matching bot_name_patterns)
-        human_participants = self._get_human_participants()
-
-        # If only our bot remains (or no humans), start timer
-        if len(human_participants) == 0 or (len(human_participants) == 1 and human_participants[0]["fullName"] == self.display_name):
+        all_participants_in_meeting = [x for x in self.participants_info.values() if x["active"]]
+        if len(all_participants_in_meeting) == 1 and all_participants_in_meeting[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
                 logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}")
         else:
             self.only_one_participant_in_meeting_at = None
-
-    def _get_human_participants(self):
-        """Get list of active participants excluding bots matching bot_name_patterns"""
-        active_participants = [x for x in self.participants_info.values() if x["active"]]
-
-        # If no bot patterns configured, return all active participants
-        if not self.automatic_leave_configuration.bot_name_patterns:
-            return active_participants
-
-        # Filter out bots
-        import re
-
-        patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.automatic_leave_configuration.bot_name_patterns]
-
-        return [p for p in active_participants if not any(pattern.search(p.get("fullName", "")) for pattern in patterns)]
 
     def handle_removed_from_meeting(self):
         self.left_meeting = True
