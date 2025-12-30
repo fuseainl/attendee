@@ -769,10 +769,10 @@ class ZoomSettingsJSONField(serializers.JSONField):
                 "description": "Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.",
                 "default": 600,
             },
-            "bot_name_patterns": {
+            "bot_keywords": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of regex patterns to identify bot participants. Participants matching these patterns are excluded from the 'only participant' check. If only bots remain in a meeting, the bot will leave after the configured timeout.",
+                "description": "List of keywords to identify bot participants. A participant is considered a bot if any word in their name (split on spaces, hyphens, underscores) matches a keyword (case-insensitive). If only bots remain, the bot leaves after the configured timeout.",
                 "default": None,
             },
         },
@@ -1515,26 +1515,17 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if key not in defaults.keys():
                 raise serializers.ValidationError(f"Unexpected attribute: {key}")
 
-        # Validate bot_name_patterns separately (it's a list, not an int)
-        if "bot_name_patterns" in value:
-            if value["bot_name_patterns"] is not None:
-                if not isinstance(value["bot_name_patterns"], list):
-                    raise serializers.ValidationError("bot_name_patterns must be a list of strings or null")
-                # Validate each pattern is a valid regex
-                import re
-
-                for pattern in value["bot_name_patterns"]:
-                    if not isinstance(pattern, str):
-                        raise serializers.ValidationError("Each pattern in bot_name_patterns must be a string")
-                    try:
-                        re.compile(pattern)
-                    except re.error as e:
-                        raise serializers.ValidationError(f"Invalid regex pattern '{pattern}': {str(e)}")
+        # Validate bot_keywords separately (it's a list, not an int)
+        if "bot_keywords" in value and value["bot_keywords"] is not None:
+            if not isinstance(value["bot_keywords"], list):
+                raise serializers.ValidationError("bot_keywords must be a list of strings or null")
+            if not all(isinstance(k, str) for k in value["bot_keywords"]):
+                raise serializers.ValidationError("Each keyword in bot_keywords must be a string")
 
         # Validate that all other values are positive integers
         for param, default in defaults.items():
-            if param == "bot_name_patterns":
-                continue  # Skip, already validated above
+            if param == "bot_keywords":
+                continue
 
             if param in value and value[param] is not None and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")

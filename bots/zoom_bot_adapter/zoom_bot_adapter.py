@@ -1,3 +1,4 @@
+import re
 import time
 from datetime import datetime, timedelta
 
@@ -239,7 +240,7 @@ class ZoomBotAdapter(BotAdapter):
         if self.number_of_participants_ever_in_meeting() <= 1:
             return
 
-        # Get human participants (excluding bots matching bot_name_patterns)
+        # Get human participants (excluding bots matching bot_keywords)
         human_participant_ids = self._get_human_participant_ids()
 
         # If only our bot or no humans remain, start timer
@@ -250,32 +251,26 @@ class ZoomBotAdapter(BotAdapter):
             self.only_one_participant_in_meeting_at = None
 
     def _get_human_participant_ids(self):
-        """Get list of participant IDs excluding bots matching bot_name_patterns"""
+        """Get list of participant IDs excluding bots matching bot_keywords"""
         if not self.participants_ctrl:
             return []
 
         all_participant_ids = self.participants_ctrl.GetParticipantsList()
-
-        # If no bot patterns configured, return all participants
-        if not self.automatic_leave_configuration.bot_name_patterns:
+        keywords = self.automatic_leave_configuration.bot_keywords
+        if not keywords:
             return all_participant_ids
 
-        # Filter out bots
-        import re
+        keywords_lower = [k.lower() for k in keywords]
+        return [pid for pid in all_participant_ids if not self._is_bot_participant(pid, keywords_lower)]
 
-        patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.automatic_leave_configuration.bot_name_patterns]
-
-        human_ids = []
-        for participant_id in all_participant_ids:
-            user = self.participants_ctrl.GetUserByUserID(participant_id)
-            if user:
-                participant_name = user.GetUserName()
-                # Check if this participant matches any bot pattern
-                is_bot = any(pattern.search(participant_name) for pattern in patterns)
-                if not is_bot:
-                    human_ids.append(participant_id)
-
-        return human_ids
+    def _is_bot_participant(self, participant_id, keywords_lower):
+        """Check if participant name contains any bot keyword"""
+        user = self.participants_ctrl.GetUserByUserID(participant_id)
+        if not user:
+            return False
+        name = user.GetUserName()
+        words = [w.lower() for w in re.split(r"[\s\-_]+", name) if w]
+        return any(word in keywords_lower for word in words)
 
     def on_user_left_callback(self, left_user_ids, _):
         logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")

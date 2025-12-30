@@ -2630,11 +2630,11 @@ components:
                 user is not in the meeting. Only relevant if this is a Zoom bot using
                 the on behalf of token.
               default: 600
-            bot_name_patterns:
+            bot_keywords:
               type: array
               items:
                 type: string
-              description: List of regex patterns (case-insensitive) to identify bot participants. Participants matching these patterns are excluded from the 'only participant' check. If only bots remain in a meeting, the bot will leave after the configured timeout (only_participant_in_meeting_timeout_seconds).
+              description: List of keywords to identify bot participants. A participant is considered a bot if any word in their name (split on spaces, hyphens, underscores) matches a keyword (case-insensitive). If only bots remain, the bot leaves after the configured timeout.
               nullable: true
               default: null
           required: []
