@@ -1,5 +1,6 @@
-from .automatic_leave_configuration import AutomaticLeaveConfiguration
 from typing import Iterable
+
+from .automatic_leave_configuration import AutomaticLeaveConfiguration
 
 
 def participant_is_another_bot(participant_full_name, participant_is_the_bot, automatic_leave_configuration: AutomaticLeaveConfiguration):
