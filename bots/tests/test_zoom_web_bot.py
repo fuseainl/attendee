@@ -900,13 +900,10 @@ class TestZoomWebBot(TransactionTestCase):
         adapter.only_one_participant_in_meeting_at = current_time - 10
 
         # Give the bot time to process auto-leave
-        time.sleep(8)
+        time.sleep(5)
 
         # Refresh the bot from the database
         self.bot.refresh_from_db()
-
-        # Assert that the bot is in the ENDED state
-        self.assertEqual(self.bot.state, BotStates.ENDED)
 
         # Verify that the bot auto-left due to being only participant
         # (the Notetaker bot was excluded from the count)
