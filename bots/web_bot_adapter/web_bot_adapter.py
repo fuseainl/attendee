@@ -5,7 +5,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import threading
 import time
 from time import sleep
@@ -19,6 +18,7 @@ from selenium.webdriver.chrome.service import Service
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
@@ -255,7 +255,6 @@ class WebBotAdapter(BotAdapter):
     def number_of_participants_ever_in_meeting_excluding_other_bots(self):
         return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
 
-
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
             return
@@ -264,8 +263,8 @@ class WebBotAdapter(BotAdapter):
         if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        all_participants_in_meeting = [x for x in self.participants_info.values() if x["active"]]
-        if len(all_participants_in_meeting) == 1 and all_participants_in_meeting[0]["fullName"] == self.display_name:
+        all_participants_in_meeting_excluding_other_bots = [x for x in self.participants_info.values() if x["active"] and not participant_is_another_bot(x["fullName"], x["isCurrentUser"], self.automatic_leave_configuration)]
+        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
                 logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}")
