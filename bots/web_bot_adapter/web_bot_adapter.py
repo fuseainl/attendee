@@ -264,39 +264,14 @@ class WebBotAdapter(BotAdapter):
         if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-<<<<<<< HEAD
         all_participants_in_meeting_excluding_other_bots = [x for x in self.participants_info.values() if x["active"] and not participant_is_another_bot(x["fullName"], x["isCurrentUser"], self.automatic_leave_configuration)]
         if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
-=======
-        # Get human participants (excluding bots matching bot_keywords)
-        human_participants = self._get_human_participants()
-
-        # If only our bot remains (or no humans), start timer
-        if len(human_participants) == 0 or (len(human_participants) == 1 and human_participants[0]["fullName"] == self.display_name):
->>>>>>> feature/auto-leave-only-bots-in-meeting
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
                 logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}")
         else:
             self.only_one_participant_in_meeting_at = None
 
-<<<<<<< HEAD
-=======
-    def _get_human_participants(self):
-        """Get list of active participants excluding bots matching bot_keywords"""
-        active_participants = [x for x in self.participants_info.values() if x["active"]]
-        keywords = self.automatic_leave_configuration.bot_keywords
-        if not keywords:
-            return active_participants
-        keywords_lower = [k.lower() for k in keywords]
-        return [p for p in active_participants if not self._is_bot_name(p.get("fullName", ""), keywords_lower)]
-
-    def _is_bot_name(self, name, keywords_lower):
-        """Check if name contains any bot keyword (split on spaces, hyphens, underscores)"""
-        words = [w.lower() for w in re.split(r"[\s\-_]+", name) if w]
-        return any(word in keywords_lower for word in words)
-
->>>>>>> feature/auto-leave-only-bots-in-meeting
     def handle_removed_from_meeting(self):
         self.left_meeting = True
         self.send_message_callback({"message": self.Messages.MEETING_ENDED})
