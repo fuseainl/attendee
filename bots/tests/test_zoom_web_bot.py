@@ -900,7 +900,7 @@ class TestZoomWebBot(TransactionTestCase):
         adapter.only_one_participant_in_meeting_at = current_time - 10
 
         # Give the bot time to process auto-leave
-        time.sleep(5)
+        time.sleep(8)
 
         # Refresh the bot from the database
         self.bot.refresh_from_db()
