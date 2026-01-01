@@ -846,10 +846,10 @@ class TestZoomWebBot(TransactionTestCase):
         adapter.handle_participant_update(bot_participant)
         adapter.update_only_one_participant_in_meeting_at()
 
-        # Step 1: Real participant joins (device_id = "real_user_device")
+        # Step 1: Real participant joins Notetakerz should NOT be counted as a bot
         real_participant = {
             "deviceId": "real_user_device",
-            "fullName": "Test User",
+            "fullName": "Notetakerz",
             "isCurrentUser": False,
             "active": True,
             "humanized_status": "in_meeting",
@@ -864,7 +864,7 @@ class TestZoomWebBot(TransactionTestCase):
         # Step 2: Another bot joins (Notetaker - matches bot_keywords)
         notetaker_participant = {
             "deviceId": "notetaker_device",
-            "fullName": "Notetaker",
+            "fullName": "NoteTaker",
             "isCurrentUser": False,
             "active": True,
             "humanized_status": "in_meeting",
@@ -879,7 +879,7 @@ class TestZoomWebBot(TransactionTestCase):
         # Step 3: Real participant leaves (only our bot and the Notetaker remain)
         real_participant_leaving = {
             "deviceId": "real_user_device",
-            "fullName": "Test User",
+            "fullName": "Notetakerz",
             "isCurrentUser": False,
             "active": False,
             "humanized_status": "left_meeting",

@@ -1,3 +1,4 @@
+import re
 from typing import Iterable
 
 from .automatic_leave_configuration import AutomaticLeaveConfiguration
@@ -19,22 +20,27 @@ def participant_is_another_bot(participant_full_name, participant_is_the_bot, au
     return False
 
 
+# Split a string into a list of lower case words, splitting on spaces, hyphens, and underscores
+def split_string_into_lower_case_words(string: str) -> list[str]:
+    return [w.lower() for w in re.split(r"[\s\-_]+", string) if w]
+
+
 def string_contains_keywords(string: str, keywords_list: Iterable[str]) -> bool:
     """
     Returns True if `string` contains ANY keyword from `keywords_list` as a contiguous
-    sequence of space-delimited words (case-sensitive).
+    sequence of space-delimited words (case-insensitive).
 
     - Delimiter is a single space (per prompt).
     - Multi-word keywords must appear in the same order and contiguously.
       e.g. "Bob Johnson senior" matches "Bob Johnson"
            "Bob senior Johnson" does NOT match "Bob Johnson"
     """
-    words = string.split(" ")
+    words = split_string_into_lower_case_words(string)
     if not words:
         return False
 
     for kw in keywords_list:
-        kw_words = kw.split(" ")
+        kw_words = split_string_into_lower_case_words(kw)
         if not kw_words:
             continue
 

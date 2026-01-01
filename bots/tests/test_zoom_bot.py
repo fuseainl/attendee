@@ -4156,7 +4156,7 @@ class TestZoomBot(TransactionTestCase):
                 elif user_id == 2:
                     return MockParticipant(2, "Test User", "test_persistent_id_123")
                 elif user_id == 3:
-                    return MockParticipant(3, "Recording Bot for John", "notetaker_persistent_id")
+                    return MockParticipant(3, "REcOrding-Bot-for John", "notetaker_persistent_id")
                 return None
 
             adapter.participants_ctrl.GetUserByUserID.side_effect = get_user_by_id
