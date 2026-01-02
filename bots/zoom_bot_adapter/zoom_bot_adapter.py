@@ -243,14 +243,18 @@ class ZoomBotAdapter(BotAdapter):
         all_participant_ids = self.participants_ctrl.GetParticipantsList()
 
         all_participant_ids_excluding_other_bots = []
+        other_bots_in_meeting_names = []
         for participant_id in all_participant_ids:
             participant = self.get_participant(participant_id)
             if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
                 all_participant_ids_excluding_other_bots.append(participant_id)
+            else:
+                other_bots_in_meeting_names.append(participant["participant_full_name"])
 
         if len(all_participant_ids_excluding_other_bots) == 1:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
 
