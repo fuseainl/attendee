@@ -263,11 +263,19 @@ class WebBotAdapter(BotAdapter):
         if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        all_participants_in_meeting_excluding_other_bots = [x for x in self.participants_info.values() if x["active"] and not participant_is_another_bot(x["fullName"], x["isCurrentUser"], self.automatic_leave_configuration)]
+        all_participants_in_meeting_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant in self.participants_info.values():
+            if not participant["active"]:
+                continue
+            if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration):
+                all_participants_in_meeting_excluding_other_bots.append(participant)
+            else:
+                other_bots_in_meeting_names.append(participant["fullName"])
+
         if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
-                other_bots_in_meeting_names = [x["fullName"] for x in self.participants_info.values() if x["active"] and participant_is_another_bot(x["fullName"], x["isCurrentUser"], self.automatic_leave_configuration)]
                 logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
