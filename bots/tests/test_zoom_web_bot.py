@@ -875,6 +875,8 @@ class TestZoomWebBot(TransactionTestCase):
 
         # Verify only_one_participant_in_meeting_at is still None (real participant is there)
         self.assertIsNone(adapter.only_one_participant_in_meeting_at, "Timer should not start yet (real participant still there)")
+        # Verify that number of participants ever in meeting excluding other bots is 2
+        self.assertEqual(adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 2)
 
         # Step 3: Real participant leaves (only our bot and the Notetaker remain)
         real_participant_leaving = {

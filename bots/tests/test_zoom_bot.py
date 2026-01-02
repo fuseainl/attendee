@@ -4223,6 +4223,9 @@ class TestZoomBot(TransactionTestCase):
         # Assert that the bot is in the ENDED state
         self.assertEqual(self.bot.state, BotStates.ENDED)
 
+        # Assert that the number of participants ever in meeting excluding other bots is 2
+        self.assertEqual(controller.adapter.number_of_participants_ever_in_meeting_excluding_other_bots(), 2)
+
         # Verify that the bot auto-left due to being only participant
         # (the other notetaker bot was excluded from the count)
         bot_events = self.bot.bot_events.all()
