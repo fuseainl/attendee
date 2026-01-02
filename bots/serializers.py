@@ -1523,11 +1523,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 raise serializers.ValidationError("Each keyword in bot_keywords must be a string")
 
         # Validate that all other values are positive integers
+        non_integer_parameters = ["bot_keywords"]
         for param, default in defaults.items():
-            if param == "bot_keywords":
-                continue
-
-            if param in value and (not isinstance(value[param], int) or value[param] <= 0):
+            if param in value and param not in non_integer_parameters and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")
             # Set default if not provided
             if param not in value:
