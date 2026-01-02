@@ -772,7 +772,7 @@ class ZoomSettingsJSONField(serializers.JSONField):
             "bot_keywords": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of keywords to identify bot participants. A participant is considered a bot if any word in their name (split on spaces, hyphens, underscores) matches a keyword (case-insensitive). If only bots remain, the bot leaves after the configured timeout.",
+                "description": "List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.",
                 "default": None,
             },
         },
@@ -1527,7 +1527,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if param == "bot_keywords":
                 continue
 
-            if param in value and value[param] is not None and (not isinstance(value[param], int) or value[param] <= 0):
+            if param in value and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")
             # Set default if not provided
             if param not in value:
