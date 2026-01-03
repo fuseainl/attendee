@@ -637,17 +637,7 @@ class TranscriptionSettings:
         if model_from_settings:
             return model_from_settings
 
-        # nova-3 does not have multilingual support yet, so we need to use nova-2 if we're transcribing with a non-default language
-        if (self.deepgram_language() != "en" and self.deepgram_language()) or self.deepgram_detect_language():
-            deepgram_model = "nova-2"
-        else:
-            deepgram_model = "nova-3"
-
-        # Special case: we can use nova-3 for language=multi
-        if self.deepgram_language() == "multi":
-            deepgram_model = "nova-3"
-
-        return deepgram_model
+        return "nova-3"
 
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
