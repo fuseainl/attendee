@@ -637,6 +637,11 @@ class TranscriptionSettings:
         if model_from_settings:
             return model_from_settings
 
+        # nova-3 doesn't support Chinese and Thai languages yet, fall back to nova-2
+        nova2_only_languages = {"zh", "zh-CN", "zh-Hans", "zh-TW", "zh-Hant", "zh-HK", "th", "th-TH"}
+        if self.deepgram_language() in nova2_only_languages:
+            return "nova-2"
+
         return "nova-3"
 
     def deepgram_redaction_settings(self):
