@@ -637,17 +637,12 @@ class TranscriptionSettings:
         if model_from_settings:
             return model_from_settings
 
-        # nova-3 does not have multilingual support yet, so we need to use nova-2 if we're transcribing with a non-default language
-        if (self.deepgram_language() != "en" and self.deepgram_language()) or self.deepgram_detect_language():
-            deepgram_model = "nova-2"
-        else:
-            deepgram_model = "nova-3"
+        # nova-3 doesn't support Chinese and Thai languages yet, fall back to nova-2
+        nova2_only_languages = {"zh", "zh-CN", "zh-Hans", "zh-TW", "zh-Hant", "zh-HK", "th", "th-TH"}
+        if self.deepgram_language() in nova2_only_languages:
+            return "nova-2"
 
-        # Special case: we can use nova-3 for language=multi
-        if self.deepgram_language() == "multi":
-            deepgram_model = "nova-3"
-
-        return deepgram_model
+        return "nova-3"
 
     def deepgram_redaction_settings(self):
         return self._settings.get("deepgram", {}).get("redact", [])
@@ -931,6 +926,9 @@ class Bot(models.Model):
         return str(save_resource_snapshots_env_var_value).lower() == "true"
 
     def create_debug_recording(self):
+        if os.getenv("SAVE_DEBUG_RECORDINGS", "false") == "true":
+            return True
+
         from bots.meeting_url_utils import meeting_type_from_url
 
         # Temporarily enabling this for all google meet meetings
