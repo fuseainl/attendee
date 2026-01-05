@@ -71,7 +71,10 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             return
 
         self.google_meet_closed_captions_language = language
-        closed_caption_set_language_result = self.driver.execute_script(f"return setClosedCaptionsLanguage('{self.google_meet_closed_captions_language}')")
+        closed_caption_set_language_result = self.driver.execute_script(
+            "return setClosedCaptionsLanguage(arguments[0]);",
+            self.google_meet_closed_captions_language,
+        )
         if closed_caption_set_language_result:
             logger.info("In update_closed_captions_language, closed captions language set programatically")
         else:
