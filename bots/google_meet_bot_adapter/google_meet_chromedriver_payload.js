@@ -1947,7 +1947,12 @@ new RTCInterceptor({
 
 function setClosedCaptionsLanguage(language) {
     // Look for an <li> element whose data-value attribute matches the language code
-    const languageElement = document.querySelector(`li[data-value="${language}"]`);
+    // within the Meeting language dropdown
+    const languageList = document.querySelector('ul[aria-label="Meeting language"]');
+    if (!languageList) {
+        return false;
+    }
+    const languageElement = languageList.querySelector(`li[data-value="${language}"]`);
     if (languageElement) {
         languageElement.click();
         return true;
