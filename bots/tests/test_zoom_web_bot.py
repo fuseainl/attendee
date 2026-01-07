@@ -3,6 +3,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import requests
+from bots.bot_adapter import BotAdapter
 from django.db import connection
 from django.test import TransactionTestCase
 from selenium.common.exceptions import NoSuchElementException
@@ -316,6 +317,30 @@ class TestZoomWebBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    def test_captcha_required_records_specific_event_subtype(self):
+        """
+        If the adapter reports a captcha/verification gate (Zoom Web SDK "Check Captcha" loop),
+        we should record a dedicated COULD_NOT_JOIN sub-type so it's visible in analytics.
+        """
+        controller = BotController(self.bot.id)
+
+        # Prevent expensive cleanup behavior (uploads, process-kill watchdog, etc.)
+        controller.cleanup = MagicMock()
+
+        controller.take_action_based_on_message_from_adapter(
+            {
+                "message": BotAdapter.Messages.CAPTCHA_REQUIRED,
+                "help_url": "https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076",
+            }
+        )
+
+        self.bot.refresh_from_db()
+        last_event = self.bot.bot_events.order_by("-created_at").first()
+        self.assertIsNotNone(last_event, "Expected a bot event to be created")
+        self.assertEqual(last_event.event_type, BotEventTypes.COULD_NOT_JOIN)
+        self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_CAPTCHA_REQUIRED)
+        self.assertEqual(last_event.metadata.get("help_url"), "https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076")
 
     @patch("bots.zoom_oauth_connections_utils.requests.post")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
