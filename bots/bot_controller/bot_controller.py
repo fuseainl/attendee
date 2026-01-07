@@ -1544,12 +1544,12 @@ class BotController:
             self.cleanup()
             return
 
-        if message.get("message") == BotAdapter.Messages.CAPTCHA_REQUIRED:
+        if message.get("message") == BotAdapter.Messages.BLOCKED_BY_CAPTCHA:
             logger.info("Received message that captcha/verification is required to join")
             BotEventManager.create_event(
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
-                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_CAPTCHA_REQUIRED,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA,
             )
             self.cleanup()
             return

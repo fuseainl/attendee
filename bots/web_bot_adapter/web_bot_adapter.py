@@ -24,7 +24,7 @@ from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
-from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCaptchaRequiredException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -476,10 +476,10 @@ class WebBotAdapter(BotAdapter):
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
-    def send_captcha_required_message(self):
+    def send_blocked_by_captcha_message(self):
         self.send_message_callback(
             {
-                "message": self.Messages.CAPTCHA_REQUIRED,
+                "message": self.Messages.BLOCKED_BY_CAPTCHA,
             }
         )
 
@@ -674,8 +674,8 @@ class WebBotAdapter(BotAdapter):
                 self.send_incorrect_password_message()
                 return
 
-            except UiCaptchaRequiredException:
-                self.send_captcha_required_message()
+            except UiBlockedByCaptchaException:
+                self.send_blocked_by_captcha_message()
                 return
 
             except UiAuthorizedUserNotInMeetingTimeoutExceededException:

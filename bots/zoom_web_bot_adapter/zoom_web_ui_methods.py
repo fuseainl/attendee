@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCaptchaRequiredException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -127,7 +127,7 @@ class ZoomWebUIMethods:
                 time.sleep(1)
                 raise TimeoutException("User has not entered the meeting")
             except TimeoutException as e:
-                self.check_if_captcha_required()
+                self.check_if_blocked_by_captcha()
                 self.check_if_passcode_incorrect()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
 
@@ -219,7 +219,7 @@ class ZoomWebUIMethods:
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
 
-    def check_if_captcha_required(self):
+    def check_if_blocked_by_captcha(self):
         """
         Detects the Zoom Web SDK captcha/verification challenge UI.
 
@@ -228,7 +228,6 @@ class ZoomWebUIMethods:
         See: https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076
         """
         # Match the known captcha button HTML:
-        # <button class="... joinWindowBtn ... submit ...">Check captcha<span class="loading" ...></span></button>
         try:
             candidates = self.driver.find_elements(By.CSS_SELECTOR, "button.joinWindowBtn.submit, button.joinWindowBtn.submit.zm-btn")
             for el in candidates or []:
@@ -237,12 +236,12 @@ class ZoomWebUIMethods:
                         continue
                     text = (el.text or "").strip().lower()
                     if text == "check captcha" or text.startswith("check captcha"):
-                        logger.info("Captcha required / verification challenge detected (captcha button). Raising UiCaptchaRequiredException")
-                        raise UiCaptchaRequiredException("Captcha required (Zoom Web SDK verification challenge)")
+                        logger.info("Blocked by captcha / verification challenge detected (captcha button). Raising UiCaptchaRequiredException")
+                        raise UiBlockedByCaptchaException("Blocked by captcha (Zoom Web SDK verification challenge)")
                 except Exception:
                     # If the element becomes stale between queries, ignore and continue scanning.
                     continue
-        except UiCaptchaRequiredException:
+        except UiBlockedByCaptchaException:
             raise
         except Exception:
             return

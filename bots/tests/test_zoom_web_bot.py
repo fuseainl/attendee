@@ -318,7 +318,7 @@ class TestZoomWebBot(TransactionTestCase):
         # Close the database connection since we're in a thread
         connection.close()
 
-    def test_captcha_required_records_specific_event_subtype(self):
+    def test_blocked_by_captcha_records_specific_event_subtype(self):
         """
         If the adapter reports a captcha/verification gate (Zoom Web SDK "Check Captcha" loop),
         we should record a dedicated COULD_NOT_JOIN sub-type so it's visible in analytics.
@@ -330,7 +330,7 @@ class TestZoomWebBot(TransactionTestCase):
 
         controller.take_action_based_on_message_from_adapter(
             {
-                "message": BotAdapter.Messages.CAPTCHA_REQUIRED,
+                "message": BotAdapter.Messages.BLOCKED_BY_CAPTCHA,
             }
         )
 
@@ -338,7 +338,7 @@ class TestZoomWebBot(TransactionTestCase):
         last_event = self.bot.bot_events.order_by("-created_at").first()
         self.assertIsNotNone(last_event, "Expected a bot event to be created")
         self.assertEqual(last_event.event_type, BotEventTypes.COULD_NOT_JOIN)
-        self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_CAPTCHA_REQUIRED)
+        self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
 
     @patch("bots.zoom_oauth_connections_utils.requests.post")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
