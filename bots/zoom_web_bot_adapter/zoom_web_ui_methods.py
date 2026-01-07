@@ -227,26 +227,21 @@ class ZoomWebUIMethods:
         after submitting the verification code, effectively blocking programmatic joining.
         See: https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076
         """
-        upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        lower = "abcdefghijklmnopqrstuvwxyz"
-        xpaths = [
-            # Common UI copy for the Zoom Web SDK captcha gate
-            f"//*[self::button or self::div or self::span or self::a][contains(translate(normalize-space(.), '{upper}', '{lower}'), 'check captcha')]",
-            # Some variants mention "verification code"
-            f"//*[self::button or self::div or self::span or self::a][contains(translate(normalize-space(.), '{upper}', '{lower}'), 'verification code')]",
-        ]
-
+        # Match the known captcha button HTML:
+        # <button class="... joinWindowBtn ... submit ...">Check captcha<span class="loading" ...></span></button>
         try:
-            for xpath in xpaths:
-                elements = self.driver.find_elements(By.XPATH, xpath)
-                for el in elements or []:
-                    try:
-                        if el and el.is_displayed():
-                            logger.info("Captcha required / verification challenge detected. Raising UiCaptchaRequiredException")
-                            raise UiCaptchaRequiredException("Captcha required (Zoom Web SDK verification challenge)")
-                    except Exception:
-                        # If the element becomes stale between queries, ignore and continue scanning.
+            candidates = self.driver.find_elements(By.CSS_SELECTOR, "button.joinWindowBtn.submit, button.joinWindowBtn.submit.zm-btn")
+            for el in candidates or []:
+                try:
+                    if not el or not el.is_displayed():
                         continue
+                    text = (el.text or "").strip().lower()
+                    if text == "check captcha" or text.startswith("check captcha"):
+                        logger.info("Captcha required / verification challenge detected (captcha button). Raising UiCaptchaRequiredException")
+                        raise UiCaptchaRequiredException("Captcha required (Zoom Web SDK verification challenge)")
+                except Exception:
+                    # If the element becomes stale between queries, ignore and continue scanning.
+                    continue
         except UiCaptchaRequiredException:
             raise
         except Exception:

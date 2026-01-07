@@ -331,7 +331,6 @@ class TestZoomWebBot(TransactionTestCase):
         controller.take_action_based_on_message_from_adapter(
             {
                 "message": BotAdapter.Messages.CAPTCHA_REQUIRED,
-                "help_url": "https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076",
             }
         )
 
@@ -340,7 +339,6 @@ class TestZoomWebBot(TransactionTestCase):
         self.assertIsNotNone(last_event, "Expected a bot event to be created")
         self.assertEqual(last_event.event_type, BotEventTypes.COULD_NOT_JOIN)
         self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_CAPTCHA_REQUIRED)
-        self.assertEqual(last_event.metadata.get("help_url"), "https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076")
 
     @patch("bots.zoom_oauth_connections_utils.requests.post")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
