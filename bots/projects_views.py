@@ -109,8 +109,8 @@ def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
     return google_meet_bot_login
 
 
-def get_webhook_delivery_attempt_for_user(user, webhook_delivery_attempt_id):
-    webhook_delivery_attempt = get_object_or_404(WebhookDeliveryAttempt, id=webhook_delivery_attempt_id, webhook_subscription__project__organization=user.organization)
+def get_webhook_delivery_attempt_for_user(user, idempotency_key):
+    webhook_delivery_attempt = get_object_or_404(WebhookDeliveryAttempt, idempotency_key=idempotency_key, webhook_subscription__project__organization=user.organization)
     # If you're an admin you can access any webhook delivery attempt in the organization
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=webhook_delivery_attempt.webhook_subscription.project, user=user).exists():
         raise PermissionDenied
@@ -1039,14 +1039,14 @@ class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
 
 class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
-    def post(self, request, object_id, webhook_delivery_attempt_id):
+    def post(self, request, object_id, idempotency_key):
         # Verify user has access to this project
         get_project_for_user(user=request.user, project_object_id=object_id)
 
         # Get and verify access to the webhook delivery attempt
         webhook_delivery_attempt = get_webhook_delivery_attempt_for_user(
             user=request.user,
-            webhook_delivery_attempt_id=webhook_delivery_attempt_id,
+            idempotency_key=idempotency_key,
         )
 
         # Reset status to pending and queue for redelivery
