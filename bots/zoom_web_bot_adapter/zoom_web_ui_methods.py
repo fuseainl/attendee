@@ -227,24 +227,25 @@ class ZoomWebUIMethods:
         after submitting the verification code, effectively blocking programmatic joining.
         See: https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076
         """
-        # Match the known captcha button HTML:
+        upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        lower = "abcdefghijklmnopqrstuvwxyz"
+        xpath = f"//button[contains(translate(normalize-space(.), '{upper}', '{lower}'), 'check captcha')]"
+
         try:
-            candidates = self.driver.find_elements(By.CSS_SELECTOR, "button.joinWindowBtn.submit, button.joinWindowBtn.submit.zm-btn")
-            for el in candidates or []:
-                try:
-                    if not el or not el.is_displayed():
-                        continue
-                    text = (el.text or "").strip().lower()
-                    if text == "check captcha" or text.startswith("check captcha"):
-                        logger.info("Blocked by captcha / verification challenge detected (captcha button). Raising UiCaptchaRequiredException")
-                        raise UiBlockedByCaptchaException("Blocked by captcha (Zoom Web SDK verification challenge)")
-                except Exception:
-                    # If the element becomes stale between queries, ignore and continue scanning.
-                    continue
-        except UiBlockedByCaptchaException:
-            raise
+            candidates = self.driver.find_elements(By.XPATH, xpath) or []
         except Exception:
             return
+
+        for el in candidates:
+            try:
+                if el and el.is_displayed():
+                    logger.info("Blocked by captcha / verification challenge detected (button text). Raising UiBlockedByCaptchaException")
+                    raise UiBlockedByCaptchaException("Blocked by captcha (Zoom Web SDK verification challenge)")
+            except UiBlockedByCaptchaException:
+                raise
+            except Exception:
+                # If the element becomes stale between queries, ignore and continue scanning.
+                continue
 
     def set_zoom_closed_captions_language(self):
         if not self.zoom_closed_captions_language:
