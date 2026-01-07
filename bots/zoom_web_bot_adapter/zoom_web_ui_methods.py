@@ -7,7 +7,7 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
@@ -127,6 +127,7 @@ class ZoomWebUIMethods:
                 time.sleep(1)
                 raise TimeoutException("User has not entered the meeting")
             except TimeoutException as e:
+                self.check_if_blocked_by_captcha()
                 self.check_if_passcode_incorrect()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
 
@@ -217,6 +218,34 @@ class ZoomWebUIMethods:
         if passcode_incorrect_element and passcode_incorrect_element.is_displayed():
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
+
+    def check_if_blocked_by_captcha(self):
+        """
+        Detects the Zoom Web SDK captcha/verification challenge UI.
+
+        Some Zoom accounts may be forced through a "Check Captcha" flow which can reappear
+        after submitting the verification code, effectively blocking programmatic joining.
+        See: https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076
+        """
+        upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        lower = "abcdefghijklmnopqrstuvwxyz"
+        xpath = f"//button[contains(translate(normalize-space(.), '{upper}', '{lower}'), 'check captcha')]"
+
+        try:
+            candidates = self.driver.find_elements(By.XPATH, xpath) or []
+        except Exception:
+            return
+
+        for el in candidates:
+            try:
+                if el and el.is_displayed():
+                    logger.info("Blocked by captcha / verification challenge detected (button text). Raising UiBlockedByCaptchaException")
+                    raise UiBlockedByCaptchaException("Blocked by captcha (Zoom Web SDK verification challenge)")
+            except UiBlockedByCaptchaException:
+                raise
+            except Exception:
+                # If the element becomes stale between queries, ignore and continue scanning.
+                continue
 
     def set_zoom_closed_captions_language(self):
         if not self.zoom_closed_captions_language:

@@ -34,6 +34,11 @@ class UiIncorrectPasswordException(UiException):
         super().__init__(message, step, inner_exception)
 
 
+class UiBlockedByCaptchaException(UiException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 class UiRetryableException(UiException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)

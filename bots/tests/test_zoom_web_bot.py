@@ -7,6 +7,7 @@ from django.db import connection
 from django.test import TransactionTestCase
 from selenium.common.exceptions import NoSuchElementException
 
+from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
@@ -316,6 +317,28 @@ class TestZoomWebBot(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    def test_blocked_by_captcha_records_specific_event_subtype(self):
+        """
+        If the adapter reports a captcha/verification gate (Zoom Web SDK "Check Captcha" loop),
+        we should record a dedicated COULD_NOT_JOIN sub-type so it's visible in analytics.
+        """
+        controller = BotController(self.bot.id)
+
+        # Prevent expensive cleanup behavior (uploads, process-kill watchdog, etc.)
+        controller.cleanup = MagicMock()
+
+        controller.take_action_based_on_message_from_adapter(
+            {
+                "message": BotAdapter.Messages.BLOCKED_BY_CAPTCHA,
+            }
+        )
+
+        self.bot.refresh_from_db()
+        last_event = self.bot.bot_events.order_by("-created_at").first()
+        self.assertIsNotNone(last_event, "Expected a bot event to be created")
+        self.assertEqual(last_event.event_type, BotEventTypes.COULD_NOT_JOIN)
+        self.assertEqual(last_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA)
 
     @patch("bots.zoom_oauth_connections_utils.requests.post")
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
