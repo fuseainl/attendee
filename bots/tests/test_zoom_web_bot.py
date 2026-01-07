@@ -3,11 +3,11 @@ import time
 from unittest.mock import MagicMock, patch
 
 import requests
-from bots.bot_adapter import BotAdapter
 from django.db import connection
 from django.test import TransactionTestCase
 from selenium.common.exceptions import NoSuchElementException
 
+from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
