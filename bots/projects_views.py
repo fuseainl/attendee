@@ -20,7 +20,6 @@ from accounts.models import User, UserRole
 
 from .bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription
 from .launch_bot_utils import launch_bot
-from .tasks.deliver_webhook_task import deliver_webhook
 from .models import (
     ApiKey,
     Bot,
@@ -55,6 +54,7 @@ from .models import (
     ZoomOAuthApp,
 )
 from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
+from .tasks.deliver_webhook_task import deliver_webhook
 from .utils import generate_recordings_json_for_bot_detail_view
 from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
