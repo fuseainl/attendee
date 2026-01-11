@@ -54,6 +54,13 @@ class UiRetryableExpectedException(UiRetryableException):
         super().__init__(message, step, inner_exception)
 
 
+# When this exception is raised, the bot will always retry
+# It is up to the adapter to stop throwing this exception eventually
+class UiInfinitelyRetryableException(UiException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
+
+
 class UiCouldNotLocateElementException(UiRetryableException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)

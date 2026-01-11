@@ -7,11 +7,16 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
 logger = logging.getLogger(__name__)
+
+
+class UiZoomWebGenericJoinErrorException(UiInfinitelyRetryableException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
 
 
 class ZoomWebUIMethods:
@@ -105,9 +110,16 @@ class ZoomWebUIMethods:
     def check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
         failed_to_join_because_onbehalf_token_user_not_in_meeting = self.driver.execute_script("return window.userHasEncounteredOnBehalfTokenUserNotInMeetingError && window.userHasEncounteredOnBehalfTokenUserNotInMeetingError()")
         if failed_to_join_because_onbehalf_token_user_not_in_meeting:
-            logger.info("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
+            logger.warning("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
             time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
             raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
+
+    def check_if_failed_to_join_because_generic_join_error(self):
+        failed_to_join_because_generic_join_error = self.driver.execute_script("return window.userHasEncounteredGenericJoinError && window.userHasEncounteredGenericJoinError()")
+        if failed_to_join_because_generic_join_error:
+            logger.warning("Bot failed to join because generic join error. Raising UiZoomWebGenericJoinErrorException after sleeping for 5 seconds.")
+            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+            raise UiZoomWebGenericJoinErrorException("Bot failed to join because generic join error")
 
     def wait_to_be_admitted_to_meeting(self):
         num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
@@ -130,6 +142,7 @@ class ZoomWebUIMethods:
                 self.check_if_blocked_by_captcha()
                 self.check_if_passcode_incorrect()
                 self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
+                self.check_if_failed_to_join_because_generic_join_error()
 
                 previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
                 try:

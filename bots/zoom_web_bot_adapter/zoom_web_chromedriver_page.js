@@ -72,6 +72,12 @@ function userHasEncounteredOnBehalfTokenUserNotInMeetingError() {
 
 window.userHasEncounteredOnBehalfTokenUserNotInMeetingError = userHasEncounteredOnBehalfTokenUserNotInMeetingError;
 
+function userHasEncounteredGenericJoinError() {
+    return userEncounteredGenericJoinError;
+}
+
+window.userHasEncounteredGenericJoinError = userHasEncounteredGenericJoinError;
+
 function startMeeting(signature) {
 
   document.getElementById('zmmtg-root').style.display = 'block'
@@ -364,6 +370,13 @@ function handleJoinFailureFromConsoleIntercept(code, reason) {
     {
         userEncounteredOnBehalfTokenUserNotInMeetingError = true;
         console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+        return;
+    }
+
+    if (code == 1 && !userEnteredMeeting)
+    {
+        userEncounteredGenericJoinError = true;
+        console.log('handleJoinFailureFromConsoleIntercept: user encountered generic join error');
         return;
     }
 

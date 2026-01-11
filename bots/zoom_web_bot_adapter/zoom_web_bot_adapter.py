@@ -1,7 +1,7 @@
 import json
 import logging
-import os
 from datetime import datetime
+from typing import Callable
 
 import jwt
 
@@ -18,8 +18,8 @@ def zoom_meeting_sdk_signature(
     *,
     expiration_seconds: int = 2 * 60 * 60,  # default 2 h
     video_webrtc_mode: int | None = None,
-    sdk_key: str | None = None,
-    sdk_secret: str | None = None,
+    client_id: str | None = None,
+    client_secret: str | None = None,
 ) -> dict[str, str]:
     """
     Create a Zoom Meeting SDK JWT signature.
@@ -30,25 +30,22 @@ def zoom_meeting_sdk_signature(
     role           : 0 for attendee, 1 for host
     expiration_seconds : lifetime for the token (min 1 800, max 172 800)
     video_webrtc_mode  : 0 or 1 (optional)
-    sdk_key, sdk_secret: if omitted, read from env vars
-                         ZOOM_MEETING_SDK_KEY / ZOOM_MEETING_SDK_SECRET
+    client_id, client_secret: str | None
 
     Returns
     -------
     {"signature": "<jwt>", "sdkKey": "<sdk_key>"}
     """
 
-    sdk_key = sdk_key or os.getenv("ZOOM_MEETING_SDK_KEY")
-    sdk_secret = sdk_secret or os.getenv("ZOOM_MEETING_SDK_SECRET")
-    if not sdk_key or not sdk_secret:
-        raise RuntimeError("SDK key/secret missing (env vars or arguments)")
+    if not client_id or not client_secret:
+        raise RuntimeError("Client id or secret is missing")
 
     iat = int(datetime.utcnow().timestamp())
     exp = iat + expiration_seconds
 
     payload = {
-        "appKey": sdk_key,
-        "sdkKey": sdk_key,
+        "appKey": client_id,
+        "sdkKey": client_id,
         "mn": str(meeting_number),
         "role": role,
         "iat": iat,
@@ -58,16 +55,15 @@ def zoom_meeting_sdk_signature(
     if video_webrtc_mode is not None:
         payload["video_webrtc_mode"] = video_webrtc_mode
 
-    token = jwt.encode(payload, sdk_secret, algorithm="HS256")
-    return {"signature": token, "sdkKey": sdk_key}
+    token = jwt.encode(payload, client_secret, algorithm="HS256")
+    return {"signature": token, "sdkKey": client_id}
 
 
 class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def __init__(
         self,
         *args,
-        zoom_client_id: str,
-        zoom_client_secret: str,
+        zoom_oauth_credentials_callback: Callable[[], dict[str, str]],
         zoom_closed_captions_language: str | None,
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
@@ -75,7 +71,14 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     ):
         super().__init__(*args, **kwargs)
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
-        self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, sdk_key=zoom_client_id, sdk_secret=zoom_client_secret)
+        self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
+
+        # Doing it via callback so we don't store these in-memory
+        zoom_oauth_credentials = self.zoom_oauth_credentials_callback()
+        zoom_client_id = zoom_oauth_credentials["client_id"]
+        zoom_client_secret = zoom_oauth_credentials["client_secret"]
+
+        self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, client_id=zoom_client_id, client_secret=zoom_client_secret)
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
