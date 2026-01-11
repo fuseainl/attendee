@@ -11,10 +11,6 @@ from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
-# Save reference to real time functions before any patching
-_real_sleep = time.sleep
-_real_time = time.time
-
 
 # Helper functions for creating mocks
 def create_mock_file_uploader():
@@ -1008,7 +1004,7 @@ class TestZoomWebBot(TransactionTestCase):
         bot_thread.start()
 
         # Wait a bit for the adapter to be created
-        _real_sleep(2)
+        time.sleep(2)
 
         # Now that the adapter exists, set a very short timeout for testing
         # (2 seconds instead of 3 minutes = 180 seconds)
