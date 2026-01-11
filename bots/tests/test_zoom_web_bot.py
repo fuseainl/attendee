@@ -11,6 +11,9 @@ from bots.bot_adapter import BotAdapter
 from bots.bot_controller.bot_controller import BotController
 from bots.models import Bot, BotEventManager, BotEventSubTypes, BotEventTypes, BotStates, Credentials, Organization, Project, Recording, RecordingTypes, TranscriptionProviders, TranscriptionTypes, WebhookDeliveryAttempt, WebhookSubscription, WebhookTriggerTypes, ZoomMeetingToZoomOAuthConnectionMapping, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
+# Save reference to real time.sleep before any patching
+_real_sleep = time.sleep
+
 
 # Helper functions for creating mocks
 def create_mock_file_uploader():
@@ -937,6 +940,116 @@ class TestZoomWebBot(TransactionTestCase):
         self.assertEqual(len(auto_leave_events), 1, "Expected exactly one auto-leave event")
 
         # Clean up
+        bot_thread.join(timeout=5)
+
+        # Close the database connection since we're in a thread
+        connection.close()
+
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.time.sleep", side_effect=lambda x: _real_sleep(1))
+    @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_generic_join_error_retries_then_stops(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_start_static_server,
+        mock_sleep,
+    ):
+        """
+        Test that when a generic join error occurs, the bot retries until the timeout is exceeded,
+        then stops with a COULD_NOT_JOIN event.
+        """
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_zoom_web_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Track how many times the generic join error check is called
+        generic_join_error_call_count = [0]
+
+        # Mock execute_script to handle different script calls
+        def execute_script_side_effect(script, *args):
+            if "userHasEnteredMeeting" in script:
+                return False  # User has NOT entered the meeting
+            if "userHasEncounteredOnBehalfTokenUserNotInMeetingError" in script:
+                return False  # No onbehalf token error
+            if "userHasEncounteredGenericJoinError" in script:
+                generic_join_error_call_count[0] += 1
+                return True  # Always return generic join error
+            return None
+
+        mock_driver.execute_script.side_effect = execute_script_side_effect
+
+        # Mock find_element to not find the "host to start meeting" text
+        mock_driver.find_element.side_effect = NoSuchElementException("Element not found")
+
+        # Create bot controller
+        controller = BotController(self.bot.id)
+
+        # Lower the generic_join_error_retry_timeout_seconds to make the test faster
+        # We do this after the controller creates the adapter
+        short_timeout = 3  # Set a very short timeout (2 seconds)
+
+        # Run the bot in a separate thread since it has an event loop
+        bot_thread = threading.Thread(target=controller.run)
+        bot_thread.daemon = True
+        bot_thread.start()
+
+        # Wait a moment for the adapter to be created
+        time.sleep(0.5)
+
+        # Override the timeout on the adapter
+        if hasattr(controller, "adapter") and controller.adapter:
+            controller.adapter.generic_join_error_retry_timeout_seconds = short_timeout
+
+        # Give the bot time to process - should retry a few times then timeout
+        bot_thread.join(timeout=10)
+
+        # Refresh the bot from the database
+        self.bot.refresh_from_db()
+
+        # Assert that the bot is in the FATAL_ERROR state after timeout
+        self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
+
+        # Verify that the generic join error check was called multiple times (indicating retries)
+        self.assertGreater(generic_join_error_call_count[0], 1, "Generic join error should be checked multiple times (retries)")
+
+        # Verify bot events in sequence
+        bot_events = self.bot.bot_events.all()
+
+        # Should have at least 2 events: JOIN_REQUESTED and COULD_NOT_JOIN
+        self.assertGreaterEqual(len(bot_events), 2)
+
+        # Verify join_requested_event (Event 1)
+        join_requested_event = bot_events[0]
+        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+        self.assertEqual(join_requested_event.old_state, BotStates.READY)
+        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+        # Find the COULD_NOT_JOIN event
+        could_not_join_events = [e for e in bot_events if e.event_type == BotEventTypes.COULD_NOT_JOIN]
+        self.assertGreaterEqual(len(could_not_join_events), 1, "Expected at least one COULD_NOT_JOIN event")
+
+        # Verify the event has the correct subtype for zoom meeting status failed
+        could_not_join_event = could_not_join_events[0]
+        self.assertEqual(could_not_join_event.event_sub_type, BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_MEETING_STATUS_FAILED)
+
+        # Verify the event metadata contains the error code
+        self.assertIn("zoom_result_code", could_not_join_event.metadata)
+        self.assertIn("Fail to join the meeting", could_not_join_event.metadata["zoom_result_code"])
+
+        # Cleanup
+        controller.cleanup()
         bot_thread.join(timeout=5)
 
         # Close the database connection since we're in a thread

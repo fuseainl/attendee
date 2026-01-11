@@ -159,9 +159,13 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
     def handle_generic_join_error(self):
         # If it's been less than 3 minutes since the adapter was created, we'll throw the exception which will retry
         if time.time() - self.adapter_created_at < self.generic_join_error_retry_timeout_seconds:
+            logger.warning("Bot failed to join because generic join error. Raising UiZoomWebGenericJoinErrorException after sleeping for 5 seconds.")
+            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+
             raise UiZoomWebGenericJoinErrorException("Bot failed to join because generic join error")
 
         # Otherwise, we'll send the message to the controller to terminate the bot.
+        logger.warning("Bot failed to join because generic join error. Sending message to controller to terminate bot.")
         self.subclass_specific_handle_failed_to_join(
             {
                 "method": "join",

@@ -117,8 +117,6 @@ class ZoomWebUIMethods:
     def check_if_failed_to_join_because_generic_join_error(self):
         failed_to_join_because_generic_join_error = self.driver.execute_script("return window.userHasEncounteredGenericJoinError && window.userHasEncounteredGenericJoinError()")
         if failed_to_join_because_generic_join_error:
-            logger.warning("Bot failed to join because generic join error. Raising UiZoomWebGenericJoinErrorException after sleeping for 5 seconds.")
-            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
             self.handle_generic_join_error()
 
     def wait_to_be_admitted_to_meeting(self):
