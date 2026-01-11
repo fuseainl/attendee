@@ -119,7 +119,7 @@ class ZoomWebUIMethods:
         if failed_to_join_because_generic_join_error:
             logger.warning("Bot failed to join because generic join error. Raising UiZoomWebGenericJoinErrorException after sleeping for 5 seconds.")
             time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
-            raise UiZoomWebGenericJoinErrorException("Bot failed to join because generic join error")
+            self.handle_generic_join_error()
 
     def wait_to_be_admitted_to_meeting(self):
         num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10

@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Callable
 
@@ -7,7 +8,7 @@ import jwt
 
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.web_bot_adapter import WebBotAdapter
-from bots.zoom_web_bot_adapter.zoom_web_ui_methods import ZoomWebUIMethods
+from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
+        self.adapter_created_at = time.time()
+        self.generic_join_error_retry_timeout_seconds = 60 * 3
 
     def get_chromedriver_payload_file_name(self):
         return "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js"
@@ -150,5 +153,19 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             {
                 "message": self.Messages.ZOOM_MEETING_STATUS_FAILED,
                 "zoom_result_code": str(reason.get("errorCode")) + ": " + str(reason.get("errorMessage")),
+            }
+        )
+
+    def handle_generic_join_error(self):
+        # If it's been less than 3 minutes since the adapter was created, we'll throw the exception which will retry
+        if time.time() - self.adapter_created_at < self.generic_join_error_retry_timeout_seconds:
+            raise UiZoomWebGenericJoinErrorException("Bot failed to join because generic join error")
+
+        # Otherwise, we'll send the message to the controller to terminate the bot.
+        self.subclass_specific_handle_failed_to_join(
+            {
+                "method": "join",
+                "errorCode": 1,
+                "errorMessage": "Fail to join the meeting.",
             }
         )
