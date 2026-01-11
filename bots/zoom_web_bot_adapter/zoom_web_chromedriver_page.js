@@ -17,6 +17,7 @@ var onBehalfToken = zoomInitialData.onBehalfToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
 var userEncounteredOnBehalfTokenUserNotInMeetingError = false;
+var userEncounteredGenericJoinError = false;
 var recordingPermissionGranted = false;
 var madeInitialRequestForRecordingPermission = false;
 var sentSaveCaptionNotAllowed = false;
