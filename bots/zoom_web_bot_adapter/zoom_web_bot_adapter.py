@@ -42,7 +42,7 @@ def zoom_meeting_sdk_signature(
     if not client_id or not client_secret:
         raise RuntimeError("Client id or secret is missing")
 
-    iat = int(datetime.utcnow().timestamp())
+    iat = int(datetime.utcnow().timestamp()) - int(os.getenv("ZOOM_WEB_JWT_IAT_OFFSET_SECONDS", 0))
     exp = iat + expiration_seconds
 
     payload = {

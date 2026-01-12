@@ -90,6 +90,13 @@
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
+    .resend-btn {
+        --bs-btn-padding-y: .2rem;
+        --bs-btn-padding-x: .55rem;
+        --bs-btn-font-size: .825rem;
+        --bs-btn-border-radius: .25rem;
+        line-height: 1.2;
+    }
 </style>
 
 <div class="container mt-4">
@@ -327,15 +334,18 @@
                                     <td>{% if attempt.last_attempt_at %}{{ attempt.last_attempt_at|date:"M d, Y H:i:s" }}{% else %}Not attempted{% endif %}</td>
                                     <td>{% if attempt.succeeded_at %}{{ attempt.succeeded_at|date:"M d, Y H:i:s" }}{% else %}-{% endif %}</td>
                                     <td>
-                                        <button 
-                                            class="btn btn-sm btn-outline-primary"
-                                            hx-post="{% url 'projects:resend-webhook-delivery-attempt' project.object_id attempt.idempotency_key %}"
-                                            hx-target="#webhook-status-{{ attempt.idempotency_key }}"
-                                            hx-swap="innerHTML"
-                                            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                                            title="Resend this webhook">
-                                            <i class="bi bi-arrow-repeat"></i> Resend
-                                        </button>
+                                        {% if attempt.status != WebhookDeliveryAttemptStatus.PENDING %}
+                                            <button 
+                                                class="btn resend-btn btn-outline-secondary"
+                                                hx-post="{% url 'projects:resend-webhook-delivery-attempt' project.object_id attempt.idempotency_key %}"
+                                                hx-target="#webhook-status-{{ attempt.idempotency_key }}"
+                                                hx-swap="innerHTML"
+                                                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                                                hx-on::after-request="this.style.visibility='hidden'"
+                                            >
+                                                Resend
+                                            </button>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% if attempt.response_body_list or attempt.payload %}
