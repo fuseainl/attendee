@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -942,6 +943,7 @@ class TestZoomWebBot(TransactionTestCase):
         # Close the database connection since we're in a thread
         connection.close()
 
+    @patch.dict(os.environ, {"ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS": "0.5"})
     @patch("bots.zoom_web_bot_adapter.zoom_web_ui_methods.start_zoom_web_static_server", return_value=8080)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
@@ -954,15 +956,18 @@ class TestZoomWebBot(TransactionTestCase):
         mock_start_static_server,
     ):
         """
-        Test that generic join error retries for a while, then eventually stops after timeout.
+        Test that generic join error retries up to max count, then eventually stops.
 
         The handle_generic_join_error method in ZoomWebBotAdapter:
-        - If time.time() - adapter_created_at < 180 seconds: raises UiZoomWebGenericJoinErrorException (causes retry)
-        - After 180 seconds: stops retrying and sends ZOOM_MEETING_STATUS_FAILED message
+        - If generic_join_error_retries < max_retries: raises UiZoomWebGenericJoinErrorException (causes retry)
+        - After max retries exceeded: stops retrying and sends ZOOM_MEETING_STATUS_FAILED message
 
         This test verifies that:
-        1. The bot retries when encountering generic join error within the timeout period
-        2. After the timeout period, the bot stops retrying and enters FATAL_ERROR state
+        1. The bot retries when encountering generic join error within the retry limit
+        2. After max retries are exhausted, the bot stops retrying and enters FATAL_ERROR state
+
+        Environment variables set for fast test execution:
+        - ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS=0.5 (instead of default 5)
         """
         # Configure the mock uploader
         mock_uploader = create_mock_file_uploader()
@@ -1003,25 +1008,18 @@ class TestZoomWebBot(TransactionTestCase):
         bot_thread.daemon = True
         bot_thread.start()
 
-        # Wait a bit for the adapter to be created
-        time.sleep(2)
-
-        # Now that the adapter exists, set a very short timeout for testing
-        # (2 seconds instead of 3 minutes = 180 seconds)
-        if controller.adapter:
-            controller.adapter.generic_join_error_retry_timeout_seconds = 2
-
-        # Give the bot time to retry a few times and then stop
-        # The test should complete within 15 seconds since we set a 2 second timeout
+        # Give the bot time to retry and then stop
+        # With 2 retries and 0 sleep time, this should complete quickly
         bot_thread.join(timeout=15)
 
         # Refresh the bot from the database
         self.bot.refresh_from_db()
 
-        # Assert that the bot is in the FATAL_ERROR state after timeout
+        # Assert that the bot is in the FATAL_ERROR state after retries exhausted
         self.assertEqual(self.bot.state, BotStates.FATAL_ERROR)
 
         # Verify that the generic join error check was called multiple times (retried)
+        # With max retries = 3, we expect at least 4 checks (initial + 3 retries)
         self.assertGreater(generic_join_error_check_count[0], 1, "Generic join error check should have been called multiple times (retries)")
 
         # Verify bot events in sequence

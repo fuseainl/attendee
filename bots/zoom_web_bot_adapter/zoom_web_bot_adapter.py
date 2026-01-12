@@ -159,7 +159,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
     def handle_generic_join_error(self):
         max_generic_join_error_retries = int(os.getenv("ZOOM_WEB_MAX_GENERIC_JOIN_ERROR_RETRIES", 3))
-        generic_join_error_sleep_time_seconds = int(os.getenv("ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS", 5))
+        generic_join_error_sleep_time_seconds = float(os.getenv("ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS", 5))
         # If we haven't exceeded the max number of retries, we'll throw the exception which will retry
         if self.generic_join_error_retries < max_generic_join_error_retries:
             self.generic_join_error_retries += 1
