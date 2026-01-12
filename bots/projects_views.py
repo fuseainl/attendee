@@ -1049,16 +1049,18 @@ class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
             idempotency_key=idempotency_key,
         )
 
-        # Reset status to pending and queue for redelivery
-        webhook_delivery_attempt.status = WebhookDeliveryAttemptStatus.PENDING
-        webhook_delivery_attempt.save()
+        # Only resend if the attempt is not pending
+        if webhook_delivery_attempt.status != WebhookDeliveryAttemptStatus.PENDING:
+            # Reset status to pending and queue for redelivery
+            webhook_delivery_attempt.status = WebhookDeliveryAttemptStatus.PENDING
+            webhook_delivery_attempt.save()
 
-        # Queue the webhook for delivery
-        deliver_webhook.delay(webhook_delivery_attempt.id)
+            # Queue the webhook for delivery
+            deliver_webhook.delay(webhook_delivery_attempt.id)
 
         # Return a simple confirmation badge - user can refresh page to see final status
         return HttpResponse(
-            '<span class="badge bg-info"><i class="bi bi-check"></i> Queued</span>',
+            '<span class="badge bg-warning">Pending</span>',
             content_type="text/html",
         )
 
