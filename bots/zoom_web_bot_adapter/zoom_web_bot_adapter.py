@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Callable
@@ -83,8 +84,8 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         self.zoom_closed_captions_language = zoom_closed_captions_language
         self.should_ask_for_recording_permission = should_ask_for_recording_permission
         self.zoom_tokens = zoom_tokens
-        self.adapter_created_at = time.time()
-        self.generic_join_error_retry_timeout_seconds = 60 * 3
+
+        self.generic_join_error_retries = 0
 
     def get_chromedriver_payload_file_name(self):
         return "zoom_web_bot_adapter/zoom_web_chromedriver_payload.js"
@@ -157,9 +158,13 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         )
 
     def handle_generic_join_error(self):
-        # If it's been less than 3 minutes since the adapter was created, we'll throw the exception which will retry
-        if time.time() - self.adapter_created_at < self.generic_join_error_retry_timeout_seconds:
-            logger.warning("Bot failed to join because generic join error. Raising UiZoomWebGenericJoinErrorException after sleeping for 5 seconds.")
+        max_generic_join_error_retries = int(os.getenv("ZOOM_WEB_MAX_GENERIC_JOIN_ERROR_RETRIES", 3))
+        generic_join_error_sleep_time_seconds = int(os.getenv("ZOOM_WEB_GENERIC_JOIN_ERROR_SLEEP_TIME_SECONDS", 5))
+        # If we haven't exceeded the max number of retries, we'll throw the exception which will retry
+        if self.generic_join_error_retries < max_generic_join_error_retries:
+            self.generic_join_error_retries += 1
+
+            logger.warning(f"Bot failed to join because generic join error. Raising UiZoomWebGenericJoinErrorException after sleeping for {generic_join_error_sleep_time_seconds} seconds. Generic join error retry {self.generic_join_error_retries} of {max_generic_join_error_retries}")
 
             # Recompute signature
             zoom_oauth_credentials = self.zoom_oauth_credentials_callback()
@@ -167,7 +172,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
             zoom_client_secret = zoom_oauth_credentials["client_secret"]
             self.sdk_signature = zoom_meeting_sdk_signature(self.meeting_id, 0, client_id=zoom_client_id, client_secret=zoom_client_secret)
 
-            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+            time.sleep(generic_join_error_sleep_time_seconds)  # Sleep for a bit so we're not constantly retrying
 
             raise UiZoomWebGenericJoinErrorException("Bot failed to join because generic join error")
 
