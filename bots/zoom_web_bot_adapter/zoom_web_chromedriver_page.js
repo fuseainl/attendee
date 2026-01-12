@@ -155,6 +155,12 @@ function startMeeting(signature) {
                 console.log('join error');
                 console.log(error);
 
+                if (isGenericJoinError(error?.errorCode))
+                {
+                    userEncounteredGenericJoinError = true;
+                    return;
+                }
+
                 window.ws.sendJson({
                     type: 'MeetingStatusChange',
                     change: 'failed_to_join',
@@ -364,6 +370,10 @@ function startMeeting(signature) {
     });
 }
 
+function isGenericJoinError(code) {
+    return code == 1 && !userEnteredMeeting;
+}
+
 function handleJoinFailureFromConsoleIntercept(code, reason) {
     // Hacky way to determine if we are being rejected because the onbehalf token user is not in the meeting
     // There currently seems to be no specific error code for this.
@@ -374,10 +384,9 @@ function handleJoinFailureFromConsoleIntercept(code, reason) {
         return;
     }
 
-    if (code == 1 && !userEnteredMeeting)
+    if (isGenericJoinError(code))
     {
         userEncounteredGenericJoinError = true;
-        console.log('handleJoinFailureFromConsoleIntercept: user encountered generic join error');
         return;
     }
 
