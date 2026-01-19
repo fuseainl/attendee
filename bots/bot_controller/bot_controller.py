@@ -114,6 +114,9 @@ class BotController:
     def disable_incoming_video_for_web_bots(self):
         return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video)
 
+    def should_modify_dom_for_video_recording_for_web_bots(self):
+        return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
+
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
@@ -163,6 +166,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
@@ -200,6 +204,7 @@ class BotController:
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -268,6 +273,7 @@ class BotController:
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             zoom_tokens=zoom_tokens,
         )
 
