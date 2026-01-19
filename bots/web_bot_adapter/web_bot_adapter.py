@@ -748,6 +748,7 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
+        self.stop_debug_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
@@ -764,11 +765,13 @@ class WebBotAdapter(BotAdapter):
 
         if self.start_recording_screen_callback:
             sleep(2)
-            if self.debug_screen_recorder:
-                self.debug_screen_recorder.stop()
             self.start_recording_screen_callback(self.display_var_for_debug_recording)
 
         self.media_sending_enable_timestamp_ms = time.time() * 1000
+
+    def stop_debug_screen_recording(self):
+        if self.debug_screen_recorder:
+            self.debug_screen_recorder.stop()
 
     def leave(self):
         if self.left_meeting:
