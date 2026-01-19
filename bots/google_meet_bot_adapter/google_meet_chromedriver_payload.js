@@ -555,7 +555,7 @@ class StyleManager {
 
         await this.openChatPanel();
 
-        if (window.initialData.modifyDomForVideoRecording) {
+        if (window.googleMeetInitialData.modifyDomForVideoRecording) {
             await this.onlyShowSubsetofGMeetUI();
         }
         
