@@ -447,7 +447,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
-            logger.info(f"Error saving screenshot: {e}")
+            logger.warning(f"Error saving screenshot: {e}")
             screenshot_path = None
 
         mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
@@ -457,7 +457,7 @@ class WebBotAdapter(BotAdapter):
             with open(mhtml_file_path, "w", encoding="utf-8") as f:
                 f.write(mhtml_bytes)
         except Exception as e:
-            logger.info(f"Error saving mhtml: {e}")
+            logger.warning(f"Error saving mhtml: {e}")
             mhtml_file_path = None
 
         return screenshot_path, mhtml_file_path, current_time
@@ -490,7 +490,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
-            logger.info(f"Error saving screenshot: {e}")
+            logger.warning(f"Error saving screenshot: {e}")
             screenshot_path = None
 
         mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
@@ -500,7 +500,7 @@ class WebBotAdapter(BotAdapter):
             with open(mhtml_file_path, "w", encoding="utf-8") as f:
                 f.write(mhtml_bytes)
         except Exception as e:
-            logger.info(f"Error saving mhtml: {e}")
+            logger.warning(f"Error saving mhtml: {e}")
             mhtml_file_path = None
 
         self.send_message_callback(
@@ -556,12 +556,12 @@ class WebBotAdapter(BotAdapter):
             try:
                 self.driver.close()
             except Exception as e:
-                logger.info(f"Error closing driver: {e}")
+                logger.warning(f"Error closing driver: {e}")
 
             try:
                 self.driver.quit()
             except Exception as e:
-                logger.info(f"Error closing existing driver: {e}")
+                logger.warning(f"Error closing existing driver: {e}")
             self.driver = None
 
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
@@ -787,7 +787,7 @@ class WebBotAdapter(BotAdapter):
 
             self.click_leave_button()
         except Exception as e:
-            logger.info(f"Error during leave: {e}")
+            logger.warning(f"Error during leave: {e}")
         finally:
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
             self.left_meeting = True
@@ -796,7 +796,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.close()
         except Exception as e:
-            logger.info(f"Error closing driver: {e}")
+            logger.warning(f"Error closing driver: {e}")
 
     def cleanup(self):
         if self.stop_recording_screen_callback:
@@ -806,7 +806,7 @@ class WebBotAdapter(BotAdapter):
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
         except Exception as e:
-            logger.info(f"Error during media sending disable: {e}")
+            logger.warning(f"Error during media sending disable: {e}")
 
         # Wait for websocket buffers to be processed
         if self.last_websocket_message_processed_time:
@@ -822,15 +822,15 @@ class WebBotAdapter(BotAdapter):
                     self.subclass_specific_before_driver_close()
                     self.driver.close()
                 except Exception as e:
-                    logger.info(f"Error closing driver: {e}")
+                    logger.warning(f"Error closing driver: {e}")
 
                 # Then quit the driver
                 try:
                     self.driver.quit()
                 except Exception as e:
-                    logger.info(f"Error quitting driver: {e}")
+                    logger.warning(f"Error quitting driver: {e}")
         except Exception as e:
-            logger.info(f"Error during cleanup: {e}")
+            logger.warning(f"Error during cleanup: {e}")
 
         if self.debug_screen_recorder:
             self.debug_screen_recorder.stop()
@@ -840,7 +840,7 @@ class WebBotAdapter(BotAdapter):
             try:
                 self.websocket_server.shutdown()
             except Exception as e:
-                logger.info(f"Error shutting down websocket server: {e}")
+                logger.warning(f"Error shutting down websocket server: {e}")
 
         self.cleaned_up = True
 

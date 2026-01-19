@@ -48,7 +48,7 @@ class GoogleMeetUIMethods:
                 self.click_element(element, step)
                 return
             except UiCouldNotClickElementException as e:
-                logger.info(f"Error occurred when clicking element for step {step}, will click any blocking elements and retry the click")
+                logger.warning(f"Error occurred when clicking element for step {step}, will click any blocking elements and retry the click")
                 self.click_others_may_see_your_meeting_differently_button(step)
                 last_attempt = attempt_index == num_attempts - 1
                 if last_attempt:
@@ -59,14 +59,14 @@ class GoogleMeetUIMethods:
         try:
             self.driver.execute_script("arguments[0].click();", element)
         except Exception as e:
-            logger.info(f"Error occurred when forcefully clicking element for step {step}, will retry")
+            logger.warning(f"Error occurred when forcefully clicking element for step {step}, will retry")
             raise UiCouldNotClickElementException("Error occurred when forcefully clicking element", step, e)
 
     def click_element(self, element, step):
         try:
             element.click()
         except Exception as e:
-            logger.info(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
+            logger.warning(f"Error occurred when clicking element for step {step}, will retry. Exception class name was {e.__class__.__name__}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     # If the meeting you're about to join is being recorded, gmeet makes you click an additional button after you're admitted to the meeting
@@ -291,7 +291,7 @@ class GoogleMeetUIMethods:
         try:
             self.attempt_to_turn_off_reactions()
         except Exception as e:
-            logger.info(f"Error turning off reactions: {e}")
+            logger.warning(f"Error turning off reactions: {e}")
 
     def attempt_to_turn_off_reactions(self):
         logger.info("Attempting to turn off reactions")
@@ -395,7 +395,7 @@ class GoogleMeetUIMethods:
                 last_attempt = attempt_index == num_attempts - 1
                 if last_attempt:
                     raise e
-                logger.info(f"Error setting layout: {e}. Retrying. Attempt #{attempt_index}...")
+                logger.warning(f"Error setting layout: {e}. Retrying. Attempt #{attempt_index}...")
 
     def attempt_to_set_layout(self, layout_to_select):
         logger.info("Begin setting layout. Waiting for the more options button...")
@@ -605,7 +605,7 @@ class GoogleMeetUIMethods:
             actions.move_to_element(element).perform()
             logger.info(f"Scrolled element into view for {step}")
         except Exception as e:
-            logger.info(f"Error scrolling element into view for {step}")
+            logger.warning(f"Error scrolling element into view for {step}")
             raise UiCouldNotLocateElementException(
                 "Error scrolling element into view",
                 step,
