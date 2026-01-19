@@ -52,7 +52,6 @@ class WebBotAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
-        modify_dom_for_video_recording: bool,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -69,7 +68,6 @@ class WebBotAdapter(BotAdapter):
         self.recording_view = recording_view
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.disable_incoming_video = disable_incoming_video
-        self.modify_dom_for_video_recording = modify_dom_for_video_recording
         self.meeting_url = meeting_url
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
