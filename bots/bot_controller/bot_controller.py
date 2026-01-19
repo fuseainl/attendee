@@ -204,7 +204,7 @@ class BotController:
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
-            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
+            modify_dom_for_video_recording=True,  # Only option is True for now
         )
 
     def get_zoom_oauth_credentials_via_credentials_record(self):
@@ -273,7 +273,7 @@ class BotController:
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
-            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
+            modify_dom_for_video_recording=False,  # Only option is False for now
             zoom_tokens=zoom_tokens,
         )
 
