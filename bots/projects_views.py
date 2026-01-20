@@ -1051,7 +1051,10 @@ class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
 
         # Don't resend if the attempt count is greater than 49
         if webhook_delivery_attempt.attempt_count > 49:
-            return HttpResponse("Webhook delivery attempt has already been resent too many times", status=400)
+            return HttpResponse(
+                '<span class="badge bg-secondary">Attempts exhausted</span>',
+                content_type="text/html",
+            )
 
         # Only resend if the attempt is not pending
         if webhook_delivery_attempt.status != WebhookDeliveryAttemptStatus.PENDING:
