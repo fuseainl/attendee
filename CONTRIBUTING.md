@@ -71,7 +71,7 @@ When reporting issues, please include:
 
 ## Community
 
-- Join our [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) for discussions
+- Join our [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) for discussions
 - Star the repository if you find it useful
 
 ## License

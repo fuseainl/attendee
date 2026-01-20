@@ -7,7 +7,7 @@
     ·
     <a href="https://attendee.dev/">Website</a>
     ·
-    <a href="https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ">Slack</a>
+    <a href="https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g">Slack</a>
 </p>
 
 
@@ -92,7 +92,7 @@ The Zoom OAuth credentials and Deepgram API key are entered into the Attendee UI
 
 ## Missing feature?
 
-We are rapidly adding features to Attendee. If the API is missing something you need, then open an issue in the repository or bring it up in the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ). PRs are also welcome!
+We are rapidly adding features to Attendee. If the API is missing something you need, then open an issue in the repository or bring it up in the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g). PRs are also welcome!
 
 ## Obtaining Zoom OAuth Credentials
 
@@ -121,7 +121,7 @@ For more details, follow [this guide](https://developers.zoom.us/docs/meeting-sd
 
 ## Contribute 
 
-Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) and let us know what you want to build.
+Attendee is open source. The best way to contribute is to open an issue or join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) and let us know what you want to build.
 
 See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 
@@ -146,4 +146,4 @@ See CONTRIBUTING.md for detailed instructions on how to contribute to Attendee.
 - [x] Stream video and audio from arbitrary website into meeting to support voice agents
 - [ ] Webex Support
 
-Have suggestions for the roadmap? Join the [Slack Community](https://join.slack.com/t/attendeecommu-rff8300/shared_invite/zt-2uhpam6p2-ZzLAoVrljbL2UEjqdSHrgQ) or open an issue.
+Have suggestions for the roadmap? Join the [Slack Community](https://join.slack.com/t/attendee-community/shared_invite/zt-3l43ns8cl-G8YnMccWVTugMlloUtSf9g) or open an issue.

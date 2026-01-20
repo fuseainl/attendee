@@ -44,7 +44,7 @@ class TeamsUIMethods:
         try:
             element.click()
         except Exception as e:
-            logger.info(f"Error occurred when clicking element {step}, will retry. Error: {e}")
+            logger.warning(f"Error occurred when clicking element {step}, will retry. Error: {e}")
             raise UiCouldNotClickElementException("Error occurred when clicking element", step, e)
 
     def look_for_waiting_to_be_admitted_element(self, step):
@@ -106,7 +106,7 @@ class TeamsUIMethods:
             logger.info("Closed captions enabled programatically")
 
             if self.teams_closed_captions_language:
-                closed_caption_set_language_result = self.driver.execute_script(f"return window.callManager?.setClosedCaptionsLanguage('{self.teams_closed_captions_language}')")
+                closed_caption_set_language_result = self.driver.execute_script("return window.callManager?.setClosedCaptionsLanguage(arguments[0]);", self.teams_closed_captions_language)
                 if closed_caption_set_language_result:
                     logger.info("Closed captions language set programatically")
                 else:

@@ -88,7 +88,7 @@ class StyleManager {
         // Check for recording notification dialog
         const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
         
-        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
+        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
             // Find and click the "Join now" button (usually the confirm/OK button)
             const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
             
@@ -555,9 +555,10 @@ class StyleManager {
 
         await this.openChatPanel();
 
-        await this.onlyShowSubsetofGMeetUI();
+        if (window.googleMeetInitialData.modifyDomForVideoRecording) {
+            await this.onlyShowSubsetofGMeetUI();
+        }
         
-
         if (window.initialData.recordingView === 'gallery_view')
         {
             this.unpinInterval = setInterval(() => {
@@ -1944,6 +1945,22 @@ new RTCInterceptor({
         }
     }
 });
+
+function setClosedCaptionsLanguage(language) {
+    // Look for an <li> element whose data-value attribute matches the language code
+    // within the Meeting language dropdown
+    const languageList = document.querySelector('ul[aria-label="Meeting language"]');
+    if (!languageList) {
+        return false;
+    }
+    const languageElement = languageList.querySelector(`li[data-value="${language}"]`);
+    if (languageElement) {
+        languageElement.click();
+        return true;
+    } else {
+        return false;
+    }
+}
 
 function addClickRipple() {
     document.addEventListener('click', function(e) {

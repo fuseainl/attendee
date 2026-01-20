@@ -105,6 +105,12 @@ class AppSessionCreateView(APIView):
         if error:
             return Response(error, status=status.HTTP_400_BAD_REQUEST)
 
+        # Turn the organization's app sessions enabled flag to True
+        organization = request.auth.project.organization
+        if not organization.is_app_sessions_enabled:
+            organization.is_app_sessions_enabled = True
+            organization.save()
+
         # If this is a scheduled bot, we don't want to launch it yet.
         if app_session.state == BotStates.CONNECTING:
             launch_bot(app_session)

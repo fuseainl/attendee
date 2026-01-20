@@ -542,8 +542,12 @@ PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA = {
             "type": "object",
             "properties": {
                 "teams_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["teams_language"],
+                "google_meet_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["google_meet_language"],
             },
-            "required": ["teams_language"],
+            "oneOf": [
+                {"required": ["teams_language"]},
+                {"required": ["google_meet_language"]},
+            ],
             "additionalProperties": False,
         },
     },
@@ -707,6 +711,15 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "additionalProperties": False,
                 "description": "Settings for various aspects of the Zoom Meeting. To use these settings, the bot must have host privileges.",
             },
+            "onbehalf_token": {
+                "type": "object",
+                "properties": {
+                    "zoom_oauth_connection_user_id": {"type": "string"},
+                },
+                "required": ["zoom_oauth_connection_user_id"],
+                "additionalProperties": False,
+                "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -753,6 +766,17 @@ class ZoomSettingsJSONField(serializers.JSONField):
             "enable_closed_captions_timeout_seconds": {
                 "type": "integer",
                 "description": "Number of seconds to wait before leaving if bot could not enable closed captions (infinity by default). Only relevant if the bot is transcribing via closed captions. Currently only supports leaving immediately.",
+                "default": None,
+            },
+            "authorized_user_not_in_meeting_timeout_seconds": {
+                "type": "integer",
+                "description": "Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.",
+                "default": 600,
+            },
+            "bot_keywords": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.",
                 "default": None,
             },
         },
@@ -893,7 +917,7 @@ class WebsocketSettingsJSONField(serializers.JSONField):
         "properties": {
             "zoom_tokens_url": {
                 "type": "string",
-                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}.',
+                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}.',
             },
         },
         "required": [],
@@ -1421,6 +1445,15 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 "required": [],
                 "additionalProperties": False,
             },
+            "onbehalf_token": {
+                "type": "object",
+                "properties": {
+                    "zoom_oauth_connection_user_id": {"type": "string"},
+                },
+                "required": ["zoom_oauth_connection_user_id"],
+                "additionalProperties": False,
+                "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
+            },
         },
         "required": [],
         "additionalProperties": False,
@@ -1486,9 +1519,17 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if key not in defaults.keys():
                 raise serializers.ValidationError(f"Unexpected attribute: {key}")
 
-        # Validate that all values are positive integers
+        # Validate bot_keywords separately (it's a list, not an int)
+        if "bot_keywords" in value and value["bot_keywords"] is not None:
+            if not isinstance(value["bot_keywords"], list):
+                raise serializers.ValidationError("bot_keywords must be a list of strings or null")
+            if not all(isinstance(k, str) for k in value["bot_keywords"]):
+                raise serializers.ValidationError("Each keyword in bot_keywords must be a string")
+
+        # Validate that all other values are positive integers
+        non_integer_parameters = ["bot_keywords"]
         for param, default in defaults.items():
-            if param in value and (not isinstance(value[param], int) or value[param] <= 0):
+            if param in value and param not in non_integer_parameters and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")
             # Set default if not provided
             if param not in value:
@@ -2071,9 +2112,11 @@ class AsyncTranscriptionSerializer(serializers.ModelSerializer):
 
 
 class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
-    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for")
+    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for", required=False, default=None)
     authorization_code = serializers.CharField(help_text="The authorization code received from Zoom during the OAuth flow")
     redirect_uri = serializers.CharField(help_text="The redirect URI used to obtain the authorization code")
+    is_local_recording_token_supported = serializers.BooleanField(help_text="Whether the Zoom OAuth Connection supports generating local recording tokens", required=False, default=True)
+    is_onbehalf_token_supported = serializers.BooleanField(help_text="Whether the Zoom OAuth Connection supports generating onbehalf tokens", required=False, default=False)
 
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the Zoom OAuth Connection", required=False, default=None)
 
@@ -2094,6 +2137,9 @@ class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
         if unexpected_fields:
             raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
 
+        if not data.get("is_local_recording_token_supported") and not data.get("is_onbehalf_token_supported"):
+            raise serializers.ValidationError("At least one of is_local_recording_token_supported or is_onbehalf_token_supported must be true")
+
         return data
 
 
@@ -2102,6 +2148,8 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
     state = serializers.SerializerMethodField()
     metadata = serializers.SerializerMethodField()
     zoom_oauth_app_id = serializers.CharField(source="zoom_oauth_app.object_id")
+    is_local_recording_token_supported = serializers.BooleanField()
+    is_onbehalf_token_supported = serializers.BooleanField()
 
     @extend_schema_field(
         {
@@ -2130,6 +2178,8 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
             "account_id",
             "state",
             "metadata",
+            "is_local_recording_token_supported",
+            "is_onbehalf_token_supported",
             "connection_failure_data",
             "created_at",
             "updated_at",

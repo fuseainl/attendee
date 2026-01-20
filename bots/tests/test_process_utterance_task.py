@@ -201,6 +201,74 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
         self.assertEqual(result1, ["pii", "pci"])
 
 
+class BotModelDeepgramModelTest(TransactionTestCase):
+    """Unit tests for Bot model deepgram_model method."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def _create_bot_with_settings(self, settings):
+        """Helper to create a bot with specific settings."""
+        return Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test", settings=settings)
+
+    def test_deepgram_model_returns_nova3_by_default(self):
+        """Test that deepgram_model returns nova-3 by default."""
+        bot = self._create_bot_with_settings({})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+    def test_deepgram_model_returns_nova3_for_english(self):
+        """Test that deepgram_model returns nova-3 for English language."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+    def test_deepgram_model_returns_nova3_for_other_languages(self):
+        """Test that deepgram_model returns nova-3 for languages supported by nova-3."""
+        for lang in ["es", "de", "fr", "ja", "ko", "pt", "ru"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-3", f"Expected nova-3 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_chinese_simplified(self):
+        """Test that deepgram_model falls back to nova-2 for Chinese Simplified."""
+        for lang in ["zh", "zh-CN", "zh-Hans"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_chinese_traditional(self):
+        """Test that deepgram_model falls back to nova-2 for Chinese Traditional."""
+        for lang in ["zh-TW", "zh-Hant", "zh-HK"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_thai(self):
+        """Test that deepgram_model falls back to nova-2 for Thai."""
+        for lang in ["th", "th-TH"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_settings_override_default(self):
+        """Test that explicit model in settings overrides default nova-3."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"model": "nova-2-general"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-2-general")
+
+    def test_deepgram_model_settings_override_language_fallback(self):
+        """Test that explicit model in settings overrides language-based fallback."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"model": "nova-3", "language": "zh-CN"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+
 class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
     """Unit tests for pre-recorded transcription redaction integration."""
 
@@ -1544,7 +1612,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
     # ------------------------------------------------------------------ SUCCESS PATH
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_success_path(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path(self, mock_pcm, mock_post):
         """Custom async transcription succeeds and returns formatted transcript with words."""
         with self._patch_env():
             # Mock successful response from custom async API
@@ -1585,16 +1654,28 @@ class CustomAsyncProviderTest(TransactionTestCase):
             call_args = mock_post.call_args
             # First argument is the URL
             self.assertEqual(call_args[0][0], "http://test-service.com/transcribe")
-            # Check audio was sent as PCM
-            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.pcm")
-            self.assertEqual(call_args[1]["files"]["audio"][1], b"pcm-bytes")
-            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/pcm")
+            # Check audio was sent as MP3
+            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.mp3")
+            self.assertEqual(call_args[1]["files"]["audio"][1], b"mp3-audio-data")
+            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/mpeg")
+            # Verify pcm_to_mp3 was called
+            mock_pcm.assert_called_once()
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_success_path_with_bot_settings(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path_with_bot_settings(self, mock_pcm, mock_post):
         """Custom async transcription succeeds with bot-specific settings applied."""
-        # Configure bot with custom settings
-        self.bot.settings = {"transcription_settings": {"custom_async": {"language": "fr-FR", "model": "whisper-large-v3", "custom_param": "test_value"}}}
+        # Configure bot with custom settings (including nested dict to test JSON conversion)
+        self.bot.settings = {
+            "transcription_settings": {
+                "custom_async": {
+                    "language": "fr-FR",
+                    "model": "whisper-large-v3",
+                    "custom_param": "test_value",
+                    "nested_param": {"key": "value", "list": [1, 2, 3]},
+                }
+            }
+        }
         self.bot.save()
 
         with self._patch_env():
@@ -1615,6 +1696,10 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(data["language"], "fr-FR")
             self.assertEqual(data["model"], "whisper-large-v3")
             self.assertEqual(data["custom_param"], "test_value")
+            # Verify nested dict/list are converted to JSON string
+            import json
+
+            self.assertEqual(data["nested_param"], json.dumps({"key": "value", "list": [1, 2, 3]}))
 
     def test_missing_env_url(self):
         """No CUSTOM_ASYNC_TRANSCRIPTION_URL env var → CREDENTIALS_NOT_FOUND."""
@@ -1626,7 +1711,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertIn("CUSTOM_ASYNC_TRANSCRIPTION_URL", failure["error"])
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_invalid_credentials_401(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
         """Custom async returns 401 → CREDENTIALS_INVALID."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=401)
@@ -1638,7 +1724,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_rate_limit_429(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_rate_limit_429(self, mock_pcm, mock_post):
         """Custom async returns 429 → RATE_LIMIT_EXCEEDED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=429)
@@ -1650,7 +1737,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_request_failure_500(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_failure_500(self, mock_pcm, mock_post):
         """Custom async returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=500)
@@ -1665,7 +1753,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["response_text"], "Internal Server Error")
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_error_status_in_response(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_error_status_in_response(self, mock_pcm, mock_post):
         """Custom async returns status='error' → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=200)
@@ -1679,7 +1768,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["error_code"], "TRANSCRIPTION_FAILED")
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_timeout_exception(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_timeout_exception(self, mock_pcm, mock_post):
         """Request timeout → TIMED_OUT."""
         with self._patch_env():
             from requests.exceptions import Timeout
@@ -1692,7 +1782,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.TIMED_OUT)
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_request_exception(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_exception(self, mock_pcm, mock_post):
         """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             from requests.exceptions import RequestException
@@ -1706,7 +1797,8 @@ class CustomAsyncProviderTest(TransactionTestCase):
             self.assertIn("Network error", failure["error"])
 
     @mock.patch("bots.tasks.process_utterance_task.requests.post")
-    def test_invalid_json_response(self, mock_post):
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_json_response(self, mock_pcm, mock_post):
         """Invalid JSON response → TRANSCRIPTION_REQUEST_FAILED."""
         with self._patch_env():
             mock_response = mock.Mock(status_code=200)

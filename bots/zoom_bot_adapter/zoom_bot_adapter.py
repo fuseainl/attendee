@@ -7,6 +7,7 @@ import jwt
 import numpy as np
 import zoom_meeting_sdk as zoom
 
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
@@ -173,6 +174,7 @@ class ZoomBotAdapter(BotAdapter):
         # more than 10 seconds, we should send a message to the bot controller that we could not connect to the meeting
         # https://devforum.zoom.us/t/linux-sdk-gets-stuck-in-meeting-status-connecting-when-the-provided-password-is-incorrect/130441
         self.stuck_in_connecting_state_timeout = 60
+        self.stuck_in_connecting_state_timeout_id = None
 
         # Breakout room controller
         self.breakout_room_ctrl = None
@@ -191,6 +193,9 @@ class ZoomBotAdapter(BotAdapter):
         self.recording_is_paused = False
 
         self.ready_to_send_chat_messages = False
+
+        self.should_retry_after_meeting_ends = False
+        self.attempts_to_join_started_at = time.time()
 
     def pause_recording(self):
         self.recording_is_paused = True
@@ -217,7 +222,7 @@ class ZoomBotAdapter(BotAdapter):
                 logger.info("Re-requesting recording privilege since host just joined.")
                 self.recording_ctrl.RequestLocalRecordingPrivilege()
         except Exception as e:
-            logger.info(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
+            logger.warning(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
 
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
@@ -231,14 +236,25 @@ class ZoomBotAdapter(BotAdapter):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if self.number_of_participants_ever_in_meeting() <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
         all_participant_ids = self.participants_ctrl.GetParticipantsList()
-        if len(all_participant_ids) == 1:
+
+        all_participant_ids_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant_id in all_participant_ids:
+            participant = self.get_participant(participant_id)
+            if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
+                all_participant_ids_excluding_other_bots.append(participant_id)
+            else:
+                other_bots_in_meeting_names.append(participant["participant_full_name"])
+
+        if len(all_participant_ids_excluding_other_bots) == 1:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
 
@@ -405,11 +421,11 @@ class ZoomBotAdapter(BotAdapter):
             self._participant_cache[participant_id] = participant_info
             return participant_info
         except:
-            logger.info(f"Error getting participant {participant_id}, falling back to cache")
+            logger.warning(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
 
-    def number_of_participants_ever_in_meeting(self):
-        return len(self._participant_cache)
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self._participant_cache.values() if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
@@ -796,7 +812,7 @@ class ZoomBotAdapter(BotAdapter):
 
         send_result = self.audio_raw_data_sender.send(bytes, sample_rate, zoom.ZoomSDKAudioChannel_Mono)
         if send_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"error with send_raw_audio send_result = {send_result}")
+            logger.warning(f"error with send_raw_audio send_result = {send_result}")
 
     def on_mic_start_send_callback(self):
         self.on_mic_start_send_callback_called = True
@@ -828,7 +844,7 @@ class ZoomBotAdapter(BotAdapter):
         stop_raw_recording_result = self.recording_ctrl.StopRawRecording()
         # SDKERR_TOO_FREQUENT_CALL means it was already called recently
         if stop_raw_recording_result != zoom.SDKERR_SUCCESS and stop_raw_recording_result != zoom.SDKERR_TOO_FREQUENT_CALL:
-            logger.info(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
+            logger.warning(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
         else:
             self.raw_recording_active = False
             logger.info(f"Raw recording stopped stop_raw_recording_result = {stop_raw_recording_result}")
@@ -839,7 +855,7 @@ class ZoomBotAdapter(BotAdapter):
         logger.info("Starting raw recording")
         start_raw_recording_result = self.recording_ctrl.StartRawRecording()
         if start_raw_recording_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"Error with start_raw_recording_result = {start_raw_recording_result}")
+            logger.warning(f"Error with start_raw_recording_result = {start_raw_recording_result}")
         else:
             self.raw_recording_active = True
             logger.info("Raw recording started")
@@ -902,6 +918,8 @@ class ZoomBotAdapter(BotAdapter):
             param.join_token = self.zoom_tokens.get("join_token")
         if self.zoom_tokens.get("app_privilege_token"):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
+        if self.zoom_tokens.get("onbehalf_token"):
+            param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
@@ -956,12 +974,29 @@ class ZoomBotAdapter(BotAdapter):
         logger.info(f"We've been in the connecting state for more than {self.stuck_in_connecting_state_timeout} seconds, going to return could not connect to meeting message")
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
+    def clear_stuck_in_connecting_state_timeout(self):
+        if self.stuck_in_connecting_state_timeout_id is not None:
+            removed = GLib.source_remove(self.stuck_in_connecting_state_timeout_id)
+            logger.info(f"Cleared stuck in connecting state timeout id={self.stuck_in_connecting_state_timeout_id} removed={removed}")
+            self.stuck_in_connecting_state_timeout_id = None
+
     def wait_to_get_out_of_connecting_state(self):
-        logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds")
-        GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
+        self.stuck_in_connecting_state_timeout_id = GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
+        logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
+
+    def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
+        if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+            self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
+            return
+
+        # We don't explicitly retry here because the retry will fail if we do it immediately
+        # Instead, we set a flag to retry after the meeting ends
+        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+        self.should_retry_after_meeting_ends = True
 
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
+        self.clear_stuck_in_connecting_state_timeout()
         self.meeting_status = status
 
         if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
@@ -986,10 +1021,20 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
+            if self.should_retry_after_meeting_ends:
+                self.should_retry_after_meeting_ends = False
+                logger.info("Meeting ended. Will retry to join meeting in 3 seconds...")
+                GLib.timeout_add_seconds(3, self.join_meeting)
+                return
+
             # We get the MEETING_STATUS_ENDED regardless of whether we initiated the leave or not
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
         if status == zoom.MEETING_STATUS_FAILED:
+            # This is a hacky way to determine if the bot failed to join because the onbehalf token user is not in the meeting.
+            # On our current version of the Zoom SDK, there is no specific error code for this.
+            failed_because_onbehalf_token_user_not_in_meeting = iResult == 65535 and self.zoom_tokens.get("onbehalf_token")
+
             # Since the unable to join external meeting issue is so common, we'll handle it separately
             if iResult == zoom.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING:
                 self.send_message_callback(
@@ -998,6 +1043,8 @@ class ZoomBotAdapter(BotAdapter):
                         "zoom_result_code": iResult,
                     }
                 )
+            elif failed_because_onbehalf_token_user_not_in_meeting:
+                self.handle_failed_to_join_because_onbehalf_token_user_not_in_meeting()
             else:
                 self.send_message_callback(
                     {

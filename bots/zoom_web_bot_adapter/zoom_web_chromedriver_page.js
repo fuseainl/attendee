@@ -13,8 +13,11 @@ var userEmail = '';
 var registrantToken = '';
 var recordingToken = zoomInitialData.joinToken || zoomInitialData.appPrivilegeToken;
 var zakToken = zoomInitialData.zakToken;
+var onBehalfToken = zoomInitialData.onBehalfToken;
 var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var userEncounteredOnBehalfTokenUserNotInMeetingError = false;
+var userEncounteredGenericJoinError = false;
 var recordingPermissionGranted = false;
 var madeInitialRequestForRecordingPermission = false;
 var sentSaveCaptionNotAllowed = false;
@@ -57,6 +60,24 @@ function joinMeeting() {
     const signature = zoomInitialData.signature;
     startMeeting(signature);
 }
+
+function userHasEnteredMeeting() {
+    return userEnteredMeeting;
+}
+
+window.userHasEnteredMeeting = userHasEnteredMeeting;
+
+function userHasEncounteredOnBehalfTokenUserNotInMeetingError() {
+    return userEncounteredOnBehalfTokenUserNotInMeetingError;
+}
+
+window.userHasEncounteredOnBehalfTokenUserNotInMeetingError = userHasEncounteredOnBehalfTokenUserNotInMeetingError;
+
+function userHasEncounteredGenericJoinError() {
+    return userEncounteredGenericJoinError;
+}
+
+window.userHasEncounteredGenericJoinError = userHasEncounteredGenericJoinError;
 
 function startMeeting(signature) {
 
@@ -111,6 +132,7 @@ function startMeeting(signature) {
             userEmail: userEmail,
             tk: registrantToken,
             recordingToken: recordingToken,
+            obfToken: onBehalfToken,
             zak: zakToken,
             success: (success) => {
                 console.log('join success');
@@ -132,6 +154,12 @@ function startMeeting(signature) {
             error: (error) => {
                 console.log('join error');
                 console.log(error);
+
+                if (isGenericJoinError(error?.errorCode))
+                {
+                    userEncounteredGenericJoinError = true;
+                    return;
+                }
 
                 window.ws.sendJson({
                     type: 'MeetingStatusChange',
@@ -342,7 +370,26 @@ function startMeeting(signature) {
     });
 }
 
+function isGenericJoinError(code) {
+    return code == 1 && !userEnteredMeeting;
+}
+
 function handleJoinFailureFromConsoleIntercept(code, reason) {
+    // Hacky way to determine if we are being rejected because the onbehalf token user is not in the meeting
+    // There currently seems to be no specific error code for this.
+    if (code == 1 && onBehalfToken && !userEnteredMeeting)
+    {
+        userEncounteredOnBehalfTokenUserNotInMeetingError = true;
+        console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+        return;
+    }
+
+    if (isGenericJoinError(code))
+    {
+        userEncounteredGenericJoinError = true;
+        return;
+    }
+
     window.ws.sendJson({
         type: 'MeetingStatusChange',
         change: 'failed_to_join',
