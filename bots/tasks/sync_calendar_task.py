@@ -275,13 +275,17 @@ class CalendarSyncHandler:
                     "time_window_end": self.time_window_end.isoformat(),
                 }
 
-                logger.info(f"Calendar sync completed successfully: {sync_results}")
+                logger.info(f"Calendar sync for calendar {self.calendar.object_id} completed successfully: {sync_results}")
 
-                trigger_webhook(
-                    webhook_trigger_type=WebhookTriggerTypes.CALENDAR_EVENTS_UPDATE,
-                    calendar=self.calendar,
-                    payload=calendar_webhook_payload(self.calendar),
-                )
+                # Only trigger webhook if there were actual changes
+                if created_count > 0 or updated_count > 0 or deleted_count > 0:
+                    trigger_webhook(
+                        webhook_trigger_type=WebhookTriggerTypes.CALENDAR_EVENTS_UPDATE,
+                        calendar=self.calendar,
+                        payload=calendar_webhook_payload(self.calendar),
+                    )
+                else:
+                    logger.info(f"No changes detected in calendar {self.calendar.object_id}, skipping webhook")
 
                 return sync_results
 

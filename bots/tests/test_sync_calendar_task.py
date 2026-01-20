@@ -446,6 +446,47 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         mock_trigger_webhook.assert_called_once_with(webhook_trigger_type=WebhookTriggerTypes.CALENDAR_EVENTS_UPDATE, calendar=self.calendar, payload=calendar_webhook_payload(self.calendar))
 
     @patch("bots.tasks.sync_calendar_task.trigger_webhook")
+    def test_sync_events_no_webhook_when_no_changes(self, mock_trigger_webhook):
+        """Test that no webhook is triggered when sync finds no changes."""
+        now = timezone.now()
+        # Pre-create an existing event that matches what will be returned from remote
+        existing_event = CalendarEvent.objects.create(
+            calendar=self.calendar,
+            platform_uuid="existing_event_1",
+            meeting_url="https://zoom.us/j/111",
+            start_time=now,
+            end_time=now + timedelta(hours=1),
+            raw={"event": "1"},
+        )
+
+        handler = CalendarSyncHandler(self.calendar.id)
+
+        # Mock abstract methods - return the same event data as already exists
+        handler._get_access_token = Mock(return_value="mock_token")
+        handler._list_events = Mock(return_value=[{"id": "existing_event_1", "test": "data1"}])
+        handler._get_event_by_id = Mock(return_value=None)
+        handler._remote_event_to_calendar_event_data = Mock(
+            return_value={
+                "platform_uuid": "existing_event_1",
+                "meeting_url": "https://zoom.us/j/111",  # Same as existing
+                "start_time": existing_event.start_time,
+                "end_time": existing_event.end_time,
+                "raw": {"event": "1"},  # Same as existing
+            }
+        )
+        handler._refresh_notification_channels = Mock()
+
+        result = handler.sync_events()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["created_count"], 0)
+        self.assertEqual(result["updated_count"], 0)
+        self.assertEqual(result["deleted_count"], 0)
+
+        # Verify webhook is NOT triggered since nothing changed
+        mock_trigger_webhook.assert_not_called()
+
+    @patch("bots.tasks.sync_calendar_task.trigger_webhook")
     @patch("bots.tasks.sync_calendar_task.remove_bots_from_calendar")
     def test_sync_events_authentication_error(self, mock_remove_bots, mock_trigger_webhook):
         """Test sync_events handles authentication errors properly."""
