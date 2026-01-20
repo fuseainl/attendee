@@ -15,7 +15,7 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from bots.bots_api_utils import delete_bot, patch_bot
+from bots.bots_api_utils import build_site_url, delete_bot, patch_bot
 from bots.calendars_api_utils import remove_bots_from_calendar
 from bots.meeting_url_utils import meeting_type_from_url
 from bots.models import Bot, BotStates, Calendar, CalendarEvent, CalendarNotificationChannel, CalendarPlatform, CalendarStates, WebhookTriggerTypes
@@ -334,7 +334,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             notification_channel_unique_key = "first_channel_" + self.calendar.object_id
 
         body = {
-            "address": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-google-calendar')}",
+            "address": build_site_url(reverse("external_webhooks:external-webhook-google-calendar")),
             "type": "webhook",
             "id": notification_channel_uuid,
             "token": json.dumps({"calendar_id": self.calendar.object_id}),
@@ -595,7 +595,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
         else:
             resource_url = "me/calendar/events"
         expires_at = timezone.now() + timedelta(minutes=10070 - 1)
-        body = {"changeType": "created,updated,deleted", "notificationUrl": f"https://0ae40e3e033d.ngrok-free.app{reverse('external_webhooks:external-webhook-microsoft-calendar')}", "resource": resource_url, "clientState": json.dumps({"calendar_id": self.calendar.object_id}), "expirationDateTime": expires_at.isoformat(), "latestSupportedTlsVersion": "v1_2"}
+        body = {"changeType": "created,updated,deleted", "notificationUrl": build_site_url(reverse("external_webhooks:external-webhook-microsoft-calendar")), "resource": resource_url, "clientState": json.dumps({"calendar_id": self.calendar.object_id}), "expirationDateTime": expires_at.isoformat(), "latestSupportedTlsVersion": "v1_2"}
         logger.info(f"Creating Microsoft Calendar notification channel. Body: {body}")
         access_token = self._get_access_token()
         response = self._make_graph_request(url, access_token, method="POST", body=body)
