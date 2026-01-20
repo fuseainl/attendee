@@ -426,6 +426,7 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         handler._list_events = Mock(return_value=[{"id": "event_1", "test": "data1"}, {"id": "event_2", "test": "data2"}])
         handler._get_event_by_id = Mock(return_value=None)
         handler._remote_event_to_calendar_event_data = Mock(side_effect=[{"platform_uuid": "event_1", "meeting_url": "https://zoom.us/j/111", "start_time": timezone.now(), "end_time": timezone.now() + timedelta(hours=1), "raw": {"event": "1"}}, {"platform_uuid": "event_2", "meeting_url": "https://zoom.us/j/222", "start_time": timezone.now() + timedelta(hours=2), "end_time": timezone.now() + timedelta(hours=3), "raw": {"event": "2"}}])
+        handler._refresh_notification_channels = Mock()
 
         result = handler.sync_events()
 
@@ -450,6 +451,7 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         """Test sync_events handles authentication errors properly."""
         handler = CalendarSyncHandler(self.calendar.id)
         handler._get_access_token = Mock(side_effect=CalendarAPIAuthenticationError("Auth failed"))
+        handler._refresh_notification_channels = Mock()
 
         result = handler.sync_events()
 
