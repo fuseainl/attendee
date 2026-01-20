@@ -105,4 +105,4 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
             try:
                 self.driver.get("https://www.google.com/accounts/logout")
             except Exception as e:
-                logger.info(f"Error navigating to the logout page to sign out of the Google account: {e}")
+                logger.warning(f"Error navigating to the logout page to sign out of the Google account: {e}")
