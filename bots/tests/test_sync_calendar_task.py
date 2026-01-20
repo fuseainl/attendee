@@ -490,6 +490,23 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
     @patch("bots.tasks.sync_calendar_task.remove_bots_from_calendar")
     def test_sync_events_authentication_error(self, mock_remove_bots, mock_trigger_webhook):
         """Test sync_events handles authentication errors properly."""
+        # Create notification channels that should be deleted on auth error
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="channel_1",
+            unique_key="first_channel_" + self.calendar.object_id,
+            expires_at=timezone.now() + timedelta(days=7),
+            raw={"test": "data"},
+        )
+        CalendarNotificationChannel.objects.create(
+            calendar=self.calendar,
+            platform_uuid="channel_2",
+            unique_key="channel_1",
+            expires_at=timezone.now() + timedelta(days=14),
+            raw={"test": "data"},
+        )
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 2)
+
         handler = CalendarSyncHandler(self.calendar.id)
         handler._get_access_token = Mock(side_effect=CalendarAPIAuthenticationError("Auth failed"))
         handler._refresh_notification_channels = Mock()
@@ -507,6 +524,9 @@ class TestCalendarSyncHandlerSyncEvents(TransactionTestCase):
         # Verify bots are removed and webhook is triggered
         mock_remove_bots.assert_called_once_with(calendar=self.calendar, project=self.calendar.project)
         mock_trigger_webhook.assert_called_once_with(webhook_trigger_type=WebhookTriggerTypes.CALENDAR_STATE_CHANGE, calendar=self.calendar, payload=calendar_webhook_payload(self.calendar))
+
+        # Verify notification channels are deleted
+        self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 0)
 
     def test_sync_events_general_exception(self):
         """Test sync_events handles general exceptions properly."""

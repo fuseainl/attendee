@@ -300,6 +300,11 @@ class CalendarSyncHandler:
                 }
                 self.calendar.save()
 
+                # Delete any notification channels for the calendar so that when the user re-connects, they will be recreated.
+                # For Google Cal, they seem to keep working even after the authorization is lost, but let's not
+                # rely on that behavior.
+                self.calendar.notification_channels.all().delete()
+
             logger.exception(f"Calendar sync failed with CalendarAPIAuthenticationError for {self.calendar.object_id}: {e}")
 
             # Create webhook event
