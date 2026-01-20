@@ -233,10 +233,10 @@ class CalendarSyncHandler:
                         else:
                             # Event was deleted from Remote Calendar, mark as deleted
                             self._mark_calendar_event_as_deleted(local_events[missing_event_id])
-                            logger.info(f"Marked event {missing_event_id} as deleted")
+                            logger.info(f"Calendar {self.calendar.object_id}: Marked event {missing_event_id} as deleted")
                             deleted_count += 1
                     except Exception as e:
-                        logger.error(f"Failed to check individual event {missing_event_id}: {e}")
+                        logger.error(f"Calendar {self.calendar.object_id}: Failed to check individual event {missing_event_id}: {e}")
 
                 # Step 3: Diff against local DB - upsert all Remote events
                 created_count = 0
@@ -248,10 +248,10 @@ class CalendarSyncHandler:
 
                     if was_created:
                         created_count += 1
-                        logger.info(f"Created event {remote_event_id}")
+                        logger.info(f"Calendar {self.calendar.object_id}: Created event {remote_event_id}")
                     elif was_updated:
                         updated_count += 1
-                        logger.info(f"Updated event {remote_event_id}")
+                        logger.info(f"Calendar {self.calendar.object_id}: Updated event {remote_event_id}")
 
                 # Update calendar sync success timestamp and window
                 self.calendar.last_attempted_sync_at = timezone.now()
@@ -381,7 +381,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         # Any notification channels that expired over 24 hours ago should be deleted
         expired_notification_channels = notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS))
         if expired_notification_channels.count() > 0:
-            logger.info(f"Deleting {expired_notification_channels.count()} expired notification channels: {list(map(lambda x: x.platform_uuid, expired_notification_channels))}")
+            logger.info(f"Calendar {self.calendar.object_id}: Deleting {expired_notification_channels.count()} expired notification channels: {list(map(lambda x: x.platform_uuid, expired_notification_channels))}")
         expired_notification_channels.delete()
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
@@ -471,7 +471,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             if next_page_token:
                 params["pageToken"] = next_page_token
 
-            logger.info(f"Fetching Google Calendar events: {base_url} with params: {params}")
+            logger.info(f"Calendar {self.calendar.object_id}: Fetching Google Calendar events: {base_url} with params: {params}")
             response_data = self._make_gcal_request(base_url, access_token, params)
 
             events = response_data.get("items", [])
@@ -481,7 +481,7 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
             if not next_page_token:
                 break
 
-        logger.info(f"Fetched {len(all_events)} events from Google Calendar")
+        logger.info(f"Calendar {self.calendar.object_id}: Fetched {len(all_events)} events from Google Calendar")
         return all_events
 
     def _get_event_by_id(self, event_id: str, access_token: str) -> Optional[dict]:
@@ -490,11 +490,11 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         url = f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/{event_id}"
 
         try:
-            logger.info(f"Fetching individual event {event_id} from Google Calendar")
+            logger.info(f"Calendar {self.calendar.object_id}: Fetching individual event {event_id} from Google Calendar")
             return self._make_gcal_request(url, access_token)
         except Exception as e:
             if _exception_is_404(e):
-                logger.info(f"Event {event_id} not found in Google Calendar")
+                logger.info(f"Calendar {self.calendar.object_id}: Event {event_id} not found in Google Calendar")
                 # Event was deleted
                 return None
             raise
@@ -601,10 +601,10 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             resource_url = "me/calendar/events"
         expires_at = timezone.now() + timedelta(minutes=10070 - 1)
         body = {"changeType": "created,updated,deleted", "notificationUrl": build_site_url(reverse("external_webhooks:external-webhook-microsoft-calendar")), "resource": resource_url, "clientState": json.dumps({"calendar_id": self.calendar.object_id}), "expirationDateTime": expires_at.isoformat(), "latestSupportedTlsVersion": "v1_2"}
-        logger.info(f"Creating Microsoft Calendar notification channel. Body: {body}")
+        logger.info(f"Calendar {self.calendar.object_id}: Creating Microsoft Calendar notification channel. Body: {body}")
         access_token = self._get_access_token()
         response = self._make_graph_request(url, access_token, method="POST", body=body)
-        logger.info(f"Created Microsoft Calendar notification channel. Response: {response}")
+        logger.info(f"Calendar {self.calendar.object_id}: Created Microsoft Calendar notification channel. Response: {response}")
 
         calendar_notification_channel = CalendarNotificationChannel.objects.create(
             calendar=self.calendar,
@@ -613,7 +613,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             expires_at=expires_at,
             raw=response,
         )
-        logger.info(f"Created Microsoft Calendar notification channel in database. Platform UUID: {calendar_notification_channel.platform_uuid}")
+        logger.info(f"Calendar {self.calendar.object_id}: Created Microsoft Calendar notification channel in database. Platform UUID: {calendar_notification_channel.platform_uuid}")
 
     def _raise_if_error_is_authentication_error(self, e: requests.RequestException):
         if e.response.json().get("error") == "invalid_grant" or e.response.json().get("error") == "invalid_client":
@@ -758,7 +758,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             events.extend(data.get("value", []))
             next_link = data.get("@odata.nextLink")
 
-        logger.info("Fetched %d events from Microsoft Graph", len(events))
+        logger.info("Calendar %s: Fetched %d events from Microsoft Graph", self.calendar.object_id, len(events))
         return events
 
     def _get_event_by_id(self, event_id: str, access_token: str) -> Optional[dict]:
@@ -773,7 +773,7 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             return self._make_graph_request(url, access_token, params)
         except Exception as e:
             if _exception_is_404(e):
-                logger.info("Event %s not found in Microsoft Graph", event_id)
+                logger.info("Calendar %s: Event %s not found in Microsoft Graph", self.calendar.object_id, event_id)
                 return None  # Event was deleted
             raise
 
