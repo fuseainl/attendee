@@ -581,16 +581,52 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
     TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
     GRAPH_BASE = "https://graph.microsoft.com/v1.0"
     CALENDAR_EVENT_SELECT_FIELDS = "id,subject,start,end,attendees,organizer,iCalUId,seriesMasterId,isCancelled,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,onlineMeetingUrl,location,body,webLink"
+    NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES = 10070 - 1
 
     def _refresh_notification_channels(self):
-        notification_channels = CalendarNotificationChannel.objects.filter(calendar=self.calendar)
         # For microsoft calendars, we only need one notification channel. We can keep updating it to increase the expiration time.
-        notification_channel = notification_channels.first()
+        notification_channel = self.calendar.notification_channels.first()
 
         if not notification_channel:
             self._create_notification_channel()
-        else:
+            return
+
+        # We don't need to extend it every time, just if its been over a day since the last extension
+        should_extend_existing_channel = notification_channel.expires_at < timezone.now() + timedelta(minutes=self.NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES) - timedelta(days=1)
+        if should_extend_existing_channel:
             self._extend_notification_channel_expiration_time(notification_channel)
+
+    def _extend_notification_channel_expiration_time(self, notification_channel: CalendarNotificationChannel):
+        # Extend expiration on the existing Microsoft Graph subscription
+        url = f"{self.GRAPH_BASE}/subscriptions/{notification_channel.platform_uuid}"
+        expires_at = timezone.now() + timedelta(minutes=self.NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES)
+        body = {"expirationDateTime": expires_at.isoformat()}
+
+        logger.info(f"Calendar {self.calendar.object_id}: Extending Microsoft Calendar notification channel {notification_channel.platform_uuid}. Body: {body}")
+
+        access_token = self._get_access_token()
+
+        try:
+            response = self._make_graph_request(url, access_token, method="PATCH", body=body)
+            logger.info(f"Calendar {self.calendar.object_id}: Extended Microsoft Calendar notification channel {notification_channel.platform_uuid}. Response: {response}")
+        except Exception as e:
+            # If the subscription exists in our database, but not in Microsoft's database, delete it.
+            # It will be recreated the next time the sync task is run. We aren't recreating it here for simplicity.
+            if _exception_is_404(e):
+                logger.warning(f"Calendar {self.calendar.object_id}: Microsoft subscription {notification_channel.platform_uuid} not found in Graph. Deleting the notification channel in our database.")
+                notification_channel.delete()
+                return
+            raise
+
+        # Check if the returned expiration time is less than the expected expiration time
+        if response.get("expirationDateTime") < expires_at.isoformat():
+            logger.warning(f"Calendar {self.calendar.object_id}: Microsoft Calendar notification channel expiration time is less than the expected expiration time. Returned expiration time: {response.get('expirationDateTime')}, Expected expiration time: {expires_at.isoformat()}. This was for extending the notification channel expiration time.")
+
+        notification_channel.expires_at = expires_at
+        notification_channel.raw = response
+        notification_channel.save()
+
+        logger.info(f"Calendar {self.calendar.object_id}: Extended Microsoft Calendar notification channel {notification_channel.platform_uuid} in database. New expiration time: {expires_at.isoformat()}")
 
     def _create_notification_channel(self):
         # Make request to create a notification channel in Microsoft Graph
@@ -599,12 +635,16 @@ class MicrosoftCalendarSyncHandler(CalendarSyncHandler):
             resource_url = f"me/calendars/{self.calendar.platform_uuid}/events"
         else:
             resource_url = "me/calendar/events"
-        expires_at = timezone.now() + timedelta(minutes=10070 - 1)
+        expires_at = timezone.now() + timedelta(minutes=self.NOTIFICATION_CHANNEL_EXPIRATION_TIME_MINUTES)
         body = {"changeType": "created,updated,deleted", "notificationUrl": build_site_url(reverse("external_webhooks:external-webhook-microsoft-calendar")), "resource": resource_url, "clientState": json.dumps({"calendar_id": self.calendar.object_id}), "expirationDateTime": expires_at.isoformat(), "latestSupportedTlsVersion": "v1_2"}
         logger.info(f"Calendar {self.calendar.object_id}: Creating Microsoft Calendar notification channel. Body: {body}")
         access_token = self._get_access_token()
         response = self._make_graph_request(url, access_token, method="POST", body=body)
         logger.info(f"Calendar {self.calendar.object_id}: Created Microsoft Calendar notification channel. Response: {response}")
+
+        # Check if the returned expiration time is less than the expected expiration time
+        if response.get("expirationDateTime") < expires_at.isoformat():
+            logger.warning(f"Calendar {self.calendar.object_id}: Microsoft Calendar notification channel expiration time is less than the expected expiration time. Returned expiration time: {response.get('expirationDateTime')}, Expected expiration time: {expires_at.isoformat()}")
 
         calendar_notification_channel = CalendarNotificationChannel.objects.create(
             calendar=self.calendar,
