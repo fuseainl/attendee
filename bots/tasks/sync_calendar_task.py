@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 
 URL_CANDIDATE = re.compile(r"https?://[^\s<>\"']+")
 
-NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS = 26  # If the latest channel will expire within this amount of hours, create a new one
-NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS = 24  # If a channel has expired more than this amount of hours ago, delete it
-
 
 def extract_meeting_url_from_text(text: str) -> Optional[str]:
     if not text:
@@ -324,6 +321,9 @@ class CalendarSyncHandler:
 class GoogleCalendarSyncHandler(CalendarSyncHandler):
     """Handler for syncing calendar events with Google Calendar API."""
 
+    NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS = 26  # If the latest channel will expire within this amount of hours, create a new one
+    NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS = 24  # If a channel has expired more than this amount of hours ago, delete it
+
     def _create_notification_channel(self):
         """Make a request to create a notification channel for the calendar."""
         calendar_id = self.calendar.platform_uuid or "primary"
@@ -375,11 +375,11 @@ class GoogleCalendarSyncHandler(CalendarSyncHandler):
         # If there is no notification channel or it will expire within 26 hours, create a new one
         # The choice of 26 hours ensures that there won't be any window where there's no active notification channel
         # Because the scheduler process guarantees that calendars will never go more than 24 hours without a sync task.
-        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS):
+        if not notification_channel or notification_channel.expires_at < timezone.now() + timedelta(hours=self.NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS):
             self._create_notification_channel()
 
         # Any notification channels that expired over 24 hours ago should be deleted
-        expired_notification_channels = notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS))
+        expired_notification_channels = notification_channels.filter(expires_at__lt=timezone.now() - timedelta(hours=self.NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS))
         if expired_notification_channels.count() > 0:
             logger.info(f"Calendar {self.calendar.object_id}: Deleting {expired_notification_channels.count()} expired notification channels: {list(map(lambda x: x.platform_uuid, expired_notification_channels))}")
         expired_notification_channels.delete()

@@ -20,8 +20,6 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tasks.sync_calendar_task import (
-    NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS,
-    NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS,
     CalendarAPIAuthenticationError,
     CalendarSyncHandler,
     GoogleCalendarSyncHandler,
@@ -894,7 +892,7 @@ class TestNotificationChannelRefreshWithScheduler(TransactionTestCase):
 
         # Step 1: Create a notification channel with an expiration time that is just before the renewal threshold
         # so that if we run the sync task right now, it will just miss creating a new channel
-        expiration_time = now + timedelta(hours=NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS, minutes=1)
+        expiration_time = now + timedelta(hours=GoogleCalendarSyncHandler.NOTIFICATION_CHANNEL_RENEWAL_THRESHOLD_HOURS, minutes=1)
         initial_channel = CalendarNotificationChannel.objects.create(
             calendar=self.calendar,
             platform_uuid="initial_channel_uuid",
@@ -941,7 +939,7 @@ class TestNotificationChannelRefreshWithScheduler(TransactionTestCase):
         self.assertEqual(all_channels[0].platform_uuid, "initial_channel_uuid")
 
         # Now switch to the time that the original notification channel will expire + the cleanup threshold and make sure that it is deleted
-        with patch("django.utils.timezone.now", return_value=initial_channel.expires_at + timedelta(hours=NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS, minutes=1)):
+        with patch("django.utils.timezone.now", return_value=initial_channel.expires_at + timedelta(hours=GoogleCalendarSyncHandler.NOTIFICATION_CHANNEL_CLEANUP_THRESHOLD_HOURS, minutes=1)):
             command._run_periodic_calendar_syncs()
             self.assertEqual(CalendarNotificationChannel.objects.filter(calendar=self.calendar).count(), 1, "The initial notification channel should be deleted")
             self.assertFalse(CalendarNotificationChannel.objects.filter(calendar=self.calendar, platform_uuid="initial_channel_uuid").exists(), "The initial notification channel should be deleted")
