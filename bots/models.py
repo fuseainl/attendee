@@ -372,6 +372,8 @@ class CalendarEvent(models.Model):
 
     meeting_url = models.CharField(max_length=511, null=True, blank=True)
 
+    start_time = models.DateTimeField(db_index=True)
+    end_time = models.DateTimeField(db_index=True)
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
     is_deleted = models.BooleanField(default=False)

@@ -268,7 +268,7 @@ class CalendarDetailPatchDeleteView(APIView):
 
 
 class CalendarEventCursorPagination(CursorPagination):
-    ordering = "-updated_at"
+    ordering = "start_time"
     page_size = 100
 
 
@@ -320,6 +320,30 @@ class CalendarEventListView(GenericAPIView):
                 required=False,
                 examples=[OpenApiExample("Updated After Example", value="2025-01-13T10:30:00Z")],
             ),
+            OpenApiParameter(
+                name="event_id",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events by event ID",
+                required=False,
+                examples=[OpenApiExample("Event ID Example", value="evt_abcdef1234567890")],
+            ),
+            OpenApiParameter(
+                name="start_time_after",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events with start_time after this timestamp (ISO 8601 format)",
+                required=False,
+                examples=[OpenApiExample("Start Time After Example", value="2025-01-13T10:30:00Z")],
+            ),
+            OpenApiParameter(
+                name="end_time_before",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter events with end_time before this timestamp (ISO 8601 format)",
+                required=False,
+                examples=[OpenApiExample("End Time Before Example", value="2025-01-13T18:00:00Z")],
+            ),
         ],
         tags=["Calendars"],
     )
@@ -350,7 +374,38 @@ class CalendarEventListView(GenericAPIView):
             except ValueError:
                 return Response({"error": "Invalid updated_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
 
-        events = events.order_by("-created_at")
+        # Apply event_id filter if provided
+        event_id = request.query_params.get("event_id")
+        if event_id is not None:
+            events = events.filter(object_id=event_id)
+
+        # Apply start_time_after filter if provided
+        start_time_after = request.query_params.get("start_time_after")
+        if start_time_after is not None:
+            try:
+                from django.utils.dateparse import parse_datetime
+
+                start_time_after_dt = parse_datetime(start_time_after)
+                if start_time_after_dt is None:
+                    return Response({"error": "Invalid start_time_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                events = events.filter(start_time__gte=start_time_after_dt)
+            except ValueError:
+                return Response({"error": "Invalid start_time_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Apply end_time_before filter if provided
+        end_time_before = request.query_params.get("end_time_before")
+        if end_time_before is not None:
+            try:
+                from django.utils.dateparse import parse_datetime
+
+                end_time_before_dt = parse_datetime(end_time_before)
+                if end_time_before_dt is None:
+                    return Response({"error": "Invalid end_time_before format. Use ISO 8601 format (e.g., 2025-01-13T18:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+                events = events.filter(end_time__lte=end_time_before_dt)
+            except ValueError:
+                return Response({"error": "Invalid end_time_before format. Use ISO 8601 format (e.g., 2025-01-13T18:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        events = events.order_by("start_time")
 
         # Let the pagination class handle the rest
         page = self.paginate_queryset(events)
