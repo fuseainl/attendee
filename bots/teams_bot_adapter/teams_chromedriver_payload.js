@@ -2502,11 +2502,15 @@ if (window.initialData.addClickRipple) {
 
 
 async function turnOnCamera() {
+    console.log('[turnOnCamera] ========== Function called - START ==========');
+    console.trace('[turnOnCamera] Call stack:');
     // Click camera button to turn it on
     let cameraButton = null;
     const numAttempts = 30;
     for (let i = 0; i < numAttempts; i++) {
-        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || document.querySelector('div[aria-label="Turn camera on"]');
+        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || 
+            document.querySelector('div[aria-label="Turn camera on"]') ||
+            document.querySelector('button[data-tid="toggle-video"]');
         if (cameraButton) {
             break;
         }
