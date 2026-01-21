@@ -96,7 +96,7 @@ class ExternalWebhookGoogleCalendarView(View):
         channel_id = request.headers.get("X-Goog-Channel-ID")
         calendar_notification_channel = CalendarNotificationChannel.objects.filter(platform_uuid=channel_id).first()
         if not calendar_notification_channel:
-            logger.info(f"No calendar notification channel found for channel ID: {channel_id}")
+            logger.warning(f"No calendar notification channel found for channel ID: {channel_id}")
             # TODO make request to stop the channel in Google API
             return HttpResponse(status=200)
 
