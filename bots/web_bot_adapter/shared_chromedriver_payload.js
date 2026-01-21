@@ -84,7 +84,7 @@ class BotVideoOutputStream {
                     this.canvasCtx.drawImage(this.imageToDraw, this.imageDrawParams.offsetX, this.imageDrawParams.offsetY, this.imageDrawParams.width, this.imageDrawParams.height);
                 }, 1000);
             }
-            this.ensureInputOn();
+            await this.ensureInputOn();
 
             // Capture last image bytes, so that we can display it again if we play a video
             this.lastImageBytes = imageBytes;
@@ -102,9 +102,15 @@ class BotVideoOutputStream {
         });
     }
 
-    ensureInputOn() {
+    async ensureInputOn() {
         try {
-            this.turnOnInput && this.turnOnInput();
+            if (this.turnOnInput) {
+                const result = this.turnOnInput();
+                // If the callback returns a promise (async function), await it
+                if (result instanceof Promise) {
+                    await result;
+                }
+            }
         } catch (e) {
             console.error("Error in turnOnInput callback:", e);
         }
@@ -162,7 +168,7 @@ class BotVideoOutputStream {
 
         await this.videoElement.play();
         this.ensureInputOn();
-        this.ensureMicOn();
+        await this.ensureMicOn();
 
         this._startVideoDrawingLoop();
 
@@ -330,8 +336,8 @@ class BotVideoOutputStream {
             }
 
             await this.videoElement.play();
-            this.ensureInputOn();
-            this.ensureMicOn();
+            await this.ensureInputOn();
+            await this.ensureMicOn();
 
             this._startVideoDrawingLoop();
         }
@@ -533,9 +539,15 @@ class BotOutputManager {
         };
     }
 
-    ensureMicOn() {
+    async ensureMicOn() {
         try {
-            this.turnOnMic && this.turnOnMic();
+            if (this.turnOnMic) {
+                const result = this.turnOnMic();
+                // If the callback returns a promise (async function), await it
+                if (result instanceof Promise) {
+                    await result;
+                }
+            }
         } catch (e) {
             console.error("Error in turnOnMic callback:", e);
         }
@@ -573,7 +585,7 @@ class BotOutputManager {
      */
     async playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
         this._createSourceAudioTrack();
-        this.ensureMicOn();
+        await this.ensureMicOn();
 
         // Update properties if they've changed
         if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
