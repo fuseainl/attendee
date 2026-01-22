@@ -1,3 +1,4 @@
+from django.utils.dateparse import parse_datetime
 from drf_spectacular.openapi import OpenApiResponse
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema
 from rest_framework import status
@@ -268,7 +269,7 @@ class CalendarDetailPatchDeleteView(APIView):
 
 
 class CalendarEventCursorPagination(CursorPagination):
-    ordering = "start_time"
+    ordering = "-updated_at"
     page_size = 100
 
 
@@ -344,6 +345,14 @@ class CalendarEventListView(GenericAPIView):
                 required=False,
                 examples=[OpenApiExample("End Time Before Example", value="2025-01-13T18:00:00Z")],
             ),
+            OpenApiParameter(
+                name="ordering",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Order results by field. Use '-' prefix for descending order. Default: -updated_at. Allowed values: -updated_at, updated_at, start_time, -start_time, end_time, -end_time, created_at, -created_at",
+                required=False,
+                examples=[OpenApiExample("Ordering Example", value="start_time")],
+            ),
         ],
         tags=["Calendars"],
     )
@@ -365,8 +374,6 @@ class CalendarEventListView(GenericAPIView):
         updated_after = request.query_params.get("updated_after")
         if updated_after is not None:
             try:
-                from django.utils.dateparse import parse_datetime
-
                 updated_after_dt = parse_datetime(updated_after)
                 if updated_after_dt is None:
                     return Response({"error": "Invalid updated_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
@@ -383,8 +390,6 @@ class CalendarEventListView(GenericAPIView):
         start_time_after = request.query_params.get("start_time_after")
         if start_time_after is not None:
             try:
-                from django.utils.dateparse import parse_datetime
-
                 start_time_after_dt = parse_datetime(start_time_after)
                 if start_time_after_dt is None:
                     return Response({"error": "Invalid start_time_after format. Use ISO 8601 format (e.g., 2025-01-13T10:30:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
@@ -396,8 +401,6 @@ class CalendarEventListView(GenericAPIView):
         end_time_before = request.query_params.get("end_time_before")
         if end_time_before is not None:
             try:
-                from django.utils.dateparse import parse_datetime
-
                 end_time_before_dt = parse_datetime(end_time_before)
                 if end_time_before_dt is None:
                     return Response({"error": "Invalid end_time_before format. Use ISO 8601 format (e.g., 2025-01-13T18:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
@@ -405,13 +408,24 @@ class CalendarEventListView(GenericAPIView):
             except ValueError:
                 return Response({"error": "Invalid end_time_before format. Use ISO 8601 format (e.g., 2025-01-13T18:00:00Z)"}, status=status.HTTP_400_BAD_REQUEST)
 
-        events = events.order_by("start_time")
+        # Apply ordering if provided, default to -updated_at
+        ordering = request.query_params.get("ordering", "-updated_at")
+        # Validate ordering field
+        allowed_orderings = ["-updated_at", "updated_at", "start_time", "-start_time", "end_time", "-end_time", "created_at", "-created_at"]
+        if ordering not in allowed_orderings:
+            return Response({"error": f"Invalid ordering. Allowed values: {', '.join(allowed_orderings)}"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        events = events.order_by(ordering)
 
+        # Create pagination instance with the requested ordering for cursor pagination
+        pagination_instance = self.pagination_class()
+        pagination_instance.ordering = ordering
+        
         # Let the pagination class handle the rest
-        page = self.paginate_queryset(events)
+        page = pagination_instance.paginate_queryset(events, request)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            return pagination_instance.get_paginated_response(serializer.data)
 
         serializer = self.get_serializer(events, many=True)
         return Response(serializer.data)
