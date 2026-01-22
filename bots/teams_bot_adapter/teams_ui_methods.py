@@ -236,6 +236,7 @@ class TeamsUIMethods:
                 self.attempt_to_join_meeting_implementation()
             except UiLoginRequiredException:
                 # If we know that the exception was because we didn't log in, then pass it on as-is.
+                logger.info("Exception was because we didn't log in. Passing it on as-is.")
                 raise
             except Exception as e:
                 # If we got a different type of exception, then we'll "assume" that it was because we didn't log in.

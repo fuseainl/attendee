@@ -520,32 +520,19 @@ class TestTeamsBot(TransactionTestCase):
                 # Close the database connection since we're in a thread
                 connection.close()
 
-    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
-    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
-    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.S3FileUploader")
-    def test_teams_signed_in_bot_with_only_if_required_mode(
+    def _run_teams_signed_in_bot_with_only_if_required_mode(
         self,
+        exception_to_raise,
         MockFileUploader,
         MockChromeDriver,
         MockDisplay,
         MockSaveDebugRecording,
     ):
-        """Test that a bot with login_mode='only_if_required' first tries without login,
-        then retries with login when meeting requires sign in.
+        """Helper that tests the only_if_required login mode with a configurable exception.
 
-        This test exercises the actual retry logic in repeatedly_attempt_to_join_meeting(),
-        attempt_to_join_meeting(), and look_for_sign_in_required_element() by mocking at a low level
-        (look_for_sign_in_required_element raises exception on first attempt only).
-
-        Flow:
-        1. First join attempt: look_for_sign_in_required_element raises UiLoginRequiredException
-        2. Exception caught in repeatedly_attempt_to_join_meeting
-        3. should_retry_joining_meeting_that_requires_login_by_logging_in() returns True
-        4. teams_bot_login_should_be_used flag is set to True
-        5. Second join attempt: login_to_microsoft_account is called, join succeeds
+        Args:
+            exception_to_raise: The exception instance to raise on first join attempt
         """
-
         # Set up Teams bot login credentials
         teams_credentials = Credentials.objects.create(
             project=self.project,
@@ -590,9 +577,9 @@ class TestTeamsBot(TransactionTestCase):
             """
             fill_out_name_input_call_count[0] += 1
 
-            # First join attempt: raise an exception (will be converted to UiLoginRequiredException)
+            # First join attempt: raise the configured exception
             if fill_out_name_input_call_count[0] <= 1:
-                raise UiLoginRequiredException("Sign in required", "mock_fill_out_name_input")
+                raise exception_to_raise
 
             # Second join attempt: succeed
             return None
@@ -673,3 +660,61 @@ class TestTeamsBot(TransactionTestCase):
 
             # Close the database connection since we're in a thread
             connection.close()
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_teams_signed_in_bot_with_only_if_required_mode(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a bot with login_mode='only_if_required' first tries without login,
+        then retries with login when meeting requires sign in (UiLoginRequiredException).
+
+        This test exercises the actual retry logic in repeatedly_attempt_to_join_meeting(),
+        attempt_to_join_meeting(), and look_for_sign_in_required_element() by mocking at a low level
+        (look_for_sign_in_required_element raises exception on first attempt only).
+
+        Flow:
+        1. First join attempt: look_for_sign_in_required_element raises UiLoginRequiredException
+        2. Exception caught in repeatedly_attempt_to_join_meeting
+        3. should_retry_joining_meeting_that_requires_login_by_logging_in() returns True
+        4. teams_bot_login_should_be_used flag is set to True
+        5. Second join attempt: login_to_microsoft_account is called, join succeeds
+        """
+        self._run_teams_signed_in_bot_with_only_if_required_mode(
+            exception_to_raise=UiLoginRequiredException("Sign in required", "mock_fill_out_name_input"),
+            MockFileUploader=MockFileUploader,
+            MockChromeDriver=MockChromeDriver,
+            MockDisplay=MockDisplay,
+            MockSaveDebugRecording=MockSaveDebugRecording,
+        )
+
+    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
+    def test_teams_signed_in_bot_with_only_if_required_mode_generic_exception(
+        self,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        MockSaveDebugRecording,
+    ):
+        """Test that a bot with login_mode='only_if_required' also retries with login
+        when a generic exception is raised (not just UiLoginRequiredException).
+
+        This verifies that ANY exception during join attempt triggers the login retry flow
+        when teams_bot_login_credentials are available.
+        """
+        self._run_teams_signed_in_bot_with_only_if_required_mode(
+            exception_to_raise=Exception("Some generic error"),
+            MockFileUploader=MockFileUploader,
+            MockChromeDriver=MockChromeDriver,
+            MockDisplay=MockDisplay,
+            MockSaveDebugRecording=MockSaveDebugRecording,
+        )
