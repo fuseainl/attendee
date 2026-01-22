@@ -1174,6 +1174,51 @@ paths:
           UpdatedAfterExample:
             value: '2025-01-13T10:30:00Z'
             summary: Updated After Example
+      - in: query
+        name: event_id
+        schema:
+          type: string
+        description: Filter events by event ID
+        examples:
+          EventIDExample:
+            value: evt_abcdef1234567890
+            summary: Event ID Example
+      - in: query
+        name: start_time_after
+        schema:
+          type: string
+        description: Filter events with start_time after this timestamp (ISO 8601 format)
+        examples:
+          StartTimeAfterExample:
+            value: '2025-01-13T10:30:00Z'
+            summary: Start Time After Example
+      - in: query
+        name: end_time_before
+        schema:
+          type: string
+        description: Filter events with end_time before this timestamp (ISO 8601 format)
+        examples:
+          EndTimeBeforeExample:
+            value: '2025-01-13T18:00:00Z'
+            summary: End Time Before Example
+      - in: query
+        name: ordering
+        schema:
+          type: string
+          enum:
+            - -updated_at
+            - updated_at
+            - start_time
+            - -start_time
+            - end_time
+            - -end_time
+            - created_at
+            - -created_at
+        description: Order results by field. Use '-' prefix for descending order. Default: -updated_at
+        examples:
+          OrderingExample:
+            value: start_time
+            summary: Ordering Example
       tags:
       - Calendars
       security:
