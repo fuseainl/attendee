@@ -87,7 +87,7 @@ class TeamsUIMethods:
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
 
-                if self.teams_bot_login_credentials and self.join_now_button_is_present():
+                if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
