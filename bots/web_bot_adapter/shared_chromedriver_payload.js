@@ -166,13 +166,9 @@ class BotVideoOutputStream {
             await this.getAudioContext().resume();
         }
 
-        console.log('[BotVideoOutputStream] Playing video');
         await this.videoElement.play();
-        console.log('[BotVideoOutputStream] Video played, ensuring input is on...');
-        await this.ensureInputOn();
-        console.log('[BotVideoOutputStream] Input on, ensuring mic is on...');
+        this.ensureInputOn();
         await this.ensureMicOn();
-        console.log('[BotVideoOutputStream] Mic on');
 
         this._startVideoDrawingLoop();
 
