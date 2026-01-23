@@ -629,6 +629,8 @@ class TestTeamsBot(TransactionTestCase):
             # Give the bot some time to process
             bot_thread.join(timeout=20)
 
+            time.sleep(10)
+
             # Refresh the bot from the database
             self.bot.refresh_from_db()
 
