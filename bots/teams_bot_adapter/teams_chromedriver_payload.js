@@ -2767,7 +2767,7 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
 
         await this.videoElement.play();
         this.ensureInputOn();
-        await this.ensureMicOn();
+        this.ensureMicOn();
 
         this._startVideoDrawingLoop();
 
