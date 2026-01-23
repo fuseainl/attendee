@@ -2531,10 +2531,20 @@ components:
                 joining the meeting. Requires Teams bot login credentials to be set
                 for the project.
               default: false
+            login_mode:
+              type: string
+              enum:
+              - always
+              - only_if_required
+              description: The mode to use for the Teams bot login. 'always' means
+                the bot will always login, 'only_if_required' means the bot will only
+                login if the meeting requires authentication.
+              default: always
           required: []
           additionalProperties: false
           default:
             use_login: false
+            login_mode: always
           description: The Microsoft Teams-specific settings for the bot.
         zoom_settings:
           type: object

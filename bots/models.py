@@ -829,6 +829,9 @@ class Bot(models.Model):
     def teams_use_bot_login(self):
         return self.settings.get("teams_settings", {}).get("use_login", False)
 
+    def teams_login_mode_is_always(self):
+        return self.settings.get("teams_settings", {}).get("login_mode", "always") == "always"
+
     def use_zoom_web_adapter(self):
         return self.settings.get("zoom_settings", {}).get("sdk", "native") == "web"
 

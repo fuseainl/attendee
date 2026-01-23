@@ -87,7 +87,7 @@ class TeamsUIMethods:
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
 
-                if self.teams_bot_login_credentials and self.join_now_button_is_present():
+                if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
                     return
 
@@ -226,9 +226,30 @@ class TeamsUIMethods:
         else:
             return "speaker"
 
-    # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
-        if self.teams_bot_login_credentials:
+        # If we have the ability to login, but we are not going to use it, then we'll "assume" that any failure to join was
+        # because we didn't log in, which will cause us to login and retry. If our assumption was wrong, then that's ok, we're only making the assumption for this one attempt.
+        # This should improve robustness against new screens from teams that indicate login is required.
+        if self.teams_bot_login_credentials and not self.teams_bot_login_should_be_used:
+            logger.info("Teams bot login credentials are available, but we are not going to use it this attempt. We will 'assume' that any exception was because we didn't log in.")
+            try:
+                self.attempt_to_join_meeting_implementation()
+            except UiLoginRequiredException:
+                # If we know that the exception was because we didn't log in, then pass it on as-is.
+                logger.info("Exception was because we didn't log in. Passing it on as-is.")
+                raise
+            except Exception as e:
+                # If we got a different type of exception, then we'll "assume" that it was because we didn't log in.
+                logger.info(f"Exception raised in attempt_to_join_meeting_implementation: {e}. We are going to 'assume' that it's due to not logging in and raise UiLoginRequiredException.")
+                raise UiLoginRequiredException("Error that is assumed to be due to not logging in", "attempt_to_join_meeting")
+
+        else:
+            # Otherwise, take the normal path.
+            self.attempt_to_join_meeting_implementation()
+
+    # Returns nothing if succeeded, raises an exception if failed
+    def attempt_to_join_meeting_implementation(self):
+        if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
         self.driver.get(self.meeting_url)
