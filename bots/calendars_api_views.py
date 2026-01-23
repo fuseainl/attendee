@@ -414,13 +414,13 @@ class CalendarEventListView(GenericAPIView):
         allowed_orderings = ["-updated_at", "updated_at", "start_time", "-start_time", "end_time", "-end_time", "created_at", "-created_at"]
         if ordering not in allowed_orderings:
             return Response({"error": f"Invalid ordering. Allowed values: {', '.join(allowed_orderings)}"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         events = events.order_by(ordering)
 
         # Create pagination instance with the requested ordering for cursor pagination
         pagination_instance = self.pagination_class()
         pagination_instance.ordering = ordering
-        
+
         # Let the pagination class handle the rest
         page = pagination_instance.paginate_queryset(events, request)
         if page is not None:
