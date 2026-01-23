@@ -2679,8 +2679,7 @@ function turnOffScreenshare() {
 // BotOutputManager is defined in shared_chromedriver_payload.js
 
 /**
- * Teams-specific BotVideoOutputStream that overrides playVideo to use only the blob approach.
- * This ensures Teams always uses fetch-as-blob to avoid CSP violations.
+ * Teams-specific BotVideoOutputStream that overrides playVideo
  */
 class TeamsBotVideoOutputStream extends BotVideoOutputStream {
     /**
@@ -2703,15 +2702,11 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
             this.videoElement.playsInline = true;
         }
 
-        // Fetch video as blob to avoid CSP violations
         // Teams CSP only allows media from specific sources, so we need to fetch
         // the video and create a blob URL.
         // 
         // MEMORY CONCERN: This downloads the entire video into memory before playback.
-        // For large videos (>100MB), this could cause memory issues.
-        // 
-        // Possible improvement: Implement MediaSource Extensions (MSE) for streaming support to reduce memory usage.
-        // Requires server to support HTTP Range requests and video in streamable format (fragmented MP4).
+        // For large videos (>100MB), this could cause memory issues (warning is logged if the video is large).
         let blobUrl = null;
         try {
             console.log('Fetching video from URL:', videoUrl);
@@ -2720,7 +2715,6 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
                 throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
             }
             
-            // Check content-length if available to warn about large files
             const contentLength = response.headers.get('content-length');
             if (contentLength) {
                 const sizeMB = parseInt(contentLength) / 1024 / 1024;
@@ -2729,10 +2723,6 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
                 }
             }
             
-            // Create blob from response - browser will handle streaming from blob URL
-            // Note: response.blob() still downloads the entire file, but the browser's
-            // video element can start playing from the blob URL before the blob is fully created
-            // if the MP4 has its moov atom at the beginning (progressive download format)
             const blob = await response.blob();
             blobUrl = URL.createObjectURL(blob);
             console.log('Video fetched and blob URL created:', blobUrl);
@@ -2740,10 +2730,6 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
             throw new Error(`Failed to fetch video for playback: ${fetchError.message}`);
         }
 
-        // Clean up any existing blob URL
-        if (this.currentBlobUrl) {
-            URL.revokeObjectURL(this.currentBlobUrl);
-        }
         this.currentBlobUrl = blobUrl;
 
         this.videoElement.muted = false;
@@ -2787,6 +2773,20 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
             }
         };
         this.videoElement.addEventListener('ended', this.videoEndedHandler);
+    }
+
+    /**
+     * Override _stopVideoPlayback to ensure blob URLs are cleaned up when playback is stopped.
+     * This handles cases where the bot is interrupted or a new video starts.
+     */
+    _stopVideoPlayback() {
+        // Clean up blob URL before calling parent's cleanup
+        if (this.currentBlobUrl) {
+            URL.revokeObjectURL(this.currentBlobUrl);
+            this.currentBlobUrl = null;
+        }
+        // Call parent implementation to handle other cleanup
+        super._stopVideoPlayback();
     }
 }
 
