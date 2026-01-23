@@ -147,31 +147,8 @@ class BotVideoOutputStream {
             this.videoElement.playsInline = true;
         }
 
-        // Fetch video as blob to avoid CSP violations
-        // Teams CSP only allows media from specific sources, so we need to fetch
-        // the video and create a blob URL
-        let blobUrl = null;
-        try {
-            console.log('Fetching video from URL:', videoUrl);
-            const response = await fetch(videoUrl);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
-            }
-            const blob = await response.blob();
-            blobUrl = URL.createObjectURL(blob);
-            console.log('Video fetched and blob URL created:', blobUrl);
-        } catch (fetchError) {
-            throw new Error(`Failed to fetch video for playback: ${fetchError.message}`);
-        }
-
-        // Clean up any existing blob URL
-        if (this.currentBlobUrl) {
-            URL.revokeObjectURL(this.currentBlobUrl);
-        }
-        this.currentBlobUrl = blobUrl;
-
         this.videoElement.muted = false;
-        this.videoElement.src = blobUrl; // Use blob URL instead of original URL
+        this.videoElement.src = videoUrl;
         this.videoElement.loop = false;
         this.videoElement.autoplay = true;
         this.videoElement.crossOrigin = "anonymous";
@@ -203,11 +180,6 @@ class BotVideoOutputStream {
             }
             else {
                 this.ensureInputOff();
-            }
-            // Clean up blob URL when video ends
-            if (this.currentBlobUrl) {
-                URL.revokeObjectURL(this.currentBlobUrl);
-                this.currentBlobUrl = null;
             }
         };
         this.videoElement.addEventListener('ended', this.videoEndedHandler);
@@ -269,11 +241,6 @@ class BotVideoOutputStream {
             if (this.videoEndedHandler) {
                 this.videoElement.removeEventListener('ended', this.videoEndedHandler);
                 this.videoEndedHandler = null;
-            }
-            // Clean up blob URL
-            if (this.currentBlobUrl) {
-                URL.revokeObjectURL(this.currentBlobUrl);
-                this.currentBlobUrl = null;
             }
             // Keep src in case you want to resume later; or clear it:
             // this.videoElement.src = "";
