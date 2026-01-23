@@ -166,7 +166,20 @@ class TeamsUIMethods:
                 raise UiCouldNotLocateElementException("Exception raised in locate_element for click_show_more_button", "click_show_more_button", e)
 
     def look_for_sign_in_required_element(self, step):
-        sign_in_required_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "We need to verify your info before you can join")]')
+        sign_in_required_messages = [
+            "We need to verify your info before you can join",
+            "To join, sign in or use Teams on the web",
+            "You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.",
+            "If you're not signed in to a Teams (work or school) account, sign in and try joining again. If you still can't join, contact the organizer.",
+            "Sign in to Teams to join, or contact the meeting organizer",
+            "To join this Teams meeting, you need to be signed in to an account.",
+            "To join this meeting, sign in again or select another account.",
+            "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
+        ]
+        xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
+        xpath_selector = f"//*[{xpath_conditions}]"
+        sign_in_required_element = self.find_element_by_selector(By.XPATH, xpath_selector)
+
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
@@ -226,29 +239,8 @@ class TeamsUIMethods:
         else:
             return "speaker"
 
-    def attempt_to_join_meeting(self):
-        # If we have the ability to login, but we are not going to use it, then we'll "assume" that any failure to join was
-        # because we didn't log in, which will cause us to login and retry. If our assumption was wrong, then that's ok, we're only making the assumption for this one attempt.
-        # This should improve robustness against new screens from teams that indicate login is required.
-        if self.teams_bot_login_credentials and not self.teams_bot_login_should_be_used:
-            logger.info("Teams bot login credentials are available, but we are not going to use it this attempt. We will 'assume' that any exception was because we didn't log in.")
-            try:
-                self.attempt_to_join_meeting_implementation()
-            except UiLoginRequiredException:
-                # If we know that the exception was because we didn't log in, then pass it on as-is.
-                logger.info("Exception was because we didn't log in. Passing it on as-is.")
-                raise
-            except Exception as e:
-                # If we got a different type of exception, then we'll "assume" that it was because we didn't log in.
-                logger.info(f"Exception raised in attempt_to_join_meeting_implementation: {e}. We are going to 'assume' that it's due to not logging in and raise UiLoginRequiredException.")
-                raise UiLoginRequiredException("Error that is assumed to be due to not logging in", "attempt_to_join_meeting")
-
-        else:
-            # Otherwise, take the normal path.
-            self.attempt_to_join_meeting_implementation()
-
     # Returns nothing if succeeded, raises an exception if failed
-    def attempt_to_join_meeting_implementation(self):
+    def attempt_to_join_meeting(self):
         if self.teams_bot_login_credentials and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
