@@ -2678,7 +2678,130 @@ function turnOffScreenshare() {
 
 // BotOutputManager is defined in shared_chromedriver_payload.js
 
-botOutputManager = new BotOutputManager({
+/**
+ * Teams-specific BotVideoOutputStream that overrides playVideo to use only the blob approach.
+ * This ensures Teams always uses fetch-as-blob to avoid CSP violations.
+ */
+class TeamsBotVideoOutputStream extends BotVideoOutputStream {
+    /**
+     * Play a video (with audio) through the virtual webcam/mic.
+     * Overridden to ensure Teams always uses the fetch-as-blob approach.
+     *
+     * @param {string} videoUrl - URL of the video to play.
+     * @returns {Promise<void>}
+     */
+    async playVideo(videoUrl) {
+        if (!videoUrl) {
+            throw new Error("playVideo: videoUrl is required.");
+        }
+
+        this._stopVideoPlayback();
+        this._stopImageRedrawInterval();
+
+        if (!this.videoElement) {
+            this.videoElement = document.createElement("video");
+            this.videoElement.playsInline = true;
+        }
+
+        // Fetch video as blob to avoid CSP violations
+        // Teams CSP only allows media from specific sources, so we need to fetch
+        // the video and create a blob URL
+        let blobUrl = null;
+        try {
+            console.log('Fetching video from URL:', videoUrl);
+            const response = await fetch(videoUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
+            }
+            const blob = await response.blob();
+            blobUrl = URL.createObjectURL(blob);
+            console.log('Video fetched and blob URL created:', blobUrl);
+        } catch (fetchError) {
+            throw new Error(`Failed to fetch video for playback: ${fetchError.message}`);
+        }
+
+        // Clean up any existing blob URL
+        if (this.currentBlobUrl) {
+            URL.revokeObjectURL(this.currentBlobUrl);
+        }
+        this.currentBlobUrl = blobUrl;
+
+        this.videoElement.muted = false;
+        this.videoElement.src = blobUrl; // Use blob URL instead of original URL
+        this.videoElement.loop = false;
+        this.videoElement.autoplay = true;
+        this.videoElement.crossOrigin = "anonymous";
+
+        if (!this.videoAudioSource) {
+            // Create a Web Audio source for the video element
+            this.videoAudioSource =
+                this.getAudioContext().createMediaElementSource(this.videoElement);
+            this.videoAudioSource.connect(this.getGainNode());
+            // (Optional) also connect to speakers:
+            // this.videoAudioSource.connect(this.audioContext.destination);
+        }
+
+        if (this.getAudioContext().state === "suspended") {
+            await this.getAudioContext().resume();
+        }
+
+        await this.videoElement.play();
+        this.ensureInputOn();
+        await this.ensureMicOn();
+
+        this._startVideoDrawingLoop();
+
+        // Add event listener for when video ends to display the last image
+        this.videoEndedHandler = () => {
+            // If we had an image, display it again keep the input on if not turn it off
+            if (this.lastImageBytes) {
+                this.displayImage(this.lastImageBytes);
+            }
+            else {
+                this.ensureInputOff();
+            }
+            // Clean up blob URL when video ends
+            if (this.currentBlobUrl) {
+                URL.revokeObjectURL(this.currentBlobUrl);
+                this.currentBlobUrl = null;
+            }
+        };
+        this.videoElement.addEventListener('ended', this.videoEndedHandler);
+    }
+}
+
+/**
+ * Teams-specific BotOutputManager that uses TeamsBotVideoOutputStream
+ * to ensure Teams always uses the blob approach for video playback.
+ */
+class TeamsBotOutputManager extends BotOutputManager {
+    constructor(options = {}) {
+        super(options);
+        
+        // Replace the webcam and screenshare video output streams with Teams-specific ones
+        this.webcamVideoOutputStream = new TeamsBotVideoOutputStream({
+            turnOnInput: this.turnOnWebcam,
+            turnOffInput: this.turnOffWebcam,
+            ensureMicOn: () => this.ensureMicOn(),
+            ensureMicOff: () => this.ensureMicOff(),
+            getGainNode: () => this.gainNode,
+            getAudioContext: () => this.audioContext,
+            createSourceAudioTrack: () => this._createSourceAudioTrack(),
+        });
+
+        this.screenShareVideoOutputStream = new TeamsBotVideoOutputStream({
+            turnOnInput: this.turnOnScreenshare,
+            turnOffInput: this.turnOffScreenshare,
+            ensureMicOn: () => this.ensureMicOn(),
+            ensureMicOff: () => this.ensureMicOff(),
+            getGainNode: () => this.gainNode,
+            getAudioContext: () => this.audioContext,
+            createSourceAudioTrack: () => this._createSourceAudioTrack(),
+        });
+    }
+}
+
+botOutputManager = new TeamsBotOutputManager({
     turnOnWebcam: turnOnCamera,
     turnOffWebcam: turnOffCamera,
     turnOnScreenshare: turnOnScreenshare,
