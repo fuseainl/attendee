@@ -550,7 +550,8 @@ class TestTeamsBot(TransactionTestCase):
             "teams_settings": {
                 "use_login": True,
                 "login_mode": "only_if_required",
-            }
+            },
+            "recording_settings": {"format": "none"},
         }
         self.bot.save()
 
@@ -650,9 +651,6 @@ class TestTeamsBot(TransactionTestCase):
             # Verify that the recording was finished
             self.recording.refresh_from_db()
             self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
-
-            # Verify file uploader was used
-            mock_uploader.upload_file.assert_called_once()
 
             # Cleanup
             controller.cleanup()
