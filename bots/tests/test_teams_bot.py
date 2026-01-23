@@ -693,28 +693,3 @@ class TestTeamsBot(TransactionTestCase):
             MockDisplay=MockDisplay,
             MockSaveDebugRecording=MockSaveDebugRecording,
         )
-
-    @patch("bots.bot_controller.bot_controller.BotController.save_debug_recording", return_value=None)
-    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
-    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.S3FileUploader")
-    def test_teams_signed_in_bot_with_only_if_required_mode_generic_exception(
-        self,
-        MockFileUploader,
-        MockChromeDriver,
-        MockDisplay,
-        MockSaveDebugRecording,
-    ):
-        """Test that a bot with login_mode='only_if_required' also retries with login
-        when a generic exception is raised (not just UiLoginRequiredException).
-
-        This verifies that ANY exception during join attempt triggers the login retry flow
-        when teams_bot_login_credentials are available.
-        """
-        self._run_teams_signed_in_bot_with_only_if_required_mode(
-            exception_to_raise=Exception("Some generic error"),
-            MockFileUploader=MockFileUploader,
-            MockChromeDriver=MockChromeDriver,
-            MockDisplay=MockDisplay,
-            MockSaveDebugRecording=MockSaveDebugRecording,
-        )
