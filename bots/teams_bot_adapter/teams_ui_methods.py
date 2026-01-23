@@ -171,7 +171,6 @@ class TeamsUIMethods:
             "To join, sign in or use Teams on the web",
             "You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.",
             "If you're not signed in to a Teams (work or school) account, sign in and try joining again. If you still can't join, contact the organizer.",
-            "Sign in to join this meeting",
             "Sign in to Teams to join, or contact the meeting organizer",
             "To join this Teams meeting, you need to be signed in to an account.",
             "To join this meeting, sign in again or select another account.",
