@@ -325,8 +325,12 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
+                    json_data_is_dict = isinstance(json_data, dict)
 
-                    if isinstance(json_data, dict):
+                    if not json_data_is_dict:
+                        logger.warning("Received non-dict JSON message: %s (type: %s)", json_data, type(json_data).__name__)
+
+                    if json_data_is_dict:
                         if json_data.get("type") == "CaptionUpdate":
                             logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
                         else:
@@ -386,8 +390,6 @@ class WebBotAdapter(BotAdapter):
                         elif json_data.get("type") == "ClosedCaptionStatusChange":
                             if json_data.get("change") == "save_caption_not_allowed":
                                 self.could_not_enable_closed_captions()
-                    else:
-                        logger.warning("Received non-dict JSON message: %s (type: %s)", json_data, type(json_data).__name__)
 
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
