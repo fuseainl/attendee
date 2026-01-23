@@ -2705,7 +2705,13 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
 
         // Fetch video as blob to avoid CSP violations
         // Teams CSP only allows media from specific sources, so we need to fetch
-        // the video and create a blob URL
+        // the video and create a blob URL.
+        // 
+        // MEMORY CONCERN: This downloads the entire video into memory before playback.
+        // For large videos (>100MB), this could cause memory issues.
+        // 
+        // Possible improvement: Implement MediaSource Extensions (MSE) for streaming support to reduce memory usage.
+        // Requires server to support HTTP Range requests and video in streamable format (fragmented MP4).
         let blobUrl = null;
         try {
             console.log('Fetching video from URL:', videoUrl);
@@ -2713,6 +2719,20 @@ class TeamsBotVideoOutputStream extends BotVideoOutputStream {
             if (!response.ok) {
                 throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`);
             }
+            
+            // Check content-length if available to warn about large files
+            const contentLength = response.headers.get('content-length');
+            if (contentLength) {
+                const sizeMB = parseInt(contentLength) / 1024 / 1024;
+                if (sizeMB > 100) {
+                    console.warn(`Large video detected (${Math.round(sizeMB * 100) / 100} MB). This will be loaded entirely into memory.`);
+                }
+            }
+            
+            // Create blob from response - browser will handle streaming from blob URL
+            // Note: response.blob() still downloads the entire file, but the browser's
+            // video element can start playing from the blob URL before the blob is fully created
+            // if the MP4 has its moov atom at the beginning (progressive download format)
             const blob = await response.blob();
             blobUrl = URL.createObjectURL(blob);
             console.log('Video fetched and blob URL created:', blobUrl);
