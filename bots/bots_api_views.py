@@ -376,7 +376,7 @@ class OutputVideoView(APIView):
         meeting_type = meeting_type_from_url(bot.meeting_url)
         if meeting_type == MeetingTypes.ZOOM and os.getenv("ENABLE_ZOOM_VIDEO_OUTPUT") != "true":
             return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Validate the request data
         url = request.data.get("url")
         if not url:
