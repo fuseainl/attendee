@@ -166,7 +166,21 @@ class TeamsUIMethods:
                 raise UiCouldNotLocateElementException("Exception raised in locate_element for click_show_more_button", "click_show_more_button", e)
 
     def look_for_sign_in_required_element(self, step):
-        sign_in_required_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "We need to verify your info before you can join")]')
+        sign_in_required_messages = [
+            "We need to verify your info before you can join",
+            "To join, sign in or use Teams on the web",
+            "You need to be signed in to Teams to access this meeting. Sign in with a work or school account and try joining again.",
+            "If you're not signed in to a Teams (work or school) account, sign in and try joining again. If you still can't join, contact the organizer.",
+            "Sign in to join this meeting",
+            "Sign in to Teams to join, or contact the meeting organizer",
+            "To join this Teams meeting, you need to be signed in to an account.",
+            "To join this meeting, sign in again or select another account.",
+            "Due to org policy, you need to sign in or use Teams on the web to join this meeting.",
+        ]
+        xpath_conditions = " or ".join([f'contains(text(), "{msg}")' for msg in sign_in_required_messages])
+        xpath_selector = f"//*[{xpath_conditions}]"
+        sign_in_required_element = self.find_element_by_selector(By.XPATH, xpath_selector)
+
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
