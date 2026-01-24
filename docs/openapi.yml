@@ -1188,9 +1188,17 @@ paths:
         name: ordering
         schema:
           type: string
+          enum:
+          - -created_at
+          - -end_time
+          - -start_time
+          - -updated_at
+          - created_at
+          - end_time
+          - start_time
+          - updated_at
         description: 'Order results by field. Use ''-'' prefix for descending order.
-          Default: -updated_at. Allowed values: -updated_at, updated_at, start_time,
-          -start_time, end_time, -end_time, created_at, -created_at'
+          Default: -updated_at.'
         examples:
           OrderingExample:
             value: start_time
