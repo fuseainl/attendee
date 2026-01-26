@@ -135,6 +135,7 @@ class WebBotAdapter(BotAdapter):
                 "participant_is_host": self.participants_info[participant_id].get("isHost", False),
             }
 
+        logger.warning(f"Received audio for unknown participant {participant_id} before join event was captured")
         return None
 
     def meeting_uuid_mismatch(self, user):
@@ -325,13 +326,17 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
-                    if json_data.get("type") == "CaptionUpdate":
-                        logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
-                    else:
-                        logger.info("Received JSON message: %s", json_data)
+                    json_data_is_dict = isinstance(json_data, dict)
 
-                    # Handle audio format information
-                    if isinstance(json_data, dict):
+                    if not json_data_is_dict:
+                        logger.warning("Received non-dict JSON message: %s (type: %s)", json_data, type(json_data).__name__)
+
+                    if json_data_is_dict:
+                        if json_data.get("type") == "CaptionUpdate":
+                            logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
+                        else:
+                            logger.info("Received JSON message: %s", json_data)
+
                         if json_data.get("type") == "AudioFormatUpdate":
                             audio_format = json_data["format"]
                             logger.info(f"audio format {audio_format}")
