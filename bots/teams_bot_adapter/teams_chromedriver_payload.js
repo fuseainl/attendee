@@ -2501,14 +2501,31 @@ if (window.initialData.addClickRipple) {
 
 
 
-function turnOnCamera() {
+async function turnOnCamera() {
     // Click camera button to turn it on
-    const cameraButton = document.querySelector('button[aria-label="Turn camera on"]');
+    let cameraButton = null;
+    const numAttempts = 30;
+    for (let i = 0; i < numAttempts; i++) {
+        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || document.querySelector('div[aria-label="Turn camera on"]');
+        if (cameraButton) {
+            break;
+        }
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera, but will try again'
+        });
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
     if (cameraButton) {
         console.log("Clicking the camera button to turn it on");
         cameraButton.click();
     } else {
         console.log("Camera button not found");
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera'
+        });
     }
 }
 

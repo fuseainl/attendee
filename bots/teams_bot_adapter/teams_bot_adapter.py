@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import subprocess
@@ -79,11 +80,13 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         return 8097
 
     def is_sent_video_still_playing(self):
-        return False
+        result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
+        logger.info(f"is_sent_video_still_playing result = {result}")
+        return result
 
     def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}. This is not supported for teams")
-        return
+        logger.info(f"send_video called with video_url = {video_url}")
+        self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)})")
 
     def send_chat_message(self, text, to_user_uuid):
         chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')
