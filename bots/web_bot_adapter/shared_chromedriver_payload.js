@@ -203,7 +203,7 @@ class BotVideoOutputStream {
         }
 
         // Fetch video and create a blob URL to avoid CSP violations.
-        let blobUrl = null;
+        let videoBlobUrl = null;
         try {
             const response = await fetch(videoUrl);
             if (!response.ok) {
@@ -218,19 +218,23 @@ class BotVideoOutputStream {
                         `Large video detected (${Math.round(sizeMB * 100) / 100} MB). ` +
                         "This will be loaded entirely into memory."
                     );
+                    window.ws.sendJson({
+                        type: 'LargeVideoDetectedWarning',
+                        message: `In playVideoWithBlobUrl large video detected (${Math.round(sizeMB * 100) / 100} MB). This will be loaded entirely into memory.`
+                    });
                 }
             }
 
             const blob = await response.blob();
-            blobUrl = URL.createObjectURL(blob);
+            videoBlobUrl = URL.createObjectURL(blob);
         } catch (fetchError) {
             throw new Error(`Failed to fetch video for playback: ${fetchError.message}`);
         }
 
-        this.currentBlobUrl = blobUrl;
+        this.videoBlobUrl = videoBlobUrl;
 
         this.videoElement.muted = false;
-        this.videoElement.src = blobUrl;
+        this.videoElement.src = videoBlobUrl;
         this.videoElement.loop = false;
         this.videoElement.autoplay = true;
         this.videoElement.crossOrigin = "anonymous";
@@ -263,9 +267,9 @@ class BotVideoOutputStream {
             else {
                 this.ensureInputOff();
             }
-            if (this.currentBlobUrl) {
-                URL.revokeObjectURL(this.currentBlobUrl);
-                this.currentBlobUrl = null;
+            if (this.videoBlobUrl) {
+                URL.revokeObjectURL(this.videoBlobUrl);
+                this.videoBlobUrl = null;
             }
         };
         this.videoElement.addEventListener("ended", this.videoEndedHandler);
@@ -321,9 +325,9 @@ class BotVideoOutputStream {
             cancelAnimationFrame(this.videoRafId);
             this.videoRafId = null;
         }
-        if (this.currentBlobUrl) {
-            URL.revokeObjectURL(this.currentBlobUrl);
-            this.currentBlobUrl = null;
+        if (this.videoBlobUrl) {
+            URL.revokeObjectURL(this.videoBlobUrl);
+            this.videoBlobUrl = null;
         }
         if (this.videoElement) {
             this.videoElement.pause();
