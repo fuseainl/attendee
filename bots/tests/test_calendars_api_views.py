@@ -170,6 +170,23 @@ class CalendarEventListViewTest(TransactionTestCase):
         # The error message uses the new parameter name
         self.assertIn("updated_at_gte", response.json()["error"])
 
+    def test_default_ordering_is_descending_updated_at(self):
+        """Test that results are ordered by -updated_at by default when no ordering param is passed."""
+        # Set distinct updated_at values for the events
+        now = timezone.now()
+        CalendarEvent.objects.filter(pk=self.event_a1.pk).update(updated_at=now - timedelta(hours=2))
+        CalendarEvent.objects.filter(pk=self.event_a2.pk).update(updated_at=now - timedelta(hours=1))
+
+        # Request without ordering parameter
+        response = self._make_authenticated_request("GET", "/api/v1/calendar_events", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        results = response.json().get("results", [])
+        event_ids = [e["id"] for e in results]
+
+        # event_a2 was updated more recently, so it should come first (descending order)
+        self.assertEqual(event_ids.index(self.event_a2.object_id) < event_ids.index(self.event_a1.object_id), True)
+
     def test_ordering_parameter(self):
         """Test that ordering parameter correctly orders results."""
         response = self._make_authenticated_request("GET", "/api/v1/calendar_events?ordering=start_time", self.api_key_a_plain)
