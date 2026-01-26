@@ -141,11 +141,11 @@ class CalendarEventListViewTest(TransactionTestCase):
         self.assertIn(self.event_a1.object_id, event_ids)
         self.assertIn(self.event_a2.object_id, event_ids)
 
-    def test_filter_by_start_time_after(self):
-        """Test filtering events by start_time_after."""
-        # Get events that start after event_a1's start_time
+    def test_filter_by_start_time_gte(self):
+        """Test filtering events by start_time_gte."""
+        # Get events that start at or after event_a1's start_time + 30 minutes
         filter_time = (self.event_a1.start_time + timedelta(minutes=30)).isoformat()
-        query_string = urlencode({"start_time_after": filter_time})
+        query_string = urlencode({"start_time_gte": filter_time})
         response = self._make_authenticated_request("GET", f"/api/v1/calendar_events?{query_string}", self.api_key_a_plain)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
@@ -156,12 +156,19 @@ class CalendarEventListViewTest(TransactionTestCase):
         self.assertIn(self.event_a2.object_id, event_ids)
         self.assertNotIn(self.event_a1.object_id, event_ids)
 
-    def test_invalid_updated_after_format_returns_error(self):
-        """Test that invalid updated_after format returns a 400 error."""
-        response = self._make_authenticated_request("GET", "/api/v1/calendar_events?updated_after=invalid-date", self.api_key_a_plain)
+    def test_invalid_updated_at_gte_format_returns_error(self):
+        """Test that invalid updated_at_gte format returns a 400 error."""
+        response = self._make_authenticated_request("GET", "/api/v1/calendar_events?updated_at_gte=invalid-date", self.api_key_a_plain)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("error", response.json())
-        self.assertIn("updated_after", response.json()["error"])
+        self.assertIn("updated_at_gte", response.json()["error"])
+
+    def test_updated_after_alias_works_for_backwards_compatibility(self):
+        """Test that the deprecated updated_after parameter still works as an alias."""
+        response = self._make_authenticated_request("GET", "/api/v1/calendar_events?updated_after=invalid-date", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # The error message uses the new parameter name
+        self.assertIn("updated_at_gte", response.json()["error"])
 
     def test_ordering_parameter(self):
         """Test that ordering parameter correctly orders results."""

@@ -1166,14 +1166,15 @@ paths:
           type: string
         description: Cursor for pagination
       - in: query
-        name: updated_after
+        name: end_time_lte
         schema:
           type: string
-        description: Filter events updated after this timestamp (ISO 8601 format)
+        description: Filter events with end_time at or before this timestamp (ISO
+          8601 format)
         examples:
-          UpdatedAfterExample:
-            value: '2025-01-13T10:30:00Z'
-            summary: Updated After Example
+          EndTimeLTEExample:
+            value: '2025-01-13T18:00:00Z'
+            summary: End Time LTE Example
       - in: query
         name: event_id
         schema:
@@ -1184,41 +1185,50 @@ paths:
             value: evt_abcdef1234567890
             summary: Event ID Example
       - in: query
-        name: start_time_after
-        schema:
-          type: string
-        description: Filter events with start_time after this timestamp (ISO 8601 format)
-        examples:
-          StartTimeAfterExample:
-            value: '2025-01-13T10:30:00Z'
-            summary: Start Time After Example
-      - in: query
-        name: end_time_before
-        schema:
-          type: string
-        description: Filter events with end_time before this timestamp (ISO 8601 format)
-        examples:
-          EndTimeBeforeExample:
-            value: '2025-01-13T18:00:00Z'
-            summary: End Time Before Example
-      - in: query
         name: ordering
         schema:
           type: string
           enum:
-            - -updated_at
-            - updated_at
-            - start_time
-            - -start_time
-            - end_time
-            - -end_time
-            - created_at
-            - -created_at
-        description: Order results by field. Use '-' prefix for descending order. Default: -updated_at
+          - -created_at
+          - -end_time
+          - -start_time
+          - -updated_at
+          - created_at
+          - end_time
+          - start_time
+          - updated_at
+        description: 'Order results by field. Use ''-'' prefix for descending order.
+          Default: -updated_at.'
         examples:
           OrderingExample:
             value: start_time
             summary: Ordering Example
+      - in: query
+        name: start_time_gte
+        schema:
+          type: string
+        description: Filter events with start_time at or after this timestamp (ISO
+          8601 format)
+        examples:
+          StartTimeGTEExample:
+            value: '2025-01-13T10:30:00Z'
+            summary: Start Time GTE Example
+      - in: query
+        name: updated_after
+        schema:
+          type: string
+        description: 'Deprecated: Use updated_at_gte instead. Alias for updated_at_gte,
+          kept for backwards compatibility.'
+        deprecated: true
+      - in: query
+        name: updated_at_gte
+        schema:
+          type: string
+        description: Filter events updated at or after this timestamp (ISO 8601 format)
+        examples:
+          UpdatedAtGTEExample:
+            value: '2025-01-13T10:30:00Z'
+            summary: Updated At GTE Example
       tags:
       - Calendars
       security:
