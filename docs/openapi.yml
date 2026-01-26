@@ -40,6 +40,26 @@ paths:
             value: my-unique-bot-key
             summary: Deduplication Key Example
       - in: query
+        name: join_at_after
+        schema:
+          type: string
+          format: ISO 8601 datetime
+        description: Only return bots with join_at after this time.
+        examples:
+          DateTimeExample:
+            value: '2024-01-18T12:34:56Z'
+            summary: DateTime Example
+      - in: query
+        name: join_at_before
+        schema:
+          type: string
+          format: ISO 8601 datetime
+        description: Only return bots with join_at before this time.
+        examples:
+          DateTimeExample:
+            value: '2024-01-18T13:34:56Z'
+            summary: DateTime Example
+      - in: query
         name: meeting_url
         schema:
           type: string
