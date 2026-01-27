@@ -555,7 +555,7 @@ class GoogleMeetUIMethods:
         cookies = driver.get_cookies()
         names = {c.get("name") for c in cookies if c.get("name")}
         any_google_auth_cookies_present = bool(names & google_auth_cookie_names)
-        logger.info(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
+        logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
 
     def is_gmail_inbox_url(self, url: str) -> bool:
