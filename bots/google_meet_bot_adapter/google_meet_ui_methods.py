@@ -519,7 +519,7 @@ class GoogleMeetUIMethods:
         while self.driver.current_url == url_before_signin:
             time.sleep(1)
             if time.time() - start_waiting_at > 120:
-                logger.info("Login timed out, redirecting to meeting page")
+                logger.warning("Login timed out, redirecting to meeting page")
                 # TODO Replace with error message for login failed
                 break
 
