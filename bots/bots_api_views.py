@@ -389,6 +389,11 @@ class OutputVideoView(APIView):
                         "type": "string",
                         "description": "URL of the video to output. Must be a valid URL to an mp4 file.",
                     },
+                    "loop": {
+                        "type": "boolean",
+                        "description": "Whether to loop the video. Defaults to false.",
+                        "default": False,
+                    },
                 },
                 "required": ["url"],
                 "additionalProperties": False,
@@ -442,11 +447,14 @@ class OutputVideoView(APIView):
         if bot.media_requests.filter(state=BotMediaRequestStates.PLAYING).exists():
             return Response({"error": "Bot is already playing media. Please wait for it to finish."}, status=status.HTTP_400_BAD_REQUEST)
 
+        loop = request.data.get("loop", False)
+
         # Create the media request
         BotMediaRequest.objects.create(
             bot=bot,
             media_type=BotMediaRequestMediaTypes.VIDEO,
             media_url=url,
+            loop=loop,
         )
 
         # Send sync command to notify bot of new media request
