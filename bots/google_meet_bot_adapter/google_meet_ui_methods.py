@@ -526,16 +526,15 @@ class GoogleMeetUIMethods:
 
         logger.info(f"Redirected to {self.driver.current_url}")
 
-        # Wait for the URL to become https://mail.google.com, this indicates that we have logged in successfully
-        # Also do a cookie-based check
+        # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
         while not self.has_google_cookies_that_indicate_logged_in(self.driver):
             time.sleep(1)
-            logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
+            logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
                 # We'll raise an exception if it's not logged in after 120 seconds
-                logger.warning(f"Login timed out, after 120 seconds, the gmail inbox page was not loaded. Current URL: {self.driver.current_url}")
-                raise UiLoginAttemptFailedException("Gmail inbox page was not loaded", "login_to_google_meet_account")
+                logger.warning(f"Login timed out, after 120 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
+                raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account")
 
         logger.info(f"After waiting, URL is {self.driver.current_url}")
 
@@ -555,8 +554,9 @@ class GoogleMeetUIMethods:
 
         cookies = driver.get_cookies()
         names = {c.get("name") for c in cookies if c.get("name")}
-        logger.info(f"Google auth cookie names: {names}")
-        return bool(names & google_auth_cookie_names)
+        any_google_auth_cookies_present = bool(names & google_auth_cookie_names)
+        logger.info(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
+        return any_google_auth_cookies_present
 
     def is_gmail_inbox_url(self, url: str) -> bool:
         """
