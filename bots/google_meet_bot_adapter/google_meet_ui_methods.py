@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from urllib.parse import urlparse
 
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
@@ -525,9 +526,9 @@ class GoogleMeetUIMethods:
 
         logger.info(f"Redirected to {self.driver.current_url}")
 
-        # Wait for the URL to include https://mail.google.com, this indicates that we have logged in successfully
+        # Wait for the URL to become https://mail.google.com, this indicates that we have logged in successfully
         start_waiting_at = time.time()
-        while not self.driver.current_url.startswith("https://mail.google.com"):
+        while not self.is_gmail_inbox_url(self.driver.current_url):
             time.sleep(1)
             logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
@@ -535,6 +536,16 @@ class GoogleMeetUIMethods:
                 raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
 
         logger.info(f"After waiting, URL is {self.driver.current_url}")
+
+    def is_gmail_inbox_url(self, url: str) -> bool:
+        """
+        Returns True if the given URL points to the Gmail inbox page.
+        """
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False
+        return parsed.hostname == "mail.google.com"
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
