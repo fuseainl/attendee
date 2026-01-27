@@ -180,6 +180,22 @@ class BotListCreateView(GenericAPIView):
                 required=False,
             ),
             OpenApiParameter(
+                name="join_at_after",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at after this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T12:34:56Z")],
+            ),
+            OpenApiParameter(
+                name="join_at_before",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at before this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T13:34:56Z")],
+            ),
+            OpenApiParameter(
                 name="cursor",
                 type=str,
                 location=OpenApiParameter.QUERY,
@@ -217,6 +233,36 @@ class BotListCreateView(GenericAPIView):
 
             if state_values:
                 bots_query = bots_query.filter(state__in=state_values)
+
+        # Filter by join_at_after if provided
+        join_at_after = request.query_params.get("join_at_after")
+        if join_at_after:
+            try:
+                join_at_after_datetime = parse_datetime(str(join_at_after))
+            except Exception:
+                join_at_after_datetime = None
+
+            if not join_at_after_datetime:
+                return Response(
+                    {"error": "Invalid join_at_after format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__gt=join_at_after_datetime)
+
+        # Filter by join_at_before if provided
+        join_at_before = request.query_params.get("join_at_before")
+        if join_at_before:
+            try:
+                join_at_before_datetime = parse_datetime(str(join_at_before))
+            except Exception:
+                join_at_before_datetime = None
+
+            if not join_at_before_datetime:
+                return Response(
+                    {"error": "Invalid join_at_before format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__lt=join_at_before_datetime)
 
         # Apply ordering for cursor pagination
         bots = bots_query.order_by("created_at")
@@ -374,9 +420,6 @@ class OutputVideoView(APIView):
 
         # Get which type of meeting the bot is in
         meeting_type = meeting_type_from_url(bot.meeting_url)
-        if meeting_type != MeetingTypes.GOOGLE_MEET and meeting_type != MeetingTypes.ZOOM:
-            # Video output is not supported in this meeting type
-            return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
         if meeting_type == MeetingTypes.ZOOM and os.getenv("ENABLE_ZOOM_VIDEO_OUTPUT") != "true":
             return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -846,6 +889,63 @@ class TranscriptView(APIView):
             return Response(AsyncTranscriptionSerializer(async_transcription).data)
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @extend_schema(
+        operation_id="Delete Bot Transcript",
+        summary="Delete the transcript for a bot",
+        description="Deletes transcript utterances. If async_transcription_id is provided, deletes utterances for that async transcription. Otherwise, deletes the default (real-time) transcription utterances.",
+        responses={
+            200: OpenApiResponse(
+                description="Transcript deleted successfully",
+            ),
+            404: OpenApiResponse(description="Bot, recording, or async transcription not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+            OpenApiParameter(
+                name="async_transcription_id",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Optional. If provided, deletes the utterances for the specified async transcription. If not provided, deletes the default (real-time) transcription utterances.",
+                required=False,
+                examples=[OpenApiExample("Async Transcription ID Example", value="tran_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def delete(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            recording = Recording.objects.filter(bot=bot, is_default_recording=True).first()
+            if not recording:
+                return Response(
+                    {"error": "No recording found for bot"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            async_transcription = None
+            if request.query_params.get("async_transcription_id"):
+                async_transcription = recording.async_transcriptions.get(
+                    object_id=request.query_params.get("async_transcription_id"),
+                )
+
+            # Delete all utterances with transcriptions for the given async_transcription
+            Utterance.objects.filter(recording=recording, async_transcription=async_transcription).delete()
+
+            return Response(status=status.HTTP_200_OK)
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+        except AsyncTranscription.DoesNotExist:
+            return Response({"error": "Async Transcription not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class BotDetailView(APIView):

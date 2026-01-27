@@ -40,6 +40,26 @@ paths:
             value: my-unique-bot-key
             summary: Deduplication Key Example
       - in: query
+        name: join_at_after
+        schema:
+          type: string
+          format: ISO 8601 datetime
+        description: Only return bots with join_at after this time.
+        examples:
+          DateTimeExample:
+            value: '2024-01-18T12:34:56Z'
+            summary: DateTime Example
+      - in: query
+        name: join_at_before
+        schema:
+          type: string
+          format: ISO 8601 datetime
+        description: Only return bots with join_at before this time.
+        examples:
+          DateTimeExample:
+            value: '2024-01-18T13:34:56Z'
+            summary: DateTime Example
+      - in: query
         name: meeting_url
         schema:
           type: string
@@ -764,7 +784,7 @@ paths:
     post:
       operationId: Pause Recording
       description: Pauses the recording for the specified bot. This functionality
-        is in beta and only supported for Google Meet and MS Teamsbots.
+        is in beta and only supported for Google Meet and MS Teams bots.
       summary: Pause the bot's recording
       parameters:
       - in: header
@@ -1166,14 +1186,69 @@ paths:
           type: string
         description: Cursor for pagination
       - in: query
+        name: end_time_lte
+        schema:
+          type: string
+        description: Filter events with end_time at or before this timestamp (ISO
+          8601 format)
+        examples:
+          EndTimeLTEExample:
+            value: '2025-01-13T18:00:00Z'
+            summary: End Time LTE Example
+      - in: query
+        name: event_id
+        schema:
+          type: string
+        description: Filter events by event ID
+        examples:
+          EventIDExample:
+            value: evt_abcdef1234567890
+            summary: Event ID Example
+      - in: query
+        name: ordering
+        schema:
+          type: string
+          enum:
+          - -created_at
+          - -end_time
+          - -start_time
+          - -updated_at
+          - created_at
+          - end_time
+          - start_time
+          - updated_at
+        description: 'Order results by field. Use ''-'' prefix for descending order.
+          Default: -updated_at.'
+        examples:
+          OrderingExample:
+            value: start_time
+            summary: Ordering Example
+      - in: query
+        name: start_time_gte
+        schema:
+          type: string
+        description: Filter events with start_time at or after this timestamp (ISO
+          8601 format)
+        examples:
+          StartTimeGTEExample:
+            value: '2025-01-13T10:30:00Z'
+            summary: Start Time GTE Example
+      - in: query
         name: updated_after
         schema:
           type: string
-        description: Filter events updated after this timestamp (ISO 8601 format)
+        description: 'Deprecated: Use updated_at_gte instead. Alias for updated_at_gte,
+          kept for backwards compatibility.'
+        deprecated: true
+      - in: query
+        name: updated_at_gte
+        schema:
+          type: string
+        description: Filter events updated at or after this timestamp (ISO 8601 format)
         examples:
-          UpdatedAfterExample:
+          UpdatedAtGTEExample:
             value: '2025-01-13T10:30:00Z'
-            summary: Updated After Example
+            summary: Updated At GTE Example
       tags:
       - Calendars
       security:
@@ -1510,6 +1585,178 @@ paths:
           description: Calendar deleted successfully
         '404':
           description: Calendar not found
+  /api/v1/zoom_oauth_connections:
+    get:
+      operationId: List Zoom OAuth Connections
+      description: Returns a list of zoom oauth connections for the authenticated
+        project. Results are paginated using cursor pagination.
+      summary: List zoom oauth connections
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: query
+        name: cursor
+        schema:
+          type: string
+        description: Cursor for pagination
+      tags:
+      - Zoom OAuth Connections
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedZoomOAuthConnectionList'
+          description: List of zoom oauth connections
+    post:
+      operationId: Create Zoom OAuth Connection
+      description: After being created, the zoom oauth connection will be used to generate tokens for the user.
+      summary: Create a new zoom oauth connection
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      tags:
+      - Zoom OAuth Connections
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateZoomOAuthConnectionRequest'
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoomOAuthConnection'
+              examples:
+                NewlyCreatedZoomOAuthConnection:
+                  value:
+                    id: zoc_abcdef1234567890
+                    zoom_oauth_app: zoa_abcdef1234567890
+                    state: connected
+                    metadata:
+                      tenant_id: '1234567890'
+                    user_id: user_abcdef1234567890
+                    account_id: account_abcdef1234567890
+                    connection_failure_data: null
+                    created_at: '2025-01-13T10:30:00.123456Z'
+                    updated_at: '2025-01-13T10:30:00.123456Z'
+                  summary: Newly Created Zoom OAuth Connection
+                  description: Example response when a zoom oauth connection is successfully
+                    created
+          description: Zoom OAuth Connection created successfully
+        '400':
+          description: Invalid input
+  /api/v1/zoom_oauth_connections/{object_id}:
+    get:
+      operationId: Get Zoom OAuth Connection
+      description: Gets a zoom oauth connection.
+      summary: Get a zoom oauth connection
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Zoom OAuth Connection ID
+        required: true
+        examples:
+          ZoomOAuthConnectionIDExample:
+            value: zoc_abcdef1234567890
+            summary: Zoom OAuth Connection ID Example
+      tags:
+      - Zoom OAuth Connections
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZoomOAuthConnection'
+          description: Zoom OAuth Connection retrieved successfully
+        '404':
+          description: Zoom OAuth Connection not found
+    delete:
+      operationId: Delete Zoom OAuth Connection
+      description: Deletes a zoom oauth connection.
+      summary: Delete a zoom oauth connection
+      parameters:
+      - in: header
+        name: Authorization
+        schema:
+          type: string
+          default: Token YOUR_API_KEY_HERE
+        description: API key for authentication
+        required: true
+      - in: header
+        name: Content-Type
+        schema:
+          type: string
+          default: application/json
+        description: Should always be application/json
+        required: true
+      - in: path
+        name: object_id
+        schema:
+          type: string
+        description: Zoom OAuth Connection ID
+        required: true
+        examples:
+          ZoomOAuthConnectionIDExample:
+            value: zoc_abcdef1234567890
+            summary: Zoom OAuth Connection ID Example
+      tags:
+      - Zoom OAuth Connections
+      security:
+      - {}
+      responses:
+        '200':
+          description: Zoom OAuth Connection deleted successfully
+        '404':
+          description: Zoom OAuth Connection not found
 components:
   schemas:
     Bot:
@@ -1872,7 +2119,7 @@ components:
                 tokens the bot will use when it joins the meeting. Our server will
                 make a POST request to this URL with information about the bot and
                 expects a JSON response with the format: {"zak_token": "<zak_token>",
-                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>"}.
+                "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}.
                 Not every token needs to be provided, i.e. you can reply with {"zak_token":
                 "<zak_token>"}.'
           required: []
@@ -2072,6 +2319,7 @@ components:
                   enum:
                   - gpt-4o-transcribe
                   - gpt-4o-mini-transcribe
+                  - gpt-4o-transcribe-diarize
                   description: The OpenAI model to use for transcription
                 prompt:
                   type: string
@@ -2082,6 +2330,50 @@ components:
                     the ''Set 1'' column for available language codes: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes.
                     This parameter is optional but if you know the language in advance,
                     setting it will improve accuracy.'
+                response_format:
+                  type: string
+                  enum:
+                  - json
+                  - diarized_json
+                  description: 'The format of the transcription response. Only applicable
+                    for gpt-4o-transcribe-diarize model. Defaults to diarized_json when
+                    using gpt-4o-transcribe-diarize.'
+                chunking_strategy:
+                  oneOf:
+                  - type: string
+                    enum:
+                    - auto
+                  - type: object
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                        - server_vad
+                        description: Must be set to server_vad to enable manual chunking
+                          using server side VAD.
+                      prefix_padding_ms:
+                        type: integer
+                        description: Amount of audio to include before the VAD detected
+                          speech (in milliseconds). Defaults to 300.
+                      silence_duration_ms:
+                        type: integer
+                        description: 'Duration of silence to detect speech stop (in
+                          milliseconds). With shorter values the model will respond more
+                          quickly, but may jump in on short pauses from the user. Defaults
+                          to 200.'
+                      threshold:
+                        type: number
+                        description: 'Sensitivity threshold (0.0 to 1.0) for voice activity
+                          detection. A higher threshold will require louder audio to activate
+                          the model, and thus might perform better in noisy environments.
+                          Defaults to 0.5.'
+                    required:
+                    - type
+                    additionalProperties: false
+                  description: 'The chunking strategy for transcription. Only applicable
+                    for gpt-4o-transcribe-diarize model. Defaults to auto when using gpt-4o-transcribe-diarize.
+                    Can be ''auto'' or a server_vad object with optional prefix_padding_ms,
+                    silence_duration_ms, and threshold parameters.'
               required:
               - model
               additionalProperties: false
@@ -2180,6 +2472,23 @@ components:
               required:
               - model_id
               additionalProperties: false
+            kyutai:
+              type: object
+              properties:
+                server_url:
+                  type: string
+                  description: The WebSocket URL of the Kyutai STT server (e.g., 'wss://your-domain.com/api/asr-streaming').
+                    Must start with ws:// or wss://. If not provided, will use the
+                    server_url from project credentials.
+              required: []
+              additionalProperties: false
+            custom_async:
+              type: object
+              description: Custom self-hosted transcription service with async processing.
+                Additional properties will be sent as form data in the request. Only
+                supported if self-hosting Attendee.
+              required: []
+              additionalProperties: true
           required: []
           description: 'The transcription settings for the bot, e.g. {''deepgram'':
             {''language'': ''en''}}'
@@ -2297,10 +2606,20 @@ components:
                 joining the meeting. Requires Teams bot login credentials to be set
                 for the project.
               default: false
+            login_mode:
+              type: string
+              enum:
+              - always
+              - only_if_required
+              description: The mode to use for the Teams bot login. 'always' means
+                the bot will always login, 'only_if_required' means the bot will only
+                login if the meeting requires authentication.
+              default: always
           required: []
           additionalProperties: false
           default:
             use_login: false
+            login_mode: always
           description: The Microsoft Teams-specific settings for the bot.
         zoom_settings:
           type: object
@@ -2383,6 +2702,26 @@ components:
               description: Maximum number of seconds that the bot should be running
                 before automatically leaving (infinity)
               default: null
+            enable_closed_captions_timeout_seconds:
+              type: integer
+              description: Number of seconds to wait before leaving if bot could not
+                enable closed captions (infinity by default). Only relevant if the
+                bot is transcribing via closed captions. Currently only supports leaving
+                immediately.
+              default: null
+            authorized_user_not_in_meeting_timeout_seconds:
+              type: integer
+              description: Number of seconds to wait before leaving if the authorized
+                user is not in the meeting. Only relevant if this is a Zoom bot using
+                the on behalf of token.
+              default: 600
+            bot_keywords:
+              type: array
+              items:
+                type: string
+              description: List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.
+              nullable: true
+              default: null
           required: []
           additionalProperties: false
       required:
@@ -2448,6 +2787,38 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Bot'
+    CreateZoomOAuthConnectionRequest:
+      type: object
+      properties:
+        zoom_oauth_app_id:
+          type: string
+          minLength: 1
+          description: The Zoom Oauth App the connection is for
+        authorization_code:
+          type: string
+          minLength: 1
+          description: The authorization code received from Zoom during the OAuth
+            flow
+        redirect_uri:
+          type: string
+          minLength: 1
+          description: The redirect URI used to obtain the authorization code
+        is_local_recording_token_supported:
+          type: boolean
+          default: true
+          description: Whether the Zoom OAuth Connection supports generating local
+            recording tokens
+        is_onbehalf_token_supported:
+          type: boolean
+          default: false
+          description: Whether the Zoom OAuth Connection supports generating onbehalf
+            tokens
+        metadata:
+          description: JSON object containing metadata to associate with the Zoom
+            OAuth Connection
+      required:
+      - authorization_code
+      - redirect_uri
     PaginatedCalendarEventList:
       type: object
       required:
@@ -2543,6 +2914,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Participant'
+    PaginatedZoomOAuthConnectionList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cD00ODY%3D"
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?cursor=cj0xJnA9NDg3
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ZoomOAuthConnection'
     Participant:
       type: object
       properties:
@@ -2733,6 +3123,66 @@ components:
       - image/png
       type: string
       description: '* `image/png` - image/png'
+    ZoomOAuthConnection:
+      type: object
+      properties:
+        id:
+          type: string
+        zoom_oauth_app_id:
+          type: string
+        user_id:
+          type: string
+          readOnly: true
+        account_id:
+          type: string
+          readOnly: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/StateFeeEnum'
+          readOnly: true
+        metadata:
+          type: object
+          description: Metadata associated with the zoom oauth connection
+          readOnly: true
+        is_local_recording_token_supported:
+          type: boolean
+        is_onbehalf_token_supported:
+          type: boolean
+        connection_failure_data:
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        last_successful_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_attempted_sync_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - account_id
+      - connection_failure_data
+      - created_at
+      - id
+      - is_local_recording_token_supported
+      - is_onbehalf_token_supported
+      - last_attempted_sync_at
+      - last_successful_sync_at
+      - metadata
+      - state
+      - updated_at
+      - user_id
+      - zoom_oauth_app_id
 servers:
 - url: https://app.attendee.dev
   description: Production server

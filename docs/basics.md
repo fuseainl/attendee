@@ -23,6 +23,13 @@ Bots go through these lifecycle states:
 7. Fatal Error: Bot encountered an unrecoverable error
 8. Waiting Room: Bot is in meeting's waiting room
 9. Ended: Bot has completed all tasks and recordings and transcripts are available for download
+10. Data Deleted: Bot data has been permanently deleted (recordings, transcripts, participants)
+11. Scheduled: Bot is scheduled to join at a future time (see scheduled bots documentation)
+12. Staged: Bot resources are allocated and ready to join at scheduled time
+13. Joined - Recording Paused: Bot has joined and recording is temporarily paused
+14. Joining Breakout Room: Bot is moving to a breakout room
+15. Leaving Breakout Room: Bot is leaving a breakout room
+16. Joined - Recording Permission Denied: Bot has joined but doesn't have permission to record
 
 ## Transcription Features
 
@@ -60,3 +67,14 @@ Currently supported platforms:
 1. Zoom
 2. Google Meet
 3. Microsoft Teams
+
+## Data Deletion
+You can permanently delete all data associated with a bot, including recordings, transcripts, and participant information. 
+
+To delete bot data, use the `POST /api/v1/bots/{bot_id}/delete_data` endpoint. This action:
+- Is irreversible and cannot be undone
+- Only works for bots in the `ended` or `fatal_error` states
+- Preserves bot metadata for audit purposes
+- Moves the bot to the `data_deleted` state
+
+Note: Metadata fields (like bot ID, meeting URL, creation time) are retained for audit purposes even after data deletion.

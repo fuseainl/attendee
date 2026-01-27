@@ -7,11 +7,16 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException
+from bots.web_bot_adapter.ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiIncorrectPasswordException, UiInfinitelyRetryableException
 
 from .zoom_web_static_server import start_zoom_web_static_server
 
 logger = logging.getLogger(__name__)
+
+
+class UiZoomWebGenericJoinErrorException(UiInfinitelyRetryableException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
 
 
 class ZoomWebUIMethods:
@@ -37,12 +42,11 @@ class ZoomWebUIMethods:
         # Call the joinMeeting function
         self.driver.execute_script("joinMeeting()")
 
-        # Click the join audio button. If we're in the waiting room, we'll get a different experience and won't need to do this.
-        self.click_join_audio_button()
+        self.wait_to_be_admitted_to_meeting()
 
         # Then find a button with the arial-label "More meeting control " and click it
         logger.info("Waiting for more meeting control button")
-        more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
         logger.info("More meeting control button found, clicking")
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
@@ -55,12 +59,21 @@ class ZoomWebUIMethods:
             self.driver.execute_script("arguments[0].click();", captions_button)
             closed_captions_enabled = True
         except TimeoutException:
-            logger.info("Captions button not found, so unable to transcribe via closed-captions, continuing")
+            logger.info("Captions button not found, so unable to transcribe via closed-captions.")
+            self.could_not_enable_closed_captions()
+
+        if not closed_captions_enabled:
+            # If closed captions was not enabled, then click the more meeting control button again to close it
+            # This resets the UI state
+            logger.info("Closing the more meeting control button since closed captions was not enabled")
+            more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+            logger.info("More meeting control button found, clicking")
+            self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
         if closed_captions_enabled:
             # Then find an <a> tag with the arial label "Your caption settings grouping Show Captions" and click it
             logger.info("Waiting for your caption settings grouping Show Captions button")
-            your_caption_settings_grouping_show_captions_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your caption settings grouping Show Captions']")))
+            your_caption_settings_grouping_show_captions_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your caption settings grouping Show Captions']")))
             logger.info("Your caption settings grouping Show Captions button found, clicking")
             self.driver.execute_script("arguments[0].click();", your_caption_settings_grouping_show_captions_button)
 
@@ -94,14 +107,81 @@ class ZoomWebUIMethods:
     def click_leave_button(self):
         self.driver.execute_script("leaveMeeting()")
 
+    def check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
+        failed_to_join_because_onbehalf_token_user_not_in_meeting = self.driver.execute_script("return window.userHasEncounteredOnBehalfTokenUserNotInMeetingError && window.userHasEncounteredOnBehalfTokenUserNotInMeetingError()")
+        if failed_to_join_because_onbehalf_token_user_not_in_meeting:
+            logger.warning("Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for 5 seconds.")
+            time.sleep(5)  # Sleep for 5 seconds, so we're not constantly retrying
+            raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
+
+    def check_if_failed_to_join_because_generic_join_error(self):
+        failed_to_join_because_generic_join_error = self.driver.execute_script("return window.userHasEncounteredGenericJoinError && window.userHasEncounteredGenericJoinError()")
+        if failed_to_join_because_generic_join_error:
+            self.handle_generic_join_error()
+
+    def wait_to_be_admitted_to_meeting(self):
+        num_attempts_to_look_for_more_meeting_control_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
+        logger.info("Waiting to be admitted to the meeting...")
+        timeout_started_at = time.time()
+
+        # We can either be waiting for the host to start meeting or we can be waiting to be admitted to the meeting
+        is_waiting_for_host_to_start_meeting = False
+
+        for attempt_index in range(num_attempts_to_look_for_more_meeting_control_button):
+            try:
+                # Query the userHasEnteredMeeting function (handle case where it's undefined)
+                user_has_entered_meeting = self.driver.execute_script("return window.userHasEnteredMeeting && window.userHasEnteredMeeting()")
+                if user_has_entered_meeting:
+                    logger.info("We have been admitted to the meeting")
+                    return
+                time.sleep(1)
+                raise TimeoutException("User has not entered the meeting")
+            except TimeoutException as e:
+                self.check_if_blocked_by_captcha()
+                self.check_if_passcode_incorrect()
+                self.check_if_failed_to_join_because_onbehalf_token_user_not_in_meeting()
+                self.check_if_failed_to_join_because_generic_join_error()
+
+                previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
+                try:
+                    is_waiting_for_host_to_start_meeting = self.driver.find_element(
+                        By.XPATH,
+                        '//*[contains(text(), "host to start the meeting")]',
+                    ).is_displayed()
+                except:
+                    is_waiting_for_host_to_start_meeting = False
+
+                # If we switch from waiting for the host to start the meeting to waiting to be admitted to the meeting, then we need to reset the timeout
+                if previous_is_waiting_for_host_to_start_meeting != is_waiting_for_host_to_start_meeting:
+                    logger.info(f"is_waiting_for_host_to_start_meeting changed from {previous_is_waiting_for_host_to_start_meeting} to {is_waiting_for_host_to_start_meeting}. Resetting timeout")
+                    timeout_started_at = time.time()
+
+                self.check_if_timeout_exceeded(timeout_started_at=timeout_started_at, step="wait_to_be_admitted_to_meeting", is_waiting_for_host_to_start_meeting=is_waiting_for_host_to_start_meeting)
+
+                last_check_timed_out = attempt_index == num_attempts_to_look_for_more_meeting_control_button - 1
+                if last_check_timed_out:
+                    logger.info("Could not find more meeting control button. Timed out. Raising UiCouldNotLocateElementException")
+                    raise UiCouldNotLocateElementException(
+                        "Could not find more meeting control button. Timed out.",
+                        "wait_to_be_admitted_to_meeting",
+                        e,
+                    )
+            except Exception as e:
+                logger.info(f"Could not find more meeting control button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
+                raise UiCouldNotLocateElementException(
+                    "Could not find more meeting control button. Unknown error.",
+                    "wait_to_be_admitted_to_meeting",
+                    e,
+                )
+
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for more meeting control button to disable incoming video")
-        more_meeting_control_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
+        more_meeting_control_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='More meeting control ']")))
         logger.info("More meeting control button found, clicking")
         self.driver.execute_script("arguments[0].click();", more_meeting_control_button)
 
         logger.info("Waiting for turn off incoming video button to disable incoming video")
-        turn_off_incoming_video_button = WebDriverWait(self.driver, 60).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
+        turn_off_incoming_video_button = WebDriverWait(self.driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "[aria-label='Stop Incoming Video']")))
         logger.info("Turn off incoming video button found, clicking")
         self.driver.execute_script("arguments[0].click();", turn_off_incoming_video_button)
 
@@ -150,53 +230,33 @@ class ZoomWebUIMethods:
             logger.info("Passcode incorrect. Raising UiIncorrectPasswordException")
             raise UiIncorrectPasswordException("Passcode incorrect")
 
-    def click_join_audio_button(self):
-        num_attempts_to_look_for_join_audio_button = (self.automatic_leave_configuration.waiting_room_timeout_seconds + self.automatic_leave_configuration.wait_for_host_to_start_meeting_timeout_seconds) * 10
-        logger.info("Waiting for join audio button...")
-        timeout_started_at = time.time()
+    def check_if_blocked_by_captcha(self):
+        """
+        Detects the Zoom Web SDK captcha/verification challenge UI.
 
-        # We can either be waiting for the host to start meeting or we can be waiting to be admitted to the meeting
-        is_waiting_for_host_to_start_meeting = False
+        Some Zoom accounts may be forced through a "Check Captcha" flow which can reappear
+        after submitting the verification code, effectively blocking programmatic joining.
+        See: https://devforum.zoom.us/t/check-captcha-button-show-again-after-filling-in-the-verification-code/25076
+        """
+        upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        lower = "abcdefghijklmnopqrstuvwxyz"
+        xpath = f"//button[contains(translate(normalize-space(.), '{upper}', '{lower}'), 'check captcha')]"
 
-        for attempt_index in range(num_attempts_to_look_for_join_audio_button):
+        try:
+            candidates = self.driver.find_elements(By.XPATH, xpath) or []
+        except Exception:
+            return
+
+        for el in candidates:
             try:
-                join_audio_button = WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, "button.join-audio-by-voip__join-btn")))
-                logger.info("Join audio button found")
-                self.driver.execute_script("arguments[0].click();", join_audio_button)
-                return
-            except TimeoutException as e:
-                self.check_if_passcode_incorrect()
-
-                previous_is_waiting_for_host_to_start_meeting = is_waiting_for_host_to_start_meeting
-                try:
-                    is_waiting_for_host_to_start_meeting = self.driver.find_element(
-                        By.XPATH,
-                        '//*[contains(text(), "for host to start the meeting")]',
-                    ).is_displayed()
-                except:
-                    is_waiting_for_host_to_start_meeting = False
-
-                # If we switch from waiting for the host to start the meeting to waiting to be admitted to the meeting, then we need to reset the timeout
-                if previous_is_waiting_for_host_to_start_meeting != is_waiting_for_host_to_start_meeting:
-                    timeout_started_at = time.time()
-
-                self.check_if_timeout_exceeded(timeout_started_at=timeout_started_at, step="click_join_audio_button", is_waiting_for_host_to_start_meeting=is_waiting_for_host_to_start_meeting)
-
-                last_check_timed_out = attempt_index == num_attempts_to_look_for_join_audio_button - 1
-                if last_check_timed_out:
-                    logger.info("Could not find join audio button. Timed out. Raising UiCouldNotLocateElementException")
-                    raise UiCouldNotLocateElementException(
-                        "Could not find join audio button. Timed out.",
-                        "click_join_audio_button",
-                        e,
-                    )
-            except Exception as e:
-                logger.info(f"Could not find join audio button. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
-                raise UiCouldNotLocateElementException(
-                    "Could not find join audio button. Unknown error.",
-                    "click_join_audio_button",
-                    e,
-                )
+                if el and el.is_displayed():
+                    logger.info("Blocked by captcha / verification challenge detected (button text). Raising UiBlockedByCaptchaException")
+                    raise UiBlockedByCaptchaException("Blocked by captcha (Zoom Web SDK verification challenge)")
+            except UiBlockedByCaptchaException:
+                raise
+            except Exception:
+                # If the element becomes stale between queries, ignore and continue scanning.
+                continue
 
     def set_zoom_closed_captions_language(self):
         if not self.zoom_closed_captions_language:

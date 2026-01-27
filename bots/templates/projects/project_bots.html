@@ -60,14 +60,19 @@
 
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2>Bots</h2>
-        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createBotModal">
-            <i class="bi bi-plus-circle me-1"></i> Create Bot
-        </button>
+        {% if session_type == SessionTypes.BOT %}
+            <h2>Bots</h2>
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createBotModal">
+                <i class="bi bi-plus-circle me-1"></i> Create Bot
+            </button>
+        {% endif %}
+        {% if session_type == SessionTypes.APP_SESSION %}
+            <h2>App Sessions</h2>
+        {% endif %}
     </div>
     
     <!-- Filters Collapsible Panel -->
-    {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.search or bots %}
+    {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search or bots %}
     <div class="filter-panel mb-3">
         <div class="filter-header p-2 rounded d-flex align-items-center" 
              style="background-color: #f8f9fa; cursor: pointer;" 
@@ -76,12 +81,12 @@
             <span>Filters</span>
             <span style="margin-left: 5px;" class="filter-caret-container ms-auto">
                 <svg width="21" height="21" viewBox="0 0 14 14" fill="none" class="filter-caret" 
-                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.search %}rotate(180deg){% else %}rotate(0deg){% endif %};">
+                     style="transform: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}rotate(180deg){% else %}rotate(0deg){% endif %};">
                     <path d="M4.3225 5.0108L7 7.68247L9.6775 5.0108L10.5 5.8333L7 9.3333L3.5 5.8333L4.3225 5.0108Z" fill="currentcolor"></path>
                 </svg>
             </span>
         </div>
-        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.search %}block{% else %}none{% endif %};">
+        <div class="filter-content" style="display: {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}block{% else %}none{% endif %};">
             <div class="filter-container">
                 <form method="get" class="row g-3">
                     <!-- Search filter -->
@@ -93,15 +98,27 @@
                     </div>
                     
                     <!-- Compact date filters in a single row -->
-                    <div class="col-md-10 d-flex filter-item">
-                        <div class="me-3" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                    <div class="col-md-10 d-flex flex-wrap filter-item">
+                        <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
                             <label for="start_date" class="form-label me-2 mb-0" style="flex-shrink: 0;">Created</label>
                             <input type="date" class="form-control form-control-sm" id="start_date" name="start_date" value="{{ filter_params.start_date }}">
                         </div>
                         
-                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
-                            <label for="end_date" class="form-label me-3 mb-1" style="flex-shrink: 0;">→</label>
+                        <div class="me-4" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="end_date" class="form-label me-2 mb-1" style="flex-shrink: 0;">→</label>
                             <input type="date" class="form-control form-control-sm" id="end_date" name="end_date" value="{{ filter_params.end_date }}">
+                        </div>
+                        
+                        <div class="me-4" style="border-left: 1px solid #dee2e6; height: 24px; align-self: center;"></div>
+                        
+                        <div class="me-2" style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="join_at_start" class="form-label me-2 mb-0" style="flex-shrink: 0;">Join At</label>
+                            <input type="date" class="form-control form-control-sm" id="join_at_start" name="join_at_start" value="{{ filter_params.join_at_start }}">
+                        </div>
+                        
+                        <div style="display: inline-flex; white-space: nowrap; align-items: center;">
+                            <label for="join_at_end" class="form-label me-2 mb-1" style="flex-shrink: 0;">→</label>
+                            <input type="date" class="form-control form-control-sm" id="join_at_end" name="join_at_end" value="{{ filter_params.join_at_end }}">
                         </div>
                     </div>
                     
@@ -117,9 +134,14 @@
                         </div>
                     </div>
                     
-                    <div class="col-md-2 d-flex align-items-end filter-item">
+                    <div class="col-md-2 d-flex align-items-end filter-item justify-content-end">
                         <button type="submit" class="btn btn-sm btn-primary me-2">Apply</button>
+                        {% if session_type == SessionTypes.APP_SESSION %}
+                        <a href="{% url 'bots:project-app-sessions' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
+                        {% endif %}
+                        {% if session_type == SessionTypes.BOT %}
                         <a href="{% url 'bots:project-bots' project.object_id %}" class="btn btn-sm btn-outline-secondary">Clear</a>
+                        {% endif %}
                     </div>
                 </form>
             </div>
@@ -132,8 +154,10 @@
                 <thead>
                     <tr>
                         <th>ID</th>
-                        <th>Name</th>
-                        <th>Meeting URL</th>
+                        {% if session_type == SessionTypes.BOT %}
+                            <th>Name</th>
+                            <th>Meeting URL</th>
+                        {% endif %}
                         <th>Status</th>
                         <th>Last Event</th>
                         {% if has_scheduled_bots %}<th>Join At</th>{% endif %}
@@ -143,14 +167,21 @@
                 <tbody>
                     {% for bot in bots %}
                     <tr class="clickable-row"
+                        {% if session_type == SessionTypes.APP_SESSION %}
+                        hx-get="{% url 'projects:project-app-session-detail' project.object_id bot.object_id %}"
+                        {% endif %}
+                        {% if session_type == SessionTypes.BOT %}
                         hx-get="{% url 'projects:project-bot-detail' project.object_id bot.object_id %}"
+                        {% endif %}
                         hx-select="#content"
                         hx-target="#content"
                         hx-swap="outerHTML"
                         hx-push-url="true">
                         <td><small>{{ bot.object_id }}</small></td>
-                        <td><small class="bot-name">{{ bot.name }}</small></td>
-                        <td><span class="meeting-url" title="{{ bot.meeting_url }}">{{ bot.meeting_url }}</span></td>
+                        {% if session_type == SessionTypes.BOT %}
+                            <td><small class="bot-name">{{ bot.name }}</small></td>
+                            <td><span class="meeting-url" title="{{ bot.meeting_url }}">{{ bot.meeting_url }}</span></td>
+                        {% endif %}
                         <td>
                             <span class="badge {% if bot.state == BotStates.READY %}bg-warning{% elif bot.state == BotStates.FATAL_ERROR %}bg-danger{% elif bot.state == BotStates.ENDED %}bg-secondary{% else %}bg-success{% endif %}">
                                 {{ bot.get_state_display }}
@@ -189,10 +220,20 @@
         {% else %}
             <div class="alert alert-info" role="alert">
                 <i class="bi bi-info-circle me-2"></i>
-                {% if filter_params.start_date or filter_params.end_date or filter_params.states or filter_params.search %}
-                    No bots found matching the current filters.
+                {% if filter_params.start_date or filter_params.end_date or filter_params.join_at_start or filter_params.join_at_end or filter_params.states or filter_params.search %}
+                    {% if session_type == SessionTypes.APP_SESSION %}
+                        No app sessions found matching the current filters.
+                    {% endif %}
+                    {% if session_type == SessionTypes.BOT %}
+                        No bots found matching the current filters.
+                    {% endif %}
                 {% else %}
-                    No bots found. Use the API to create bots for this project.
+                    {% if session_type == SessionTypes.APP_SESSION %}
+                        No app sessions found. Use the API to create app sessions for this project.
+                    {% endif %}
+                    {% if session_type == SessionTypes.BOT %}
+                        No bots found. Use the API to create bots for this project.
+                    {% endif %}
                 {% endif %}
             </div>
         {% endif %}

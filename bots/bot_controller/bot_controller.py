@@ -31,6 +31,9 @@ from bots.models import (
     BotEventManager,
     BotEventSubTypes,
     BotEventTypes,
+    BotLogEntryLevels,
+    BotLogEntryTypes,
+    BotLogManager,
     BotMediaRequestManager,
     BotMediaRequestMediaTypes,
     BotMediaRequestStates,
@@ -57,6 +60,7 @@ from bots.webhook_payloads import chat_message_webhook_payload, participant_even
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
+from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
 from .audio_output_manager import AudioOutputManager
 from .azure_file_uploader import AzureFileUploader
@@ -111,6 +115,9 @@ class BotController:
     def disable_incoming_video_for_web_bots(self):
         return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video)
 
+    def should_modify_dom_for_video_recording_for_web_bots(self):
+        return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
+
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
@@ -161,6 +168,7 @@ class BotController:
             video_frame_size=self.bot_in_db.recording_dimensions(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
+            modify_dom_for_video_recording=self.should_modify_dom_for_video_recording_for_web_bots(),
             google_meet_bot_login_is_available=self.google_meet_bot_login_is_available(),
             google_meet_bot_login_should_be_used=self.bot_in_db.google_meet_login_mode_is_always(),
             create_google_meet_bot_login_session_callback=self.create_google_meet_bot_login_session,
@@ -196,6 +204,7 @@ class BotController:
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             teams_bot_login_credentials=teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials and self.bot_in_db.teams_use_bot_login() else None,
+            teams_bot_login_should_be_used=self.bot_in_db.teams_login_mode_is_always(),
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
             disable_incoming_video=self.disable_incoming_video_for_web_bots(),
         )
@@ -218,16 +227,20 @@ class BotController:
 
         return {"client_id": zoom_oauth_app.client_id, "client_secret": zoom_oauth_app.client_secret}
 
-    def get_zoom_oauth_credentials_and_tokens(self):
-        zoom_oauth_credentials = self.get_zoom_oauth_credentials_via_zoom_oauth_app() or self.get_zoom_oauth_credentials_via_credentials_record()
+    def get_zoom_oauth_credentials(self):
+        return self.get_zoom_oauth_credentials_via_zoom_oauth_app() or self.get_zoom_oauth_credentials_via_credentials_record()
 
+    def get_zoom_tokens(self):
         zoom_tokens = {}
         if self.bot_in_db.zoom_tokens_callback_url():
             zoom_tokens = get_zoom_tokens(self.bot_in_db)
         else:
             zoom_tokens = get_zoom_tokens_via_zoom_oauth_app(self.bot_in_db)
 
-        return zoom_oauth_credentials, zoom_tokens
+        return zoom_tokens
+
+    def get_zoom_oauth_credentials_and_tokens(self):
+        return self.get_zoom_oauth_credentials(), self.get_zoom_tokens()
 
     def get_zoom_web_bot_adapter(self):
         from bots.zoom_web_bot_adapter import ZoomWebBotAdapter
@@ -237,7 +250,7 @@ class BotController:
         else:
             add_audio_chunk_callback = None
 
-        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
+        zoom_tokens = self.get_zoom_tokens()
 
         return ZoomWebBotAdapter(
             display_name=self.bot_in_db.name,
@@ -257,8 +270,7 @@ class BotController:
             start_recording_screen_callback=self.screen_and_audio_recorder.start_recording if self.screen_and_audio_recorder else None,
             stop_recording_screen_callback=self.screen_and_audio_recorder.stop_recording if self.screen_and_audio_recorder else None,
             video_frame_size=self.bot_in_db.recording_dimensions(),
-            zoom_client_id=zoom_oauth_credentials["client_id"],
-            zoom_client_secret=zoom_oauth_credentials["client_secret"],
+            zoom_oauth_credentials_callback=self.get_zoom_oauth_credentials,
             zoom_closed_captions_language=self.bot_in_db.transcription_settings.zoom_closed_captions_language(),
             should_ask_for_recording_permission=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
@@ -295,6 +307,34 @@ class BotController:
             record_chat_messages_when_paused=self.bot_in_db.record_chat_messages_when_paused(),
         )
 
+    def get_zoom_rtms_adapter(self):
+        from bots.zoom_rtms_adapter import ZoomRTMSAdapter
+
+        zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
+
+        if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+            add_audio_chunk_callback = None
+        else:
+            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
+
+        return ZoomRTMSAdapter(
+            use_one_way_audio=self.pipeline_configuration.transcribe_audio,
+            use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
+            use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
+            send_message_callback=self.on_message_from_adapter,
+            add_audio_chunk_callback=add_audio_chunk_callback,
+            upsert_caption_callback=self.closed_caption_manager.upsert_caption,
+            zoom_client_id=zoom_oauth_credentials["client_id"],
+            zoom_client_secret=zoom_oauth_credentials["client_secret"],
+            zoom_rtms=self.bot_in_db.zoom_rtms(),
+            add_video_frame_callback=self.gstreamer_pipeline.on_new_video_frame if self.gstreamer_pipeline else None,
+            wants_any_video_frames_callback=self.gstreamer_pipeline.wants_any_video_frames if self.gstreamer_pipeline else lambda: False,
+            add_mixed_audio_chunk_callback=self.add_mixed_audio_chunk_callback,
+            upsert_chat_message_callback=self.on_new_chat_message,
+            add_participant_event_callback=self.add_participant_event,
+            video_frame_size=self.bot_in_db.recording_dimensions(),
+        )
+
     def add_mixed_audio_chunk_callback(self, chunk: bytes):
         if self.gstreamer_pipeline:
             self.gstreamer_pipeline.on_mixed_audio_raw_data_received_callback(chunk)
@@ -315,7 +355,13 @@ class BotController:
 
         self.websocket_audio_client.send_async(payload)
 
+    def is_using_rtms(self):
+        return self.bot_in_db.zoom_rtms_stream_id is not None
+
     def get_meeting_type(self):
+        if self.is_using_rtms():
+            return MeetingTypes.ZOOM
+
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
         if meeting_type is None:
             raise Exception(f"Could not determine meeting type for meeting url {self.bot_in_db.meeting_url}")
@@ -332,7 +378,9 @@ class BotController:
     def get_per_participant_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_using_rtms():
+                return 16000
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
             else:
                 return 32000
@@ -344,7 +392,9 @@ class BotController:
     def mixed_audio_sample_rate(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_using_rtms():
+                return 16000
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return 48000
             else:
                 return 32000
@@ -356,7 +406,9 @@ class BotController:
     def get_audio_format(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_using_rtms():
+                return RTMSGstreamerPipeline.AUDIO_FORMAT_PCM_16KHZ
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return GstreamerPipeline.AUDIO_FORMAT_FLOAT
             else:
                 return GstreamerPipeline.AUDIO_FORMAT_PCM
@@ -374,7 +426,9 @@ class BotController:
     def get_bot_adapter(self):
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_using_rtms():
+                return self.get_zoom_rtms_adapter()
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return self.get_zoom_web_bot_adapter()
             else:
                 return self.get_zoom_bot_adapter()
@@ -642,7 +696,9 @@ class BotController:
         # so we don't need to create a gstreamer pipeline here
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.ZOOM:
-            if self.bot_in_db.use_zoom_web_adapter():
+            if self.is_using_rtms():
+                return True
+            elif self.bot_in_db.use_zoom_web_adapter():
                 return False
             else:
                 return True
@@ -733,7 +789,8 @@ class BotController:
 
         self.gstreamer_pipeline = None
         if self.should_create_gstreamer_pipeline():
-            self.gstreamer_pipeline = GstreamerPipeline(
+            gstreamer_pipeline_class = RTMSGstreamerPipeline if self.is_using_rtms() else GstreamerPipeline
+            self.gstreamer_pipeline = gstreamer_pipeline_class(
                 on_new_sample_callback=self.on_new_sample_from_gstreamer_pipeline,
                 video_frame_size=self.bot_in_db.recording_dimensions(),
                 audio_format=self.get_audio_format(),
@@ -781,12 +838,15 @@ class BotController:
         self.webpage_streamer_manager = None
         if self.bot_in_db.should_launch_webpage_streamer():
             self.webpage_streamer_manager = WebpageStreamerManager(
+                is_bot_ready_for_webpage_streamer_callback=self.adapter.is_bot_ready_for_webpage_streamer,
                 get_peer_connection_offer_callback=self.adapter.webpage_streamer_get_peer_connection_offer,
                 start_peer_connection_callback=self.adapter.webpage_streamer_start_peer_connection,
                 play_bot_output_media_stream_callback=self.adapter.webpage_streamer_play_bot_output_media_stream,
                 stop_bot_output_media_stream_callback=self.adapter.webpage_streamer_stop_bot_output_media_stream,
+                on_message_that_webpage_streamer_connection_can_start_callback=self.on_message_that_webpage_streamer_connection_can_start,
                 webpage_streamer_service_hostname=self.bot_in_db.k8s_webpage_streamer_service_hostname(),
             )
+            self.webpage_streamer_manager.init()
 
         self.bot_resource_snapshot_taker = BotResourceSnapshotTaker(self.bot_in_db)
 
@@ -801,7 +861,7 @@ class BotController:
                     self.connect_to_redis()
                     break
                 except Exception as e:
-                    logger.info(f"Error reconnecting to Redis: {e} Attempt {num_attempts} / 30.")
+                    logger.warning(f"Error reconnecting to Redis: {e} Attempt {num_attempts} / 30.")
                     time.sleep(reconnect_delay_seconds)
                     num_attempts += 1
                     if num_attempts > 30:
@@ -813,7 +873,7 @@ class BotController:
                     message = self.pubsub.get_message(timeout=1.0)
                     if message:
                         # Schedule Redis message handling in the main GLib loop
-                        GLib.idle_add(lambda: self.handle_redis_message(message))
+                        GLib.idle_add(self.handle_redis_message, message)
                 except Exception as e:
                     # If this is a certain type of exception, we can attempt to reconnect
                     if isinstance(e, redis.exceptions.ConnectionError) and "Connection closed by server." in str(e):
@@ -822,7 +882,7 @@ class BotController:
 
                     else:
                         # log the type of exception
-                        logger.info(f"Error in Redis listener: {type(e)} {e}")
+                        logger.warning(f"Error in Redis listener: {type(e)} {e}")
                         break
 
         redis_thread = threading.Thread(target=redis_listener, daemon=True)
@@ -840,7 +900,7 @@ class BotController:
         try:
             self.main_loop.run()
         except Exception as e:
-            logger.info(f"Error in bot {self.bot_in_db.id}: {str(e)}")
+            logger.warning(f"Error in bot {self.bot_in_db.id}: {str(e)}")
             self.cleanup()
         finally:
             # Clean up Redis subscription
@@ -858,6 +918,16 @@ class BotController:
             self.adapter.leave()
         if self.bot_in_db.state == BotStates.STAGED:
             logger.info(f"take_action_based_on_bot_in_db - STAGED. For now, this is a no-op. join_at = {self.bot_in_db.join_at.isoformat()}")
+
+        # App session states
+        if self.bot_in_db.state == BotStates.CONNECTING:
+            logger.info("take_action_based_on_bot_in_db - CONNECTING")
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.init()
+        if self.bot_in_db.state == BotStates.DISCONNECTING:
+            logger.info("take_action_based_on_bot_in_db - DISCONNECTING")
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.disconnect()
 
     def join_if_staged_and_time_to_join(self):
         if self.bot_in_db.state != BotStates.STAGED:
@@ -901,7 +971,7 @@ class BotController:
             BotMediaRequestManager.set_media_request_playing(oldest_enqueued_media_request)
             self.audio_output_manager.start_playing_audio_media_request(oldest_enqueued_media_request)
         except Exception as e:
-            logger.info(f"Error sending raw audio: {e}")
+            logger.warning(f"Error sending raw audio: {e}")
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_image_media_requests_in_db(self):
@@ -922,7 +992,7 @@ class BotController:
             self.adapter.send_raw_image(most_recent_request.media_blob.blob)
             BotMediaRequestManager.set_media_request_finished(most_recent_request)
         except Exception as e:
-            logger.info(f"Error sending raw image: {e}")
+            logger.warning(f"Error sending raw image: {e}")
             BotMediaRequestManager.set_media_request_failed_to_play(most_recent_request)
 
         # Mark all other enqueued requests as DROPPED
@@ -943,10 +1013,14 @@ class BotController:
             BotMediaRequestManager.set_media_request_playing(oldest_enqueued_media_request)
             self.video_output_manager.start_playing_video_media_request(oldest_enqueued_media_request)
         except Exception as e:
-            logger.info(f"Error playing video media request: {e}")
+            logger.warning(f"Error playing video media request: {e}")
             BotMediaRequestManager.set_media_request_failed_to_play(oldest_enqueued_media_request)
 
     def take_action_based_on_chat_message_requests_in_db(self):
+        if not self.adapter.is_ready_to_send_chat_messages():
+            logger.info("Bot adapter is not ready to send chat messages, so not sending chat message requests")
+            return
+
         chat_message_requests = self.bot_in_db.chat_message_requests.filter(state=BotChatMessageRequestStates.ENQUEUED)
         for chat_message_request in chat_message_requests:
             self.adapter.send_chat_message(text=chat_message_request.message, to_user_uuid=chat_message_request.to_user_uuid)
@@ -966,8 +1040,8 @@ class BotController:
     def take_action_based_on_transcription_settings_in_db(self):
         # If it is not a teams bot, do nothing
         meeting_type = meeting_type_from_url(self.bot_in_db.meeting_url)
-        if meeting_type != MeetingTypes.TEAMS:
-            logger.info(f"Bot {self.bot_in_db.object_id} is not a teams bot, so cannot update closed captions language")
+        if meeting_type != MeetingTypes.TEAMS and meeting_type != MeetingTypes.GOOGLE_MEET:
+            logger.info(f"Bot {self.bot_in_db.object_id} is not a teams or google meet bot, so cannot update closed captions language")
             return
 
         # If it not using closed caption from platform, do nothing
@@ -975,8 +1049,11 @@ class BotController:
             logger.info(f"Bot {self.bot_in_db.object_id} is not using closed caption from platform, so cannot update closed captions language")
             return
 
-        # If it is a teams bot using closed caption from platform, we need to update the transcription settings
-        self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.teams_closed_captions_language())
+        # If it is a teams or google meet bot using closed caption from platform, we need to update the transcription settings
+        if meeting_type == MeetingTypes.TEAMS:
+            self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.teams_closed_captions_language())
+        if meeting_type == MeetingTypes.GOOGLE_MEET:
+            self.adapter.update_closed_captions_language(self.bot_in_db.transcription_settings.google_meet_closed_captions_language())
 
     def handle_glib_shutdown(self):
         logger.info("handle_glib_shutdown called")
@@ -988,7 +1065,7 @@ class BotController:
                 event_sub_type=BotEventSubTypes.FATAL_ERROR_PROCESS_TERMINATED,
             )
         except Exception as e:
-            logger.info(f"Error creating FATAL_ERROR event: {e}")
+            logger.warning(f"Error creating FATAL_ERROR event: {e}")
 
         self.cleanup()
         return False
@@ -1146,7 +1223,7 @@ class BotController:
             return True
 
         except Exception as e:
-            logger.info(f"Error in timeout callback: {e}")
+            logger.warning(f"Error in timeout callback: {e}")
             logger.info("Traceback:")
             logger.info(traceback.format_exc())
             self.handle_exception_in_timeout_callback(e)
@@ -1161,7 +1238,7 @@ class BotController:
                 event_metadata={"error": str(e)},
             )
         except Exception as e:
-            logger.info(f"Error in handle_exception_in_timeout_callback: {e}")
+            logger.warning(f"Error in handle_exception_in_timeout_callback: {e}")
             logger.info("Traceback:")
             logger.info(traceback.format_exc())
         self.cleanup()
@@ -1265,6 +1342,9 @@ class BotController:
 
     def on_new_chat_message(self, chat_message):
         GLib.idle_add(lambda: self.upsert_chat_message(chat_message))
+
+    def on_message_that_webpage_streamer_connection_can_start(self):
+        GLib.idle_add(lambda: self.take_action_based_on_voice_agent_settings_in_db())
 
     def add_participant_event(self, event):
         logger.info(f"Adding participant event: {event}")
@@ -1474,6 +1554,16 @@ class BotController:
             self.cleanup()
             return
 
+        if message.get("message") == BotAdapter.Messages.BLOCKED_BY_CAPTCHA:
+            logger.info("Received message that captcha/verification is required to join")
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_BLOCKED_BY_CAPTCHA,
+            )
+            self.cleanup()
+            return
+
         if message.get("message") == BotAdapter.Messages.MEETING_NOT_FOUND:
             logger.info("Received message that meeting not found")
             BotEventManager.create_event(
@@ -1490,6 +1580,16 @@ class BotController:
                 bot=self.bot_in_db,
                 event_type=BotEventTypes.COULD_NOT_JOIN,
                 event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_LOGIN_REQUIRED,
+            )
+            self.cleanup()
+            return
+
+        if message.get("message") == BotAdapter.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED:
+            logger.info("Received message that authorized user not in meeting timeout exceeded")
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED,
             )
             self.cleanup()
             return
@@ -1589,6 +1689,7 @@ class BotController:
                 BotAdapter.LEAVE_REASON.AUTO_LEAVE_SILENCE: BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_SILENCE,
                 BotAdapter.LEAVE_REASON.AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING: BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_ONLY_PARTICIPANT_IN_MEETING,
                 BotAdapter.LEAVE_REASON.AUTO_LEAVE_MAX_UPTIME: BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_MAX_UPTIME_EXCEEDED,
+                BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS: BotEventSubTypes.LEAVE_REQUESTED_AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS,
             }[message.get("leave_reason")]
 
             BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.LEAVE_REQUESTED, event_sub_type=event_sub_type_for_reason)
@@ -1703,13 +1804,6 @@ class BotController:
             self.take_action_based_on_image_media_requests_in_db()
             return
 
-        if message.get("message") == BotAdapter.Messages.READY_TO_SHOW_WEBPAGE_STREAM:
-            logger.info("Received message that bot is ready to show webpage stream")
-            # If there are any webpage stream media requests, this will start playing them
-            # For now the only type of media request is a webpage stream, so this will start showing the bot's webpage stream
-            self.take_action_based_on_voice_agent_settings_in_db()
-            return
-
         if message.get("message") == BotAdapter.Messages.BOT_RECORDING_PERMISSION_GRANTED:
             logger.info("Received message that bot recording permission granted")
 
@@ -1742,6 +1836,31 @@ class BotController:
                 event_type=BotEventTypes.BOT_RECORDING_PERMISSION_DENIED,
                 event_sub_type=event_sub_type_for_permission_denied,
             )
+            return
+
+        # App session messages
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_CONNECTED:
+            logger.info("Received message that app session connected")
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_CONNECTED)
+            return
+
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_DISCONNECT_REQUESTED:
+            logger.info("Received message that app session disconnect requested")
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECT_REQUESTED)
+            BotEventManager.set_requested_bot_action_taken_at(self.bot_in_db)
+            self.adapter.disconnect()
+            return
+
+        if message.get("message") == BotAdapter.Messages.APP_SESSION_DISCONNECTED:
+            logger.info("Received message that app session disconnected")
+            self.flush_utterances()
+            BotEventManager.create_event(bot=self.bot_in_db, event_type=BotEventTypes.APP_SESSION_DISCONNECTED)
+            self.cleanup()
+            return
+
+        if message.get("message") == BotAdapter.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS:
+            logger.info("Received message that bot could not enable closed captions")
+            BotLogManager.create_bot_log_entry(bot=self.bot_in_db, level=BotLogEntryLevels.WARNING, entry_type=BotLogEntryTypes.COULD_NOT_ENABLE_CLOSED_CAPTIONS, message="Bot could not enable closed captions")
             return
 
         raise Exception(f"Received unexpected message from bot adapter: {message}")
