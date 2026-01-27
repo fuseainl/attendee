@@ -533,7 +533,8 @@ class GoogleMeetUIMethods:
             logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
                 # We'll raise an exception if it's not logged in after 120 seconds
-                raise UiLoginAttemptFailedException("My Account page was not loaded", "login_to_google_meet_account")
+                logger.warning(f"Login timed out, after 120 seconds, the gmail inbox page was not loaded. Current URL: {self.driver.current_url}")
+                raise UiLoginAttemptFailedException("Gmail inbox page was not loaded", "login_to_google_meet_account")
 
         logger.info(f"After waiting, URL is {self.driver.current_url}")
 
