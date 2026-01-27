@@ -529,7 +529,7 @@ class GoogleMeetUIMethods:
         # Wait for the URL to become https://mail.google.com, this indicates that we have logged in successfully
         # Also do a cookie-based check
         start_waiting_at = time.time()
-        while not self.is_gmail_inbox_url(self.driver.current_url) and not self.has_google_cookies_that_indicate_logged_in(self.driver):
+        while not self.has_google_cookies_that_indicate_logged_in(self.driver):
             time.sleep(1)
             logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
@@ -555,6 +555,7 @@ class GoogleMeetUIMethods:
 
         cookies = driver.get_cookies()
         names = {c.get("name") for c in cookies if c.get("name")}
+        logger.info(f"Google auth cookie names: {names}")
         return bool(names & google_auth_cookie_names)
 
     def is_gmail_inbox_url(self, url: str) -> bool:
