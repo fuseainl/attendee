@@ -1,7 +1,6 @@
 import logging
 import os
 import time
-from urllib.parse import urlparse
 
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
@@ -557,16 +556,6 @@ class GoogleMeetUIMethods:
         any_google_auth_cookies_present = bool(names & google_auth_cookie_names)
         logger.warning(f"Cookie names: {names}. Any Google auth cookies present: {any_google_auth_cookies_present}.")
         return any_google_auth_cookies_present
-
-    def is_gmail_inbox_url(self, url: str) -> bool:
-        """
-        Returns True if the given URL points to the Gmail inbox page.
-        """
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return False
-        return parsed.hostname == "mail.google.com"
 
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
