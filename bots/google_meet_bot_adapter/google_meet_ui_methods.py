@@ -525,9 +525,9 @@ class GoogleMeetUIMethods:
 
         logger.info(f"Redirected to {self.driver.current_url}")
 
-        # Wait for the URL to include https://myaccount.google.com, this indicates that we have logged in successfully
+        # Wait for the URL to include https://mail.google.com, this indicates that we have logged in successfully
         start_waiting_at = time.time()
-        while "https://mail.google.com" not in self.driver.current_url:
+        while not self.driver.current_url.startswith("https://mail.google.com"):
             time.sleep(1)
             logger.info(f"Waiting for inbox URL. Current URL: {self.driver.current_url}")
             if time.time() - start_waiting_at > 120:
