@@ -510,21 +510,6 @@ class GoogleMeetUIMethods:
         logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
         self.driver.get(gmail_domain_url)
 
-        logger.info("Login attempted, waiting for redirect...")
-        url_before_signin = self.driver.current_url
-        logger.info(f"Current URL: {url_before_signin}")
-
-        ## Wait until the url changes to something other than the login page or too much time has passed
-        start_waiting_at = time.time()
-        while self.driver.current_url == url_before_signin:
-            time.sleep(1)
-            if time.time() - start_waiting_at > 120:
-                logger.warning("Login timed out, redirecting to meeting page")
-                # TODO Replace with error message for login failed
-                break
-
-        logger.info(f"Redirected to {self.driver.current_url}")
-
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
         while not self.has_google_cookies_that_indicate_logged_in(self.driver):
