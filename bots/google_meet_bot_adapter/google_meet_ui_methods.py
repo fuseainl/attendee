@@ -522,7 +522,7 @@ class GoogleMeetUIMethods:
         gmail_service_url = f"https://www.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}/ServiceLogin?service=mail"
         # Make a request to this url and get the redirect header
         logger.info(f"Making request to gmail service url: {gmail_service_url}")
-        response = requests.get(gmail_service_url)
+        response = requests.get(gmail_service_url, allow_redirects=False)
         redirect_url_from_google = response.headers.get("Location")
 
         # If the redirect url's host is not SITE_DOMAIN, the login failed
