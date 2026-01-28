@@ -536,6 +536,8 @@ class GoogleMeetUIMethods:
             logger.error(f"Redirect url's host is not SITE_DOMAIN. Redirect url: {redirect_url_from_google}. Redirect url's host: {redirect_url_from_google_host}. SITE_DOMAIN: {settings.SITE_DOMAIN}")
             raise UiLoginAttemptFailedException("Redirect url's host is not SITE_DOMAIN", "safe_navigate_to_gmail_domain_url")
 
+        logger.info(f"redirect_url_from_google_host = {redirect_url_from_google_host}")
+
         self.driver.get(redirect_url_from_google)
 
     def navigate_to_gmail_domain_url(self):
