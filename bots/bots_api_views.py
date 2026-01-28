@@ -50,6 +50,7 @@ from .serializers import (
     ChatMessageSerializer,
     CreateAsyncTranscriptionSerializer,
     CreateBotSerializer,
+    OutputVideoRequestSerializer,
     ParticipantEventSerializer,
     ParticipantSerializer,
     PatchBotSerializer,
@@ -381,24 +382,7 @@ class OutputVideoView(APIView):
         operation_id="Output video",
         summary="Output video",
         description="Causes the bot to output a video in the meeting.",
-        request={
-            "application/json": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL of the video to output. Must be a valid URL to an mp4 file.",
-                    },
-                    "loop": {
-                        "type": "boolean",
-                        "description": "Whether to loop the video. Defaults to false.",
-                        "default": False,
-                    },
-                },
-                "required": ["url"],
-                "additionalProperties": False,
-            }
-        },
+        request=OutputVideoRequestSerializer,
         responses={
             200: OpenApiResponse(description="Video request created successfully"),
             400: OpenApiResponse(description="Invalid input"),
@@ -423,19 +407,15 @@ class OutputVideoView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        serializer = OutputVideoRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        url = serializer.validated_data["url"]
+        loop = serializer.validated_data["loop"]
+
         # Get which type of meeting the bot is in
         meeting_type = meeting_type_from_url(bot.meeting_url)
         if meeting_type == MeetingTypes.ZOOM and os.getenv("ENABLE_ZOOM_VIDEO_OUTPUT") != "true":
             return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Validate the request data
-        url = request.data.get("url")
-        if not url:
-            return Response({"error": "URL is required"}, status=status.HTTP_400_BAD_REQUEST)
-        if not url.startswith("https://"):
-            return Response({"error": "URL must start with https://"}, status=status.HTTP_400_BAD_REQUEST)
-        if not url.endswith(".mp4"):
-            return Response({"error": "URL must end with .mp4"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if bot is in a state that can play media
         if not BotEventManager.is_state_that_can_play_media(bot.state):
@@ -446,8 +426,6 @@ class OutputVideoView(APIView):
 
         if bot.media_requests.filter(state=BotMediaRequestStates.PLAYING).exists():
             return Response({"error": "Bot is already playing media. Please wait for it to finish."}, status=status.HTTP_400_BAD_REQUEST)
-
-        loop = request.data.get("loop", False)
         if (
             meeting_type == MeetingTypes.ZOOM
             and not bot.use_zoom_web_adapter()

@@ -888,6 +888,38 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         return value
 
 
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Video output request (looping)",
+            value={"url": "https://example.com/video.mp4", "loop": True},
+            description="An example request to output a looping mp4 video.",
+        ),
+        OpenApiExample(
+            "Video output request (no loop)",
+            value={"url": "https://example.com/video.mp4"},
+            description="An example request to output a non-looping mp4 video (loop defaults to false).",
+        ),
+    ]
+)
+class OutputVideoRequestSerializer(serializers.Serializer):
+    url = serializers.URLField(
+        help_text="URL of the video to output. Must be a valid URL to an mp4 file and start with https://.",
+    )
+    loop = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether to loop the video. Defaults to false.",
+    )
+
+    def validate_url(self, value: str) -> str:
+        if not value.startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
+        if not value.endswith(".mp4"):
+            raise serializers.ValidationError("URL must end with .mp4")
+        return value
+
+
 @extend_schema_field(
     {
         "type": "object",
