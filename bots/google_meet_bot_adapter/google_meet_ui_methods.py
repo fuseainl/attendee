@@ -498,6 +498,20 @@ class GoogleMeetUIMethods:
         logger.info("Timed out waiting for URL stability (>%.2fs). Last URL: %s", stable_for, last_url)
         return False
 
+    def login_to_google_meet_account_with_retries(self):
+        # Blanket guard against transient errors on Google's side
+        num_attempts = 3
+        for attempt_index in range(num_attempts):
+            try:
+                self.login_to_google_meet_account()
+                return
+            except UiLoginAttemptFailedException as e:
+                last_attempt = attempt_index == num_attempts - 1
+                if last_attempt:
+                    raise e
+                logger.warning(f"Error logging in to Google Meet account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
+                self.driver.delete_all_cookies()
+
     def login_to_google_meet_account(self):
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
         logger.info("Logging in to Google Meet account")
@@ -515,9 +529,9 @@ class GoogleMeetUIMethods:
         while not self.has_google_cookies_that_indicate_logged_in(self.driver):
             time.sleep(1)
             logger.info(f"Waiting for cookies indicating that we have logged in successfully. Current URL: {self.driver.current_url}")
-            if time.time() - start_waiting_at > 120:
-                # We'll raise an exception if it's not logged in after 120 seconds
-                logger.warning(f"Login timed out, after 120 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
+            if time.time() - start_waiting_at > 30:
+                # We'll raise an exception if it's not logged in after 30 seconds
+                logger.warning(f"Login timed out, after 30 seconds, no Google auth cookies were present. Current URL: {self.driver.current_url}")
                 raise UiLoginAttemptFailedException("No Google auth cookies were present", "login_to_google_meet_account")
 
         logger.info(f"After waiting, URL is {self.driver.current_url}")
@@ -545,7 +559,7 @@ class GoogleMeetUIMethods:
     # returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
         if self.google_meet_bot_login_is_available and self.google_meet_bot_login_should_be_used:
-            self.login_to_google_meet_account()
+            self.login_to_google_meet_account_with_retries()
 
         layout_to_select = self.get_layout_to_select()
 
