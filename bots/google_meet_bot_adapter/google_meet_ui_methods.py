@@ -1,7 +1,10 @@
 import logging
 import os
 import time
+from urllib.parse import urlparse
 
+import requests
+from django.conf import settings
 from selenium.common.exceptions import ElementNotInteractableException, NoSuchElementException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
@@ -512,6 +515,38 @@ class GoogleMeetUIMethods:
                 logger.warning(f"Error logging in to Google Meet account. Clearing cookies and retrying... Attempts remaining: {num_attempts - attempt_index - 1}")
                 self.driver.delete_all_cookies()
 
+    # This is safer because it prevents the browser from navigating to an untrusted url.
+    # It is a bit less robust though and requires SITE_DOMAIN to be set correctly.
+    # So not making it the default, as self-hosters don't need it.
+    def safely_navigate_to_gmail_domain_url(self):
+        gmail_service_url = f"https://www.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}/ServiceLogin?service=mail"
+        # Make a request to this url and get the redirect header
+        logger.info(f"Making request to gmail service url: {gmail_service_url}")
+        response = requests.get(gmail_service_url)
+        redirect_url_from_google = response.headers.get("Location")
+
+        # If the redirect url's host is not SITE_DOMAIN, the login failed
+        redirect_url_from_google_host = None
+        try:
+            redirect_url_from_google_host = urlparse(redirect_url_from_google).hostname
+        except Exception:
+            pass
+
+        if redirect_url_from_google_host != settings.SITE_DOMAIN:
+            logger.error(f"Redirect url's host is not SITE_DOMAIN. Redirect url: {redirect_url_from_google}. Redirect url's host: {redirect_url_from_google_host}. SITE_DOMAIN: {settings.SITE_DOMAIN}")
+            raise UiLoginAttemptFailedException("Redirect url's host is not SITE_DOMAIN", "safe_navigate_to_gmail_domain_url")
+
+        self.driver.get(redirect_url_from_google)
+
+    def navigate_to_gmail_domain_url(self):
+        if os.getenv("USE_SAFE_NAVIGATION_FOR_SIGNED_IN_GOOGLE_MEET_BOTS", "false") == "true":
+            self.safely_navigate_to_gmail_domain_url()
+            return
+
+        gmail_domain_url = f"https://mail.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}"
+        logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
+        self.driver.get(gmail_domain_url)
+
     def login_to_google_meet_account(self):
         self.google_meet_bot_login_session = self.create_google_meet_bot_login_session_callback()
         logger.info("Logging in to Google Meet account")
@@ -519,10 +554,8 @@ class GoogleMeetUIMethods:
         google_meet_set_cookie_url = get_google_meet_set_cookie_url(session_id)
         logger.info(f"Navigating to Google Meet set cookie URL: {google_meet_set_cookie_url}")
         self.driver.get(google_meet_set_cookie_url)
-        # Then you need to navigate to http://accounts.google.com/
-        gmail_domain_url = f"https://mail.google.com/a/{self.google_meet_bot_login_session.get('login_domain')}"
-        logger.info(f"Navigating to gmail domain url: {gmail_domain_url}")
-        self.driver.get(gmail_domain_url)
+
+        self.navigate_to_gmail_domain_url()
 
         # Wait for cookies indicating that we have logged in successfully
         start_waiting_at = time.time()
