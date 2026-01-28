@@ -448,6 +448,15 @@ class OutputVideoView(APIView):
             return Response({"error": "Bot is already playing media. Please wait for it to finish."}, status=status.HTTP_400_BAD_REQUEST)
 
         loop = request.data.get("loop", False)
+        if (
+            meeting_type == MeetingTypes.ZOOM
+            and not bot.use_zoom_web_adapter()
+            and loop
+        ):
+            return Response(
+                {"error": "Loop is not supported for Zoom native SDK. Use zoom_settings.sdk='web' for looping video."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Create the media request
         BotMediaRequest.objects.create(

@@ -87,7 +87,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
     def send_video(self, video_url, loop=False):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
         self.driver.execute_script(
-            f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)})"
+            f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})"
         )
 
     def send_chat_message(self, text, to_user_uuid):
