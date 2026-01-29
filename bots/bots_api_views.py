@@ -409,8 +409,6 @@ class OutputVideoView(APIView):
 
         serializer = OutputVideoRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        url = serializer.validated_data["url"]
-        loop = serializer.validated_data["loop"]
 
         # Get which type of meeting the bot is in
         meeting_type = meeting_type_from_url(bot.meeting_url)
@@ -432,7 +430,7 @@ class OutputVideoView(APIView):
             and loop
         ):
             return Response(
-                {"error": "Loop is not supported for Zoom native SDK. Use zoom_settings.sdk='web' for looping video."},
+                {"error": "Loop is only supported for Zoom Web SDK."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -440,8 +438,8 @@ class OutputVideoView(APIView):
         BotMediaRequest.objects.create(
             bot=bot,
             media_type=BotMediaRequestMediaTypes.VIDEO,
-            media_url=url,
-            loop=loop,
+            media_url=serializer.validated_data["url"],
+            loop=serializer.validated_data["loop"],
         )
 
         # Send sync command to notify bot of new media request

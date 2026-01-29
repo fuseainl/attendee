@@ -891,14 +891,9 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
 @extend_schema_serializer(
     examples=[
         OpenApiExample(
-            "Video output request (looping)",
+            "Video output request",
             value={"url": "https://example.com/video.mp4", "loop": True},
-            description="An example request to output a looping mp4 video.",
-        ),
-        OpenApiExample(
-            "Video output request (no loop)",
-            value={"url": "https://example.com/video.mp4"},
-            description="An example request to output a non-looping mp4 video (loop defaults to false).",
+            description="Example of a looping mp4 video output request. Set loop to false or omit for a non-looping request.",
         ),
     ]
 )

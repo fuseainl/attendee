@@ -955,7 +955,6 @@ class ZoomRTMSAdapter(BotAdapter):
         return False
 
     def send_video(self, video_url, loop=False):
-        logger.info("send_video called with video_url = %s, loop = %s. This is not supported for zoom", video_url, loop)
         return
 
     def get_first_buffer_timestamp_ms_offset(self):
