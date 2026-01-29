@@ -7,7 +7,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,7 @@ class TeamsUIMethods:
                 return
             except TimeoutException:
                 self.look_for_sign_in_required_element("click_show_more_button")
+                self.check_if_blocked_by_captcha("click_show_more_button")
                 self.look_for_denied_your_request_element("click_show_more_button")
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
@@ -183,6 +184,12 @@ class TeamsUIMethods:
         if sign_in_required_element:
             logger.info("Sign in required. Raising UiLoginRequiredException")
             raise UiLoginRequiredException("Sign in required", step)
+
+    def check_if_blocked_by_captcha(self, step):
+        captcha_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Verify you\'re a real person")]')
+        if captcha_element:
+            logger.info("Captcha detected. Raising UiBlockedByCaptchaException")
+            raise UiBlockedByCaptchaException("Captcha detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
