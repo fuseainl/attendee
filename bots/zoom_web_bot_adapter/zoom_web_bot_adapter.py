@@ -100,9 +100,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
 
     def send_video(self, video_url, loop=False):
         logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
-        self.driver.execute_script(
-            f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})"
-        )
+        self.driver.execute_script(f"window.botOutputManager.playVideo({json.dumps(video_url)}, {json.dumps(loop)})")
 
     def change_gallery_view_page(self, next_page: bool):
         self.driver.execute_script(f"window?.changeGalleryViewPage({json.dumps(next_page)})")
