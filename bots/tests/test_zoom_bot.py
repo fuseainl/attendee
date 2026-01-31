@@ -3503,9 +3503,6 @@ class TestZoomBot(TransactionTestCase):
             # Simulate pause recording
             send_sync_command(self.bot, "pause_recording")
 
-            # Sleep for a tiny bit
-            time.sleep(0.5)
-
             # Simulate video frame received
             adapter.video_input_manager.input_streams[0].renderer_delegate.onRawDataFrameReceivedCallback(MockVideoFrame())
 
