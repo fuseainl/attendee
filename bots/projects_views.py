@@ -780,9 +780,9 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
-                ram_usage = data.get("ram_usage_megabytes", 0)
-                cpu_usage = data.get("cpu_usage_millicores", 0)
-                db_connection_count = data.get("db_connection_count", 0)
+                ram_usage = data.get("ram_usage_megabytes") or 0
+                cpu_usage = data.get("cpu_usage_millicores") or 0
+                db_connection_count = data.get("db_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
