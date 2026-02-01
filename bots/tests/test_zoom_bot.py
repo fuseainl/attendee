@@ -3549,6 +3549,9 @@ class TestZoomBot(TransactionTestCase):
         # Give the bot some time to process
         bot_thread.join(timeout=11)
 
+        # Sleep for a tiny bit
+        time.sleep(2)
+
         # Verify that we received some data
         self.assertGreater(len(uploaded_data), 100, "Uploaded data length is not correct")
 
@@ -3856,6 +3859,9 @@ class TestZoomBot(TransactionTestCase):
 
         bot_thread.join(timeout=12)
 
+        # Sleep for a tiny bit
+        time.sleep(2)
+
         # Validate adapter resumed recording
         self.assertFalse(controller.adapter.recording_is_paused)
 
@@ -3987,6 +3993,9 @@ class TestZoomBot(TransactionTestCase):
 
         # Validate adapter resumed recording
         self.assertFalse(controller.adapter.recording_is_paused)
+
+        # Sleep for a tiny bit
+        time.sleep(2)
 
         self.bot.refresh_from_db()
 
