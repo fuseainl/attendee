@@ -519,10 +519,16 @@ class BotController:
                 account_name=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("account_name"),
             )
 
+        endpoint_url = settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("endpoint_url")
+        logger.info(
+            "Initializing S3 uploader with bucket=%s endpoint_url=%s",
+            settings.AWS_RECORDING_STORAGE_BUCKET_NAME,
+            endpoint_url or "<default>",
+        )
         return S3FileUploader(
             bucket=settings.AWS_RECORDING_STORAGE_BUCKET_NAME,
             filename=self.get_recording_filename(),
-            endpoint_url=settings.RECORDING_STORAGE_BACKEND.get("OPTIONS").get("endpoint_url"),
+            endpoint_url=endpoint_url,
         )
 
     def cleanup(self):

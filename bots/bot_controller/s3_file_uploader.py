@@ -16,7 +16,20 @@ class S3FileUploader:
             bucket (str): The name of the S3 bucket to upload to
             filename (str): The name of the to be stored file
         """
-        self.s3_client = boto3.client("s3", endpoint_url=endpoint_url, region_name=region_name, aws_access_key_id=access_key_id, aws_secret_access_key=access_key_secret)
+        logger.info(
+            "Creating S3 client for bucket=%s endpoint_url=%s region_name=%s",
+            bucket,
+            endpoint_url or "<default>",
+            region_name or "<default>",
+        )
+        self.s3_client = boto3.client(
+            "s3",
+            endpoint_url=endpoint_url,
+            region_name=region_name,
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=access_key_secret,
+        )
+        logger.info("S3 client endpoint resolved to %s", self.s3_client.meta.endpoint_url)
         self.bucket = bucket
         self.filename = filename
         self._upload_thread = None
