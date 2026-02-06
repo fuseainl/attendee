@@ -683,9 +683,11 @@ class BotController:
 
     def get_recording_storage_directory(self):
         if self.bot_in_db.reserve_additional_storage():
-            return "/bot-persistent-storage"
-        else:
-            return "/tmp"
+            storage_dir = "/bot-persistent-storage"
+            if os.path.isdir(storage_dir):
+                return storage_dir
+            logger.warning("reserve_additional_storage is enabled but %s is missing; falling back to /tmp", storage_dir)
+        return "/tmp"
 
     def should_create_gstreamer_pipeline(self):
         # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a gstreamer pipeline
