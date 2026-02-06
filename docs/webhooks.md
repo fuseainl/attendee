@@ -15,7 +15,7 @@ To create a project-level webhook via the UI:
 1. Click on "Settings → Webhooks" in the sidebar
 2. Click "Create Webhook" 
 3. Provide an HTTPS URL that will receive webhook events
-4. Select the triggers you want to receive notifications for (we currently have six triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `calendar.events_update`, and `calendar.state_change`)
+4. Select the triggers you want to receive notifications for (we currently have seven triggers: `bot.state_change`, `transcript.update`, `chat_messages.update`, `participant_events.join_leave`, `calendar.events_update`, `calendar.state_change`, and `bot_logs.update`)
 5. Click "Create" to save your subscription
 
 ## Creating Bot-Level Webhooks
@@ -49,6 +49,7 @@ Bot-level webhooks are created via the API when creating a bot. Include a `webho
 | `participant_events.join_leave` | A participant joins or leaves the meeting |
 | `calendar.events_update` | Calendar events have been synced and updated |
 | `calendar.state_change` | Calendar connection state has changed (connected/disconnected) |
+| `bot_logs.update` | A log entry associated with a bot has been created |
 
 ## Webhook Delivery Priority
 
@@ -128,6 +129,7 @@ For webhooks triggered by `transcript.update`, the `data` field contains a singl
   "speaker_name": <The name of the speaker>,
   "speaker_uuid": <The UUID of the speaker within the meeting>,
   "speaker_user_uuid": <The UUID of the speaker's user account within the meeting platform>,
+  "speaker_is_host": <Whether the speaker is the host of the meeting>,
   "timestamp_ms": <The timestamp of the utterance in milliseconds>,
   "duration_ms": <The duration of the utterance in milliseconds>,
   "transcription": {
@@ -165,6 +167,7 @@ For webhooks triggered by `participant_events.join_leave`, the `data` field cont
   "participant_name": <The name of the participant who joined or left the meeting>,
   "participant_uuid": <The UUID of the participant who joined or left the meeting>,
   "participant_user_uuid": <The UUID of the participant's user account within the meeting platform>,
+  "participant_is_host": <Whether the participant is the host of the meeting>,
   "event_type": <The type of event that occurred. Either "join" or "leave">,
   "event_data": <Any additional data associated with the event. This is empty for join and leave events>,
   "timestamp_ms": <The timestamp of the event in milliseconds>,
@@ -207,6 +210,23 @@ This webhook is triggered when a calendar's connection state changes, typically 
   "timestamp": "2023-07-15T14:30:45.123456Z"
 }
 ```
+
+### Payload for `bot_logs.update` trigger
+
+For webhooks triggered by `bot_logs.update`, the `data` field contains information about a log entry associated with a bot:
+
+```
+{
+  "id": <The ID of the log entry>,
+  "level": <The severity level of the log entry (e.g., "debug", "info", "warning", "error")>,
+  "entry_type": <The type of the log entry (e.g., "uncategorized", "could_not_enable_closed_captions")>,
+  "message": <The log message>,
+  "created_at": <The timestamp when the log entry was created>
+}
+```
+
+This webhook fires every time a new log entry is recorded for a bot. Use these events to keep track of errors, warnings, or other relevant activities occurring on your bots — especially issues that matter but don't rise to the level of a state change. Monitoring these log webhooks helps you catch and investigate noteworthy bot events in real time.
+
 
 ## Debugging Webhook Deliveries
 

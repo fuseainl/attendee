@@ -5,11 +5,13 @@ from unittest.mock import MagicMock, call, patch
 
 import kubernetes
 from django.db import connection
-from django.test.testcases import TransactionTestCase
+from django.test.testcases import TransactionTestCase, override_settings
 from django.utils import timezone
+from selenium.common.exceptions import TimeoutException
 
 from bots.bot_adapter import BotAdapter
 from bots.bot_controller import BotController
+from bots.google_meet_bot_adapter.google_meet_ui_methods import GoogleMeetUIMethods
 from bots.models import (
     Bot,
     BotEventManager,
@@ -18,6 +20,8 @@ from bots.models import (
     BotStates,
     ChatMessage,
     Credentials,
+    GoogleMeetBotLogin,
+    GoogleMeetBotLoginGroup,
     Organization,
     Participant,
     ParticipantEvent,
@@ -35,16 +39,54 @@ from bots.models import (
     WebhookTriggerTypes,
 )
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
-from bots.web_bot_adapter.ui_methods import UiRetryableException
+from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryableException
 
 
+@override_settings(
+    STORAGE_PROTOCOL="azure",
+    AZURE_RECORDING_STORAGE_CONTAINER_NAME="test-container",
+    CHARGE_CREDITS_FOR_BOTS=False,
+    STORAGES={  # build the exact structure your code expects
+        "default": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "connection_string": "fake",
+                "account_key": "fake",
+                "account_name": "fake",
+                "expiration_secs": None,
+            },
+        },
+        "recordings": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "connection_string": "fake",
+                "account_key": "fake",
+                "account_name": "fake",
+                "azure_container": "test-container",
+                "expiration_secs": None,
+            },
+        },
+        "bot_debug_screenshots": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "connection_string": "fake",
+                "account_key": "fake",
+                "account_name": "fake",
+                "azure_container": "test-container",
+                "expiration_secs": None,
+            },
+        },
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
+)
 class TestGoogleMeetBot2(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
 
         # Set required environment variables
-        os.environ["AWS_RECORDING_STORAGE_BUCKET_NAME"] = "test-bucket"
+        os.environ["STORAGE_PROTOCOL"] = "azure"
+        os.environ["AZURE_RECORDING_STORAGE_CONTAINER_NAME"] = "test-container"
         os.environ["CHARGE_CREDITS_FOR_BOTS"] = "false"
 
     def setUp(self):
@@ -157,7 +199,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     def test_join_retry_on_failure(
         self,
         MockFileUploader,
@@ -371,7 +413,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -666,7 +708,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.bot_controller.bot_controller.ScreenAndAudioRecorder.start_recording", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
@@ -753,7 +795,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.screen_and_audio_recorder.ScreenAndAudioRecorder.pause_recording", return_value=True)
@@ -948,7 +990,7 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -1250,14 +1292,16 @@ class TestGoogleMeetBot2(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     def test_bot_uploads_to_external_storage_when_credentials_available(
         self,
         mock_wait_for_host_if_needed,
         mock_check_if_meeting_is_found,
-        MockFileUploader,
+        MockS3FileUploader,
+        MockAzureFileUploader,
         MockChromeDriver,
         MockDisplay,
         mock_create_debug_recording,
@@ -1276,8 +1320,10 @@ class TestGoogleMeetBot2(TransactionTestCase):
         external_credentials.set_credentials({"access_key_id": "test_access_key", "access_key_secret": "test_secret_key", "endpoint_url": "https://s3.amazonaws.com", "region_name": "us-east-1"})
 
         # Configure the mock uploader for both regular and external storage
-        mock_uploader = create_mock_file_uploader()
-        MockFileUploader.return_value = mock_uploader
+        mock_azure_uploader = create_mock_file_uploader()
+        MockAzureFileUploader.return_value = mock_azure_uploader
+        mock_s3_uploader = create_mock_file_uploader()
+        MockS3FileUploader.return_value = mock_s3_uploader
 
         # Mock the Chrome driver
         mock_driver = create_mock_google_meet_driver()
@@ -1330,30 +1376,34 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
         # Verify file uploader was called multiple times - once for external storage and once for regular storage
         # The external storage upload happens first, then the regular upload
-        self.assertEqual(mock_uploader.upload_file.call_count, 2, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
-        self.assertEqual(mock_uploader.wait_for_upload.call_count, 2, "FileUploader.wait_for_upload should be called twice")
+        self.assertEqual(mock_azure_uploader.upload_file.call_count, 1, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
+        self.assertEqual(mock_s3_uploader.upload_file.call_count, 1, "FileUploader.upload_file should be called twice - once for external storage and once for regular storage")
+
+        self.assertEqual(mock_azure_uploader.wait_for_upload.call_count, 1, "FileUploader.wait_for_upload should be called twice")
+        self.assertEqual(mock_s3_uploader.wait_for_upload.call_count, 1, "FileUploader.wait_for_upload should be called twice")
 
         # Verify FileUploader was instantiated twice with different parameters
-        self.assertEqual(MockFileUploader.call_count, 2, "FileUploader should be instantiated twice")
+        self.assertEqual(MockAzureFileUploader.call_count, 1, "FileUploader should be instantiated twice")
+        self.assertEqual(MockS3FileUploader.call_count, 1, "FileUploader should be instantiated twice")
 
         # Check the first call (external storage)
-        external_call_args = MockFileUploader.call_args_list[0]
+        external_call_args = MockS3FileUploader.call_args_list[0]
         external_call_kwargs = external_call_args.kwargs
         self.assertEqual(external_call_kwargs["bucket"], "my-external-bucket")
-        self.assertEqual(external_call_kwargs["key"], "custom-recording-name.mp4")
+        self.assertEqual(external_call_kwargs["filename"], "custom-recording-name.mp4")
         self.assertEqual(external_call_kwargs["endpoint_url"], "https://s3.amazonaws.com")
         self.assertEqual(external_call_kwargs["region_name"], "us-east-1")
         self.assertEqual(external_call_kwargs["access_key_id"], "test_access_key")
         self.assertEqual(external_call_kwargs["access_key_secret"], "test_secret_key")
 
         # Check the second call (regular storage) - should use environment variables
-        regular_call_args = MockFileUploader.call_args_list[1]
+        regular_call_args = MockAzureFileUploader.call_args_list[0]
         regular_call_kwargs = regular_call_args.kwargs
-        self.assertEqual(regular_call_kwargs["bucket"], "test-bucket")  # From environment variable set in setUpClass
-        self.assertIsNotNone(regular_call_kwargs["key"])  # Should have some recording filename
+        self.assertEqual(regular_call_kwargs["container"], "test-container")  # From environment variable set in setUpClass
+        self.assertIsNotNone(regular_call_kwargs["filename"])  # Should have some recording filename
 
         # Verify only one delete_file call (for the regular storage uploader)
-        mock_uploader.delete_file.assert_called_once()
+        mock_azure_uploader.delete_file.assert_called_once()
 
         # Cleanup
         controller.cleanup()
@@ -1361,3 +1411,186 @@ class TestGoogleMeetBot2(TransactionTestCase):
 
         # Close the database connection since we're in a thread
         connection.close()
+
+    @patch("bots.models.Bot.create_debug_recording", return_value=False)
+    @patch("bots.web_bot_adapter.web_bot_adapter.Display")
+    @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
+    @patch("bots.bot_controller.bot_controller.AzureFileUploader")
+    @patch("bots.bot_controller.bot_controller.ScreenAndAudioRecorder.start_recording", return_value=None)
+    @patch("bots.bot_sso_utils.get_google_meet_set_cookie_url")
+    def test_google_meet_signed_in_bot_with_only_if_required_mode(
+        self,
+        mock_get_google_meet_set_cookie_url,
+        mock_start_recording,
+        MockFileUploader,
+        MockChromeDriver,
+        MockDisplay,
+        mock_create_debug_recording,
+    ):
+        """Test that a bot with login_mode='only_if_required' first tries without login,
+        then retries with login when meeting requires sign in.
+
+        This test exercises the actual retry logic in repeatedly_attempt_to_join_meeting(),
+        attempt_to_join_meeting(), and fill_out_name_input() by mocking at a low level
+        (look_for_login_required_element raises exception on first attempt only).
+
+        Flow:
+        1. First join attempt: look_for_login_required_element raises UiLoginRequiredException
+        2. Exception caught in repeatedly_attempt_to_join_meeting
+        3. should_retry_joining_meeting_that_requires_login_by_logging_in() returns True
+        4. google_meet_bot_login_should_be_used flag is set to True
+        5. Second join attempt: login_to_google_meet_account is called, join succeeds
+        """
+
+        # Set up Google Meet bot login credentials
+        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.create(project=self.project)
+        google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+            group=google_meet_bot_login_group,
+            workspace_domain="example.com",
+            email="bot@example.com",
+        )
+        # Set dummy credentials (they won't actually be used in the test)
+        google_meet_bot_login.set_credentials(
+            {
+                "cert": "-----BEGIN CERTIFICATE-----\nDUMMY_CERT\n-----END CERTIFICATE-----",
+                "private_key": "-----BEGIN PRIVATE KEY-----\nDUMMY_KEY\n-----END PRIVATE KEY-----",
+            }
+        )
+
+        # Configure bot to use login with only_if_required mode
+        self.bot.settings = {
+            "google_meet_settings": {
+                "use_login": True,
+                "login_mode": "only_if_required",
+            }
+        }
+        self.bot.save()
+
+        # Mock the set cookie URL
+        mock_get_google_meet_set_cookie_url.return_value = "https://example.com/set_cookie?session_id=test_session"
+
+        # Configure the mock uploader
+        mock_uploader = create_mock_file_uploader()
+        MockFileUploader.return_value = mock_uploader
+
+        # Mock the Chrome driver
+        mock_driver = create_mock_google_meet_driver()
+        MockChromeDriver.return_value = mock_driver
+
+        # Mock virtual display
+        mock_display = MagicMock()
+        MockDisplay.return_value = mock_display
+
+        # Track calls to look_for_login_required_element to control when login is required
+        look_for_login_call_count = [0]  # Use list to allow mutation in nested function
+
+        def mock_look_for_login_required_element(*args, **kwargs):
+            """Mock that raises UiLoginRequiredException only on first join attempt."""
+            look_for_login_call_count[0] += 1
+
+            # First join attempt: raise login required exception
+            # fill_out_name_input loops up to 30 times, so raise exception for first 30 calls
+            if look_for_login_call_count[0] <= 1:
+                raise UiLoginRequiredException("Login required", "mock_look_for_login_required_element")
+
+            # Second join attempt: no exception, login should succeed
+            # Call the original method but it will find no login element (since driver is mocked)
+            return None
+
+        def mock_retrieve_name_input_element(*args, **kwargs):
+            raise TimeoutException("Name input not found")
+
+        # Mock the Selenium WebDriverWait to avoid actual waiting
+        mock_name_input = MagicMock()
+        mock_name_input.send_keys = MagicMock()
+
+        mock_wait = MagicMock()
+        mock_wait.until = MagicMock(return_value=mock_name_input)
+
+        # Create a side effect function for login_to_google_meet_account
+        def mock_login_side_effect(adapter_instance):
+            """Mock that sets the google_meet_bot_login_session on the adapter instance."""
+            adapter_instance.google_meet_bot_login_session = {"session_id": "mock_session_id", "login_email": "mock@example.com"}
+
+        # Mock lower-level methods to allow actual attempt_to_join_meeting and fill_out_name_input logic to run
+        with (
+            patch.object(GoogleMeetUIMethods, "look_for_login_required_element", side_effect=mock_look_for_login_required_element),
+            patch("selenium.webdriver.support.ui.WebDriverWait", return_value=mock_wait),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.retrieve_name_input_element", side_effect=mock_retrieve_name_input_element),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.look_for_blocked_element", return_value=None),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.join_now_button_is_present", return_value=True),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.turn_off_media_inputs", return_value=None),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.click_captions_button", return_value=None),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None),
+            patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.set_layout", return_value=None),
+            patch.object(GoogleMeetUIMethods, "login_to_google_meet_account", autospec=True) as mock_login,
+        ):
+            mock_login.side_effect = mock_login_side_effect
+
+            # Create bot controller
+            controller = BotController(self.bot.id)
+
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
+
+            def simulate_join_flow():
+                # Sleep to allow initialization and join attempts
+                time.sleep(1)
+
+                # Add participants to keep the bot in the meeting
+                controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+
+                # Let the bot run for a bit to "record"
+                time.sleep(1)
+
+                # Trigger auto-leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(1)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=20)
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify that look_for_login_required_element was called multiple times
+            # First 30 calls during first attempt, then more during second attempt
+            self.assertGreater(look_for_login_call_count[0], 1, "Expected look_for_login_required_element to be called during both join attempts")
+
+            # Verify that login was attempted (should be called once on the retry)
+            self.assertEqual(mock_login.call_count, 1, "Expected login_to_google_meet_account to be called once during retry")
+
+            # Verify that the adapter tried to login
+            self.assertIsNotNone(controller.adapter.google_meet_bot_login_session, "Expected bot login session to be created")
+
+            # Verify that google_meet_bot_login_should_be_used was set to True after the first failed attempt
+            self.assertTrue(controller.adapter.google_meet_bot_login_should_be_used, "Expected google_meet_bot_login_should_be_used to be True after retry")
+
+            # Verify that google_meet_bot_login_is_available was True (login credentials were available)
+            self.assertTrue(controller.adapter.google_meet_bot_login_is_available, "Expected google_meet_bot_login_is_available to be True")
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Verify file uploader was used
+            mock_uploader.upload_file.assert_called_once()
+
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
+            connection.close()

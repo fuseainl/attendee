@@ -1,7 +1,6 @@
 import base64
 import json
 import logging
-import math
 import os
 import uuid
 
@@ -28,9 +27,15 @@ from .models import (
     BotEventSubTypes,
     BotEventTypes,
     BotStates,
+    Calendar,
+    CalendarEvent,
+    CalendarPlatform,
+    CalendarStates,
     ChatMessage,
     Credentials,
     CreditTransaction,
+    GoogleMeetBotLogin,
+    GoogleMeetBotLoginGroup,
     Participant,
     ParticipantEventTypes,
     Project,
@@ -39,15 +44,19 @@ from .models import (
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
+    SessionTypes,
     Utterance,
     WebhookDeliveryAttempt,
     WebhookDeliveryAttemptStatus,
     WebhookSecret,
     WebhookSubscription,
     WebhookTriggerTypes,
+    ZoomOAuthApp,
 )
-from .stripe_utils import process_checkout_session_completed
+from .stripe_utils import credit_amount_for_purchase_amount_dollars, process_checkout_session_completed
+from .tasks.deliver_webhook_task import deliver_webhook
 from .utils import generate_recordings_json_for_bot_detail_view
+from .zoom_oauth_apps_api_utils import create_or_update_zoom_oauth_app
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +83,74 @@ def get_api_key_for_user(user, api_key_object_id):
     if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=api_key.project, user=user).exists():
         raise PermissionDenied
     return api_key
+
+
+def get_calendar_for_user(user, calendar_object_id):
+    calendar = get_object_or_404(Calendar, object_id=calendar_object_id, project__organization=user.organization)
+    # If you're an admin you can access any calendar in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=calendar.project, user=user).exists():
+        raise PermissionDenied
+    return calendar
+
+
+def get_calendar_event_for_user(user, calendar_event_object_id):
+    calendar_event = get_object_or_404(CalendarEvent, object_id=calendar_event_object_id, calendar__project__organization=user.organization)
+    # If you're an admin you can access any calendar event in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=calendar_event.calendar.project, user=user).exists():
+        raise PermissionDenied
+    return calendar_event
+
+
+def get_google_meet_bot_login_for_user(user, google_meet_bot_login_object_id):
+    google_meet_bot_login = get_object_or_404(GoogleMeetBotLogin, object_id=google_meet_bot_login_object_id, group__project__organization=user.organization)
+    # If you're an admin you can access any Google Meet bot login in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=google_meet_bot_login.group.project, user=user).exists():
+        raise PermissionDenied
+    return google_meet_bot_login
+
+
+def get_webhook_delivery_attempt_for_user(user, idempotency_key):
+    webhook_delivery_attempt = get_object_or_404(WebhookDeliveryAttempt, idempotency_key=idempotency_key, webhook_subscription__project__organization=user.organization)
+    # If you're an admin you can access any webhook delivery attempt in the organization
+    if user.role != UserRole.ADMIN and not ProjectAccess.objects.filter(project=webhook_delivery_attempt.webhook_subscription.project, user=user).exists():
+        raise PermissionDenied
+    return webhook_delivery_attempt
+
+
+def get_webhook_options_for_project(project):
+    trigger_types = [trigger_type for trigger_type in WebhookTriggerTypes]
+    if not project.organization.is_managed_zoom_oauth_enabled:
+        trigger_types.remove(WebhookTriggerTypes.ZOOM_OAUTH_CONNECTION_STATE_CHANGE)
+    if not project.organization.is_async_transcription_enabled:
+        trigger_types.remove(WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE)
+    return trigger_types
+
+
+def get_partial_for_credential_type(credential_type, request, context):
+    if credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
+        return render(request, "projects/partials/zoom_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.DEEPGRAM:
+        return render(request, "projects/partials/deepgram_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.GLADIA:
+        return render(request, "projects/partials/gladia_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.OPENAI:
+        return render(request, "projects/partials/openai_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
+        return render(request, "projects/partials/google_tts_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
+        return render(request, "projects/partials/assembly_ai_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.SARVAM:
+        return render(request, "projects/partials/sarvam_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
+        return render(request, "projects/partials/elevenlabs_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
+        return render(request, "projects/partials/teams_bot_login_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.KYUTAI:
+        return render(request, "projects/partials/kyutai_credentials.html", context)
+    elif credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
+        return render(request, "projects/partials/external_media_storage_credentials.html", context)
+    else:
+        return HttpResponse("Cannot render the partial for this credential type", status=400)
 
 
 class AdminRequiredMixin(LoginRequiredMixin):
@@ -113,7 +190,7 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             return redirect("/")
 
         # Quick start guide status checks
-        zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).exists()
+        zoom_credentials = project.zoom_oauth_apps.exists() or Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).exists()
 
         deepgram_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.DEEPGRAM).exists()
 
@@ -131,7 +208,7 @@ class ProjectDashboardView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     "has_api_keys": has_api_keys,
                     "has_ended_bots": has_ended_bots,
                     "has_created_bots_via_api": has_created_bots_via_api,
-                }
+                },
             }
         )
 
@@ -176,6 +253,35 @@ class DeleteApiKeyView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 class RedirectToDashboardView(LoginRequiredMixin, View):
     def get(self, request, object_id, extra=None):
         return redirect("bots:project-dashboard", object_id=object_id)
+
+
+class DeleteZoomOAuthAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
+        if not zoom_oauth_app:
+            return HttpResponse("Zoom OAuth app not found", status=404)
+        zoom_oauth_app.delete()
+        context = self.get_project_context(object_id, project)
+        return render(request, "projects/partials/zoom_oauth_app.html", context)
+
+
+class CreateZoomOAuthAppView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        zoom_oauth_app, error = create_or_update_zoom_oauth_app(
+            project=project,
+            client_id=request.POST.get("client_id"),
+            client_secret=request.POST.get("client_secret"),
+            webhook_secret=request.POST.get("webhook_secret"),
+        )
+
+        if error:
+            return HttpResponse(error, status=400)
+
+        context = self.get_project_context(object_id, project)
+        context["zoom_oauth_app"] = zoom_oauth_app
+        return render(request, "projects/partials/zoom_oauth_app.html", context)
 
 
 class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
@@ -225,6 +331,22 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
                 if not all(credentials_data.values()):
                     return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.ELEVENLABS:
+                credentials_data = {"api_key": request.POST.get("api_key")}
+
+                if not all(credentials_data.values()):
+                    return HttpResponse("Missing required credentials data", status=400)
+            elif credential_type == Credentials.CredentialTypes.KYUTAI:
+                credentials_data = {
+                    "server_url": request.POST.get("server_url"),
+                }
+                # Only include api_key if it's provided
+                api_key = request.POST.get("api_key")
+                if api_key:
+                    credentials_data["api_key"] = api_key
+
+                if not credentials_data.get("server_url"):
+                    return HttpResponse("Missing required credentials data", status=400)
             elif credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
                 credentials_data = {"service_account_json": request.POST.get("service_account_json")}
 
@@ -250,34 +372,52 @@ class CreateCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             context = self.get_project_context(object_id, project)
             context["credentials"] = credential.get_credentials()
             context["credential_type"] = credential.credential_type
-            if credential.credential_type == Credentials.CredentialTypes.ZOOM_OAUTH:
-                return render(request, "projects/partials/zoom_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.DEEPGRAM:
-                return render(request, "projects/partials/deepgram_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.GLADIA:
-                return render(request, "projects/partials/gladia_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.OPENAI:
-                return render(request, "projects/partials/openai_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.ASSEMBLY_AI:
-                return render(request, "projects/partials/assembly_ai_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.SARVAM:
-                return render(request, "projects/partials/sarvam_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.GOOGLE_TTS:
-                return render(request, "projects/partials/google_tts_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.TEAMS_BOT_LOGIN:
-                return render(request, "projects/partials/teams_bot_login_credentials.html", context)
-            elif credential.credential_type == Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE:
-                return render(request, "projects/partials/external_media_storage_credentials.html", context)
-            else:
-                return HttpResponse("Cannot render the partial for this credential type", status=400)
+
+            # Render the appropriate partial based on credential type
+            return get_partial_for_credential_type(credential.credential_type, request, context)
 
         except Exception as e:
             return HttpResponse(str(e), status=400)
 
 
+class DeleteCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            credential_type = int(request.POST.get("credential_type"))
+            if credential_type not in [choice[0] for choice in Credentials.CredentialTypes.choices]:
+                return HttpResponse("Invalid credential type", status=400)
+
+            # Find and delete the credential
+            credential = Credentials.objects.filter(project=project, credential_type=credential_type).first()
+
+            if credential:
+                credential.delete()
+
+            # Return the updated partial for the specific credential type
+            context = self.get_project_context(object_id, project)
+            context["credentials"] = None
+            context["credential_type"] = credential_type
+
+            # Render the appropriate partial based on credential type
+            return get_partial_for_credential_type(credential_type, request, context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error deleting credentials (error_id={error_id}): {e}")
+            return HttpResponse(f"Error deleting credentials. Error ID: {error_id}", status=400)
+
+
 class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
     def get(self, request, object_id):
         project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Try to get existing zoom oauth app
+        zoom_oauth_app = ZoomOAuthApp.objects.filter(project=project).first()
+
+        # Try to get existing google meet bot login group
+        google_meet_bot_login_group = GoogleMeetBotLoginGroup.objects.filter(project=project).first()
 
         # Try to get existing credentials
         zoom_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
@@ -294,6 +434,10 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
 
         sarvam_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.SARVAM).first()
 
+        elevenlabs_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.ELEVENLABS).first()
+
+        kyutai_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.KYUTAI).first()
+
         teams_bot_login_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         external_media_storage_credentials = Credentials.objects.filter(project=project, credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).first()
@@ -301,6 +445,8 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context = self.get_project_context(object_id, project)
         context.update(
             {
+                "zoom_oauth_app": zoom_oauth_app,
+                "google_meet_bot_login_group": google_meet_bot_login_group,
                 "zoom_credentials": zoom_credentials.get_credentials() if zoom_credentials else None,
                 "zoom_credential_type": Credentials.CredentialTypes.ZOOM_OAUTH,
                 "deepgram_credentials": deepgram_credentials.get_credentials() if deepgram_credentials else None,
@@ -315,6 +461,10 @@ class ProjectCredentialsView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "assembly_ai_credential_type": Credentials.CredentialTypes.ASSEMBLY_AI,
                 "sarvam_credentials": sarvam_credentials.get_credentials() if sarvam_credentials else None,
                 "sarvam_credential_type": Credentials.CredentialTypes.SARVAM,
+                "elevenlabs_credentials": elevenlabs_credentials.get_credentials() if elevenlabs_credentials else None,
+                "elevenlabs_credential_type": Credentials.CredentialTypes.ELEVENLABS,
+                "kyutai_credentials": kyutai_credentials.get_credentials() if kyutai_credentials else None,
+                "kyutai_credential_type": Credentials.CredentialTypes.KYUTAI,
                 "teams_bot_login_credentials": teams_bot_login_credentials.get_credentials() if teams_bot_login_credentials else None,
                 "teams_bot_login_credential_type": Credentials.CredentialTypes.TEAMS_BOT_LOGIN,
                 "external_media_storage_credentials": external_media_storage_credentials.get_credentials() if external_media_storage_credentials else None,
@@ -329,12 +479,121 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_bots.html"
     context_object_name = "bots"
     paginate_by = 20
+    session_type = None
+
+    def get_session_type(self):
+        """Get session type from class attribute"""
+        return self.session_type
+
+    def get_queryset(self):
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
+
+        # Filter based on session type
+        queryset = Bot.objects.filter(project=project, session_type=self.get_session_type())
+
+        # Apply date filters if provided
+        start_date = self.request.GET.get("start_date")
+        end_date = self.request.GET.get("end_date")
+
+        if start_date:
+            queryset = queryset.filter(created_at__gte=start_date)
+        if end_date:
+            # Add 1 day to include the end date fully
+            from datetime import datetime, timedelta
+
+            try:
+                end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+                end_date_obj = end_date_obj + timedelta(days=1)
+                queryset = queryset.filter(created_at__lt=end_date_obj)
+            except (ValueError, TypeError):
+                # Handle invalid date format
+                pass
+
+        # Apply join_at date filters if provided
+        join_at_start = self.request.GET.get("join_at_start")
+        join_at_end = self.request.GET.get("join_at_end")
+
+        if join_at_start:
+            queryset = queryset.filter(join_at__gte=join_at_start)
+        if join_at_end:
+            from datetime import datetime, timedelta
+
+            try:
+                join_at_end_obj = datetime.strptime(join_at_end, "%Y-%m-%d")
+                join_at_end_obj = join_at_end_obj + timedelta(days=1)
+                queryset = queryset.filter(join_at__lt=join_at_end_obj)
+            except (ValueError, TypeError):
+                # Handle invalid date format
+                pass
+
+        # Apply state filters if provided
+        states = self.request.GET.getlist("states")
+        if states:
+            # Convert string values to integers
+            try:
+                state_values = [int(state) for state in states if state.isdigit()]
+                if state_values:
+                    queryset = queryset.filter(state__in=state_values)
+            except (ValueError, TypeError):
+                # Handle invalid state values
+                pass
+
+        # Apply search filter if provided
+        search_query = self.request.GET.get("search", "").strip()
+        if search_query:
+            queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
+
+        # Get the latest bot event type and subtype for each bot using subquery annotations
+        latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
+        latest_event_type = latest_event_subquery_base.values("event_type")[:1]
+        latest_event_sub_type = latest_event_subquery_base.values("event_sub_type")[:1]
+
+        # Apply annotations and ordering
+        queryset = queryset.annotate(last_event_type=models.Subquery(latest_event_type), last_event_sub_type=models.Subquery(latest_event_sub_type)).order_by("-created_at")
+
+        # Add display names for the event types
+        for bot in queryset:
+            if bot.last_event_type:
+                bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
+            if bot.last_event_sub_type:
+                bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
+
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
+        context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Add BotStates and SessionTypes for the template
+        context["BotStates"] = BotStates
+        context["SessionTypes"] = SessionTypes
+
+        # Add session type to context
+        context["session_type"] = self.get_session_type()
+
+        # Add filter parameters to context for maintaining state
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
+
+        # Add flag to detect if create modal should be automatically opened
+        context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
+
+        # Check if any bots in the current page have a join_at value
+        context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
+
+        return context
+
+
+class ProjectCalendarsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
+    template_name = "projects/project_calendars.html"
+    context_object_name = "calendars"
+    paginate_by = 20
 
     def get_queryset(self):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
 
         # Start with the base queryset
-        queryset = Bot.objects.filter(project=project)
+        queryset = Calendar.objects.filter(project=project)
 
         # Apply date filters if provided
         start_date = self.request.GET.get("start_date")
@@ -366,20 +625,14 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
                 # Handle invalid state values
                 pass
 
-        # Get the latest bot event type and subtype for each bot using subquery annotations
-        latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
-        latest_event_type = latest_event_subquery_base.values("event_type")[:1]
-        latest_event_sub_type = latest_event_subquery_base.values("event_sub_type")[:1]
+        # Apply deduplication key filter if provided
+        deduplication_key = self.request.GET.get("deduplication_key")
+        if deduplication_key:
+            # Filter for calendars with specific deduplication key
+            queryset = queryset.filter(deduplication_key__icontains=deduplication_key)
 
-        # Apply annotations and ordering
-        queryset = queryset.annotate(last_event_type=models.Subquery(latest_event_type), last_event_sub_type=models.Subquery(latest_event_sub_type)).order_by("-created_at")
-
-        # Add display names for the event types
-        for bot in queryset:
-            if bot.last_event_type:
-                bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
-            if bot.last_event_sub_type:
-                bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
+        # Order by most recently created
+        queryset = queryset.order_by("-created_at")
 
         return queryset
 
@@ -388,19 +641,108 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
 
-        # Add BotStates for the template
-        context["BotStates"] = BotStates
+        # Add CalendarStates and CalendarPlatform for the template
+        context["CalendarStates"] = CalendarStates
+        context["CalendarPlatform"] = CalendarPlatform
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "states": self.request.GET.getlist("states")}
-
-        # Add flag to detect if create modal should be automatically opened
-        context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
-
-        # Check if any bots in the current page have a join_at value
-        context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
+        context["filter_params"] = {
+            "start_date": self.request.GET.get("start_date", ""),
+            "end_date": self.request.GET.get("end_date", ""),
+            "states": self.request.GET.getlist("states"),
+            "deduplication_key": self.request.GET.get("deduplication_key", ""),
+        }
 
         return context
+
+
+class ProjectCalendarDetailView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
+    template_name = "projects/project_calendar_detail.html"
+    context_object_name = "calendar_events"
+    paginate_by = 20
+
+    def get_calendar(self):
+        """Get the calendar object, cached for multiple calls"""
+        if not hasattr(self, "_calendar"):
+            try:
+                self._calendar = get_calendar_for_user(user=self.request.user, calendar_object_id=self.kwargs["calendar_object_id"])
+            except PermissionDenied:
+                self._calendar = None
+        return self._calendar
+
+    def get_queryset(self):
+        calendar = self.get_calendar()
+        if not calendar:
+            return []
+
+        # Get calendar events for this calendar, ordered by start time (most recent first)
+        return calendar.events.all().order_by("-start_time")
+
+    def get(self, request, object_id, calendar_object_id):
+        # Check if calendar exists, if not redirect
+        calendar = self.get_calendar()
+        if not calendar:
+            return redirect("bots:project-calendars", object_id=object_id)
+
+        # Check if project from url is the same as the calendar's project
+        if calendar.project.object_id != object_id:
+            return redirect("bots:project-calendars", object_id=object_id)
+
+        # Continue with normal ListView processing
+        return super().get(request, object_id, calendar_object_id)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        calendar = self.get_calendar()
+        project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
+
+        # Get webhook delivery attempts for this calendar (from calendar-related webhook subscriptions)
+        webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(calendar=calendar).select_related("webhook_subscription").order_by("-created_at")
+
+        context.update(self.get_project_context(self.kwargs["object_id"], project))
+        context.update(
+            {
+                "calendar": calendar,
+                "CalendarStates": CalendarStates,
+                "CalendarPlatform": CalendarPlatform,
+                "webhook_delivery_attempts": webhook_delivery_attempts,
+                "WebhookDeliveryAttemptStatus": WebhookDeliveryAttemptStatus,
+            }
+        )
+
+        return context
+
+
+class ProjectCalendarEventDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id, calendar_object_id, event_object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        calendar_event = get_calendar_event_for_user(user=request.user, calendar_event_object_id=event_object_id)
+
+        # Verify the calendar event belongs to the specified calendar
+        if calendar_event.calendar.object_id != calendar_object_id:
+            return redirect("bots:project-calendar-detail", object_id=object_id, calendar_object_id=calendar_object_id)
+
+        # Check if project from url is the same as the calendar's project
+        if calendar_event.calendar.project.object_id != object_id:
+            return redirect("bots:project-calendar-detail", object_id=object_id, calendar_object_id=calendar_object_id)
+
+        # Get any bots that were created for this calendar event
+        bots_for_event = Bot.objects.filter(calendar_event=calendar_event).order_by("-created_at")
+
+        context = self.get_project_context(object_id, project)
+        context.update(
+            {
+                "calendar": calendar_event.calendar,
+                "calendar_event": calendar_event,
+                "bots_for_event": bots_for_event,
+                "CalendarStates": CalendarStates,
+                "CalendarPlatform": CalendarPlatform,
+                "BotStates": BotStates,
+            }
+        )
+
+        return render(request, "projects/project_calendar_event_detail.html", context)
 
 
 class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
@@ -434,22 +776,27 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         # Calculate maximum values from resource snapshots
         max_ram_usage = 0
         max_cpu_usage = 0
+        max_db_connection_count = 0
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
-                ram_usage = data.get("ram_usage_megabytes", 0)
-                cpu_usage = data.get("cpu_usage_millicores", 0)
+                ram_usage = data.get("ram_usage_megabytes") or 0
+                cpu_usage = data.get("cpu_usage_millicores") or 0
+                db_connection_count = data.get("db_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
                 if cpu_usage > max_cpu_usage:
                     max_cpu_usage = cpu_usage
+                if db_connection_count > max_db_connection_count:
+                    max_db_connection_count = db_connection_count
 
         context = self.get_project_context(object_id, project)
         context.update(
             {
                 "bot": bot,
                 "BotStates": BotStates,
+                "SessionTypes": SessionTypes,
                 "webhook_delivery_attempts": webhook_delivery_attempts,
                 "chat_messages": chat_messages,
                 "participants": participants,
@@ -459,6 +806,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "resource_snapshots": resource_snapshots,
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,
+                "max_db_connection_count": max_db_connection_count,
             }
         )
 
@@ -509,8 +857,9 @@ class ProjectWebhooksView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         context = self.get_project_context(object_id, project)
         # Only show project-level webhooks, not bot-level ones
         context["webhooks"] = project.webhook_subscriptions.filter(bot__isnull=True).order_by("-created_at")
-        context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["webhook_options"] = get_webhook_options_for_project(project)
         context["webhook_secret"] = base64.b64encode(webhook_secret.get_secret()).decode("utf-8")
+        context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
 
 
@@ -689,8 +1038,43 @@ class DeleteWebhookView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         webhook.delete()
         context = self.get_project_context(object_id, webhook.project)
         context["webhooks"] = WebhookSubscription.objects.filter(project=webhook.project, bot__isnull=True).order_by("-created_at")
-        context["webhook_options"] = [trigger_type for trigger_type in WebhookTriggerTypes]
+        context["webhook_options"] = get_webhook_options_for_project(webhook.project)
+        context["REQUIRE_HTTPS_WEBHOOKS"] = settings.REQUIRE_HTTPS_WEBHOOKS
         return render(request, "projects/project_webhooks.html", context)
+
+
+class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
+    def post(self, request, object_id, idempotency_key):
+        # Verify user has access to this project
+        get_project_for_user(user=request.user, project_object_id=object_id)
+
+        # Get and verify access to the webhook delivery attempt
+        webhook_delivery_attempt = get_webhook_delivery_attempt_for_user(
+            user=request.user,
+            idempotency_key=idempotency_key,
+        )
+
+        # Don't resend if the attempt count is greater than 49
+        if webhook_delivery_attempt.attempt_count > 49:
+            return HttpResponse(
+                '<span class="badge bg-secondary">Attempts exhausted</span>',
+                content_type="text/html",
+            )
+
+        # Only resend if the attempt is not pending
+        if webhook_delivery_attempt.status != WebhookDeliveryAttemptStatus.PENDING:
+            # Reset status to pending and queue for redelivery
+            webhook_delivery_attempt.status = WebhookDeliveryAttemptStatus.PENDING
+            webhook_delivery_attempt.save()
+
+            # Queue the webhook for delivery
+            deliver_webhook.delay(webhook_delivery_attempt.id)
+
+        # Return a simple confirmation badge - user can refresh page to see final status
+        return HttpResponse(
+            '<span class="badge bg-warning">Pending</span>',
+            content_type="text/html",
+        )
 
 
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
@@ -706,6 +1090,23 @@ class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
         context = super().get_context_data(**kwargs)
         project = get_project_for_user(user=self.request.user, project_object_id=self.kwargs["object_id"])
         context.update(self.get_project_context(self.kwargs["object_id"], project))
+
+        # Check if organization has a valid payment method
+        has_payment_method = False
+        if project.organization.autopay_stripe_customer_id:
+            try:
+                # Retrieve the customer to check for default payment method
+                customer = stripe.Customer.retrieve(
+                    project.organization.autopay_stripe_customer_id,
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+                # Check if customer has a default payment method
+                has_payment_method = customer.invoice_settings.default_payment_method is not None
+            except stripe.error.StripeError:
+                # If there's an error querying Stripe, assume no payment method
+                has_payment_method = False
+
+        context["has_payment_method"] = has_payment_method
         return context
 
 
@@ -736,23 +1137,7 @@ class CreateCheckoutSessionView(LoginRequiredMixin, ProjectUrlContextMixin, View
         except (ValueError, TypeError):
             purchase_amount = 50.0  # Default fallback
 
-        # Calculate credits based on tiered pricing
-        if purchase_amount <= 200:
-            # Tier 1: $0.50 per credit
-            credit_amount = purchase_amount / 0.5
-        elif purchase_amount <= 1000:
-            # Tier 2: $0.40 per credit
-            credit_amount = purchase_amount / 0.4
-        else:
-            # Tier 3: $0.35 per credit
-            credit_amount = purchase_amount / 0.35
-
-        # Floor the credit amount to ensure whole credits
-        credit_amount = math.floor(credit_amount)
-
-        # Ensure at least 1 credit
-        if credit_amount < 1:
-            credit_amount = 1
+        credit_amount = credit_amount_for_purchase_amount_dollars(purchase_amount)
 
         # Convert purchase amount to cents for Stripe
         unit_amount = int(purchase_amount * 100)  # in cents
@@ -850,3 +1235,162 @@ class EditProjectView(AdminRequiredMixin, View):
         project.save()
 
         return HttpResponse("ok", status=200)
+
+
+class ProjectAutopayStripePortalView(AdminRequiredMixin, View):
+    def post(self, request, object_id):
+        """Create or update Stripe customer and redirect to billing portal for payment method setup."""
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        organization = project.organization
+
+        try:
+            # Check if organization already has a Stripe customer
+            if not organization.autopay_stripe_customer_id:
+                # Create a new Stripe customer
+                customer = stripe.Customer.create(
+                    email=request.user.email,
+                    name=organization.name,
+                    metadata={
+                        "organization_id": str(organization.id),
+                        "user_id": str(request.user.id),
+                    },
+                    api_key=os.getenv("STRIPE_SECRET_KEY"),
+                )
+
+                # Save the customer ID to the organization
+                organization.autopay_stripe_customer_id = customer.id
+                organization.save()
+
+            # Check if customer already has a default payment method
+            customer = stripe.Customer.retrieve(
+                organization.autopay_stripe_customer_id,
+                api_key=os.getenv("STRIPE_SECRET_KEY"),
+            )
+            has_default_payment_method = customer.invoice_settings.default_payment_method is not None
+
+            # Create billing portal session with conditional flow_data
+            session_params = {
+                "customer": organization.autopay_stripe_customer_id,
+                "return_url": request.build_absolute_uri(reverse("projects:project-billing", args=[project.object_id])),
+                "api_key": os.getenv("STRIPE_SECRET_KEY"),
+            }
+
+            # Only add flow_data if customer doesn't have a default payment method
+            if not has_default_payment_method:
+                session_params["flow_data"] = {"type": "payment_method_update"}
+
+            session = stripe.billing_portal.Session.create(**session_params)
+
+            # Redirect to the billing portal
+            return redirect(session.url)
+
+        except stripe.error.StripeError as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error setting up payment method (error_id={error_id}): {e}")
+            return HttpResponse(f"Error setting up payment method. Error ID: {error_id}", status=400)
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"An error occurred setting up payment method (error_id={error_id}): {e}")
+            return HttpResponse(f"An error occurred. Error ID: {error_id}", status=500)
+
+
+class ProjectAutopayView(AdminRequiredMixin, View):
+    def patch(self, request, object_id):
+        """Update autopay settings for the organization."""
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        organization = project.organization
+
+        try:
+            # Parse JSON body
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return HttpResponse("Invalid JSON", status=400)
+
+        # Validate and update autopay_enabled
+        if "autopay_enabled" in data:
+            autopay_enabled = data["autopay_enabled"]
+            if not isinstance(autopay_enabled, bool):
+                return HttpResponse("autopay_enabled must be a boolean", status=400)
+            organization.autopay_enabled = autopay_enabled
+
+        # Validate and update autopay_threshold_centricredits
+        if "autopay_threshold_credits" in data:
+            threshold_credits = data["autopay_threshold_credits"]
+            if not isinstance(threshold_credits, (int, float)) or threshold_credits <= 0:
+                return HttpResponse("Credit threshold must be a positive number", status=400)
+            if threshold_credits > 10000:
+                return HttpResponse("Credit threshold cannot exceed 10,000 credits", status=400)
+            # Convert credits to centicredits
+            organization.autopay_threshold_centricredits = int(threshold_credits * 100)
+
+        # Validate and update autopay_amount_to_purchase_cents
+        if "autopay_amount_dollars" in data:
+            amount_dollars = data["autopay_amount_dollars"]
+            if not isinstance(amount_dollars, (int, float)) or amount_dollars <= 0:
+                return HttpResponse("Purchase amount must be a positive number", status=400)
+            if amount_dollars < 10:
+                return HttpResponse("Purchase amount must be at least $10", status=400)
+            if amount_dollars > 10000:
+                return HttpResponse("Purchase amount cannot exceed $10,000", status=400)
+            # Convert dollars to cents
+            organization.autopay_amount_to_purchase_cents = int(amount_dollars * 100)
+
+        try:
+            organization.save()
+            return HttpResponse("Autopay settings updated successfully", status=200)
+        except Exception as e:
+            logger.error(f"Error saving autopay settings: {e}")
+            return HttpResponse("Error saving autopay settings", status=500)
+
+
+class CreateGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+
+        try:
+            # Get or create GoogleMeetBotLoginGroup for this project
+            google_meet_bot_login_group, created = GoogleMeetBotLoginGroup.objects.get_or_create(project=project)
+
+            # Extract fields from request
+            workspace_domain = request.POST.get("workspace_domain", "").strip()
+            email = request.POST.get("email", "").strip()
+            private_key = request.POST.get("private_key", "").strip()
+            cert = request.POST.get("cert", "").strip()
+
+            # Validate required fields
+            if not all([workspace_domain, email, private_key, cert]):
+                return HttpResponse("Missing required fields: workspace_domain, email, private_key, and cert are all required", status=400)
+
+            # Create the GoogleMeetBotLogin
+            google_meet_bot_login = GoogleMeetBotLogin.objects.create(
+                group=google_meet_bot_login_group,
+                workspace_domain=workspace_domain,
+                email=email,
+            )
+
+            # Set the encrypted credentials
+            credentials_data = {
+                "private_key": private_key,
+                "cert": cert,
+            }
+            google_meet_bot_login.set_credentials(credentials_data)
+
+            context = self.get_project_context(object_id, project)
+            context["google_meet_bot_login_group"] = google_meet_bot_login_group
+            return render(request, "projects/partials/google_meet_bot_login_group.html", context)
+
+        except Exception as e:
+            error_id = str(uuid.uuid4())
+            logger.error(f"Error creating Google Meet bot login (error_id={error_id}): {e}")
+            return HttpResponse(f"Error creating Google Meet bot login. Error ID: {error_id}", status=400)
+
+
+class DeleteGoogleMeetBotLoginView(LoginRequiredMixin, ProjectUrlContextMixin, View):
+    def post(self, request, object_id, login_object_id):
+        google_meet_bot_login = get_google_meet_bot_login_for_user(user=request.user, google_meet_bot_login_object_id=login_object_id)
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        google_meet_bot_login_group = google_meet_bot_login.group
+        google_meet_bot_login.delete()
+        context = self.get_project_context(object_id, project)
+        context["google_meet_bot_login_group"] = google_meet_bot_login_group
+        return render(request, "projects/partials/google_meet_bot_login_group.html", context)

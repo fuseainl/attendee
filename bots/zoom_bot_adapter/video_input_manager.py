@@ -8,25 +8,7 @@ from gi.repository import GLib
 
 logger = logging.getLogger(__name__)
 
-
-def create_black_i420_frame(video_frame_size):
-    width, height = video_frame_size
-    # Ensure dimensions are even for proper chroma subsampling
-    if width % 2 != 0 or height % 2 != 0:
-        raise ValueError("Width and height must be even numbers for I420 format")
-
-    # Y plane (black = 0 in Y plane)
-    y_plane = np.zeros((height, width), dtype=np.uint8)
-
-    # U and V planes (black = 128 in UV planes)
-    # Both are quarter size of original due to 4:2:0 subsampling
-    u_plane = np.full((height // 2, width // 2), 128, dtype=np.uint8)
-    v_plane = np.full((height // 2, width // 2), 128, dtype=np.uint8)
-
-    # Concatenate all planes
-    yuv_frame = np.concatenate([y_plane.flatten(), u_plane.flatten(), v_plane.flatten()])
-
-    return yuv_frame.astype(np.uint8).tobytes()
+from bots.utils import create_black_i420_frame
 
 
 def scale_i420(frame, new_size):
@@ -134,26 +116,34 @@ class VideoInputStream:
             onRawDataStatusChangedCallback=self.on_raw_data_status_changed_callback,
         )
 
-        self.renderer = zoom.createRenderer(self.renderer_delegate)
-        set_resolution_result = self.renderer.setRawDataResolution(zoom.ZoomSDKResolution_360P)
-        raw_data_type = {
-            VideoInputManager.StreamType.SCREENSHARE: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_SHARE,
-            VideoInputManager.StreamType.VIDEO: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_VIDEO,
-        }[stream_type]
+        self.renderer = None
 
-        if stream_type == VideoInputManager.StreamType.SCREENSHARE:
-            subscribe_result = self.renderer.subscribe(self.share_source_id, raw_data_type)
-        else:
-            subscribe_result = self.renderer.subscribe(self.user_id, raw_data_type)
+        try:
+            self.renderer = zoom.createRenderer(self.renderer_delegate)
+        except Exception as e:
+            logger.error(f"Error creating renderer for user {self.user_id} and share source id {self.share_source_id}: {e}. Will emit black frames for this user.")
+
+        if self.renderer:
+            set_resolution_result = self.renderer.setRawDataResolution(zoom.ZoomSDKResolution_360P)
+            raw_data_type = {
+                VideoInputManager.StreamType.SCREENSHARE: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_SHARE,
+                VideoInputManager.StreamType.VIDEO: zoom.ZoomSDKRawDataType.RAW_DATA_TYPE_VIDEO,
+            }[stream_type]
+
+            if stream_type == VideoInputManager.StreamType.SCREENSHARE:
+                subscribe_result = self.renderer.subscribe(self.share_source_id, raw_data_type)
+            else:
+                subscribe_result = self.renderer.subscribe(self.user_id, raw_data_type)
+
+            logger.info(f"In VideoInputStream.init self.renderer = {self.renderer}")
+            logger.info(f"In VideoInputStream.init set_resolution_result for user {self.user_id} and share source id {self.share_source_id} is {set_resolution_result}")
+            logger.info(f"In VideoInputStream.init subscribe_result for user {self.user_id} and share source id {self.share_source_id} is {subscribe_result}")
 
         self.raw_data_status = zoom.RawData_Off
 
         self.last_frame_time = time.time()
         self.black_frame_timer_id = GLib.timeout_add(250, self.send_black_frame)
-
-        logger.info(f"In VideoInputStream.init self.renderer = {self.renderer}")
-        logger.info(f"In VideoInputStream.init set_resolution_result for user {self.user_id} and share source id {self.share_source_id} is {set_resolution_result}")
-        logger.info(f"In VideoInputStream.init subscribe_result for user {self.user_id} and share source id {self.share_source_id} is {subscribe_result}")
+        self.black_frame_debug_print_ticker = 0
 
     def on_raw_data_status_changed_callback(self, status):
         self.raw_data_status = status
@@ -168,7 +158,10 @@ class VideoInputStream:
             # Create a black frame of the same dimensions
             black_frame = create_black_i420_frame(self.video_input_manager.video_frame_size)
             self.video_input_manager.new_frame_callback(black_frame, time.time_ns())
-            logger.info(f"In VideoInputStream.send_black_frame for user {self.user_id} sent black frame")
+
+            if self.black_frame_debug_print_ticker % 10 == 0:
+                logger.info(f"In VideoInputStream.send_black_frame for user {self.user_id} sent black frame")
+            self.black_frame_debug_print_ticker += 1
 
         return not self.renderer_destroyed  # Continue timer if not cleaned up
 
@@ -180,9 +173,10 @@ class VideoInputStream:
             GLib.source_remove(self.black_frame_timer_id)
             self.black_frame_timer_id = None
 
-        logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
-        self.renderer.unSubscribe()
-        logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+        if self.renderer:
+            logger.info(f"starting renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
+            self.renderer.unSubscribe()
+            logger.info(f"finished renderer unsubscription for user {self.user_id} and share source id {self.share_source_id}")
 
     def on_renderer_destroyed_callback(self):
         self.renderer_destroyed = True
@@ -221,6 +215,7 @@ class VideoInputManager:
     class Mode:
         ACTIVE_SPEAKER = 1
         ACTIVE_SHARER = 2
+        INACTIVE = 3
 
     def __init__(self, *, new_frame_callback, wants_any_frames_callback, video_frame_size):
         self.new_frame_callback = new_frame_callback
@@ -257,12 +252,16 @@ class VideoInputManager:
             input_stream.cleanup()
 
     def set_mode(self, *, mode, active_speaker_id, active_sharer_id, active_sharer_source_id):
-        if mode != VideoInputManager.Mode.ACTIVE_SPEAKER and mode != VideoInputManager.Mode.ACTIVE_SHARER:
+        if mode != VideoInputManager.Mode.ACTIVE_SPEAKER and mode != VideoInputManager.Mode.ACTIVE_SHARER and mode != VideoInputManager.Mode.INACTIVE:
             raise Exception("Unsupported mode " + str(mode))
 
         logger.info(f"In VideoInputManager.set_mode mode = {mode} active_speaker_id = {active_speaker_id} active_sharer_id = {active_sharer_id} active_sharer_source_id = {active_sharer_source_id}")
 
         self.mode = mode
+
+        if self.mode == VideoInputManager.Mode.INACTIVE:
+            self.add_input_streams_if_needed([])
+            return
 
         if self.mode == VideoInputManager.Mode.ACTIVE_SPEAKER:
             self.active_speaker_id = active_speaker_id

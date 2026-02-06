@@ -14,7 +14,7 @@ click-plugins==1.1.1
 click-repl==0.3.0
 cryptography==43.0.3
 dj-database-url==2.3.0
-Django==5.1.2
+Django==5.1.14
 django-allauth==65.1.0
 django-concurrency==2.6.0
 django-extensions==3.2.3
@@ -59,10 +59,10 @@ sortedcontainers==2.4.0
 sqlparse==0.5.1
 trio==0.28.0
 trio-websocket==0.11.1
-typing_extensions==4.12.2
+typing_extensions==4.13.0
 tzdata==2024.2
 uritemplate==4.1.1
-urllib3==2.2.3
+urllib3==2.6.3
 vine==5.1.0
 watchdog==6.0.0
 wcwidth==0.2.13
@@ -71,7 +71,7 @@ websocket-client==1.8.0
 websockets==14.1
 whitenoise==6.8.2
 wsproto==1.2.0
-zoom-meeting-sdk==0.0.20
+zoom-meeting-sdk==0.0.24
 cachetools==5.5.1
 google-api-core==2.24.1
 google-auth==2.38.0
@@ -81,7 +81,7 @@ grpcio==1.70.0
 grpcio-status==1.70.0
 proto-plus==1.26.0
 protobuf==5.29.3
-pyasn1==0.6.1
+pyasn1==0.6.2
 pyasn1_modules==0.4.1
 rsa==4.9
 ruff==0.9.6
@@ -89,3 +89,12 @@ durationpy==0.9
 kubernetes==32.0.0
 stripe==11.6.0
 tldextract==5.3.0
+aiortc==1.10.1
+deepgram-sdk==4.3.0
+msgpack==1.1.0
+azure-identity==1.25.1
+azure-storage-blob==12.26.0
+python-json-logger==4.0.0
+pysaml2==7.5.4
+jsonpatch==1.33
+jsonpointer==3.0.0

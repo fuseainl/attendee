@@ -21,6 +21,10 @@ Third-party-based transcription is generally of higher quality than closed capti
 - OpenAI
 - Gladia
 - Assembly AI
+- Sarvam
+- ElevenLabs
+- Kyutai Labs
+- Custom Async (Bring Your Own Platform)
 
 See the [API reference](https://docs.attendee.dev/api-reference#tag/bots/POST/api/v1/bots) for supported parameters for configuring the transcription providers.
 
@@ -137,3 +141,7 @@ To use a custom OpenAI-compatible endpoint (such as a proxy server or alternativ
 - `OPENAI_MODEL_NAME`: The model name to use for transcription (default: `gpt-4o-transcribe`)
 
 Example: `OPENAI_BASE_URL=https://your-proxy.com/v1` and `OPENAI_MODEL_NAME=whisper-large-v3`
+
+### Custom Async (Bring Your Own Platform)
+
+For Attendee self-hosters only. Lets you use your own self-hosted transcription service. See the [Custom Async Transcription](https://github.com/attendee-labs/attendee/blob/main/docs/custom_async_transcription.md) page for more details.

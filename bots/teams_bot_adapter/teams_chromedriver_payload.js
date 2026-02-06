@@ -1,3 +1,19 @@
+(() => {
+    if (globalThis.__realConsole) return;
+  
+    const c = window.console;
+    const bind = Function.prototype.bind;
+  
+    // Save bound methods so later overwrites don't matter
+    globalThis.__realConsole = {
+      log:   c?.log   ? bind.call(c.log, c)   : () => {},
+      info:  c?.info  ? bind.call(c.info, c)  : () => {},
+      warn:  c?.warn  ? bind.call(c.warn, c)  : () => {},
+      error: c?.error ? bind.call(c.error, c) : () => {},
+      debug: c?.debug ? bind.call(c.debug, c) : () => {},
+    };
+  })();
+
 class StyleManager {
     constructor() {
         this.audioContext = null;
@@ -7,10 +23,19 @@ class StyleManager {
         this.frameStyleElement = null;
         this.frameAdjustInterval = null;
         this.neededInteractionsInterval = null;
+
+        // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
+        this.meetingAudioStream = null;
     }
 
     addAudioTrack(audioTrack) {
         this.audioTracks.push(audioTrack);
+        if (this.audioTracks.length > 1) {
+            window.ws?.sendJson({
+                type: 'MultipleAudioTracksDetected',
+                numberOfTracks: this.audioTracks.length,
+            });
+        }
     }
 
     checkAudioActivity() {
@@ -60,7 +85,7 @@ class StyleManager {
 
     waitForChatInputAndSendReadyMessage() {
         const checkForChatInput = () => {
-            const chatInput = document.querySelector('[aria-label="Type a message"]');
+            const chatInput = document.querySelector('[aria-label="Type a message"], [placeholder="Type a message"]');
             if (chatInput) {
                 // Chat input is now available, send the ready message
                 window.ws.sendJson({
@@ -130,6 +155,12 @@ class StyleManager {
         this.neededInteractionsInterval = setInterval(() => {
             this.checkNeededInteractions();
         }, 5000);
+
+        this.meetingAudioStream = destination.stream;
+    }
+    
+    getMeetingAudioStream() {
+        return this.meetingAudioStream;
     }
 
     async processMixedAudioTrack() {
@@ -356,6 +387,7 @@ class DominantSpeakerManager {
     constructor() {
         this.dominantSpeakerStreamId = null;
         this.captionAudioTimes = [];
+        this.speechIntervalsPerParticipant = {};
     }
 
     getLastSpeakerIdForTimestampMs(timestampMs) {
@@ -366,6 +398,93 @@ class DominantSpeakerManager {
         }
         // Return the caption audio time with the highest timestampMs
         return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    }
+
+    getSpeakerIdForTimestampMsUsingSpeechIntervals(timestampMs) {
+        const speakersAtTimestamp = [];
+        
+        // Check each participant to see if they have a speech interval at the given timestamp
+        for (const [speakerId, intervals] of Object.entries(this.speechIntervalsPerParticipant)) {
+            
+            let isCurrentlySpeaking = false;
+            let timestampMsOfLastStart = null;
+            
+            // Process each interval event to determine if participant is speaking at timestampMs
+            for (const interval of intervals) {
+                if (interval.timestampMs > timestampMs) {
+                    // We've passed the timestamp, stop checking this participant
+                    break;
+                }
+                
+                if (interval.type === 'start') {
+                    isCurrentlySpeaking = true;
+                    timestampMsOfLastStart = interval.timestampMs;
+                } else if (interval.type === 'end') {
+                    isCurrentlySpeaking = false;
+                }
+            }
+            
+            if (isCurrentlySpeaking) {
+                speakersAtTimestamp.push({
+                    speakerId,
+                    timestampMsOfLastStart
+                });
+            }
+        }
+        
+        if (speakersAtTimestamp.length === 0)
+            return null;
+
+        if (speakersAtTimestamp.length === 1)
+            return speakersAtTimestamp[0].speakerId;
+
+        // If there were multiple speakers in this interval, we need a "tie breaker"
+
+        // If we have captions, then look at the participant for the last caption audio time
+        if (this.captionAudioTimes.length > 0)
+        {
+            const participantForLastCaptionAudioTime = this.getLastSpeakerIdForTimestampMs(timestampMs);
+            if (participantForLastCaptionAudioTime && speakersAtTimestamp.some(speaker => speaker.speakerId === participantForLastCaptionAudioTime))
+                return participantForLastCaptionAudioTime;
+        }
+
+        // Otherwise use the the speaker with the earliest timestampMsOfLastStart
+        return speakersAtTimestamp.reduce((min, speaker) => speaker.timestampMsOfLastStart < min.timestampMsOfLastStart ? speaker : min).speakerId;
+
+        // Otherwise use the speaker with the highest timestampMsOfLastStart (Not using)
+        // return speakersAtTimestamp.reduce((max, speaker) => speaker.timestampMsOfLastStart > max.timestampMsOfLastStart ? speaker : max).speakerId;
+    }
+
+    addSpeechIntervalStart(timestampMs, speakerId) {
+        if (!this.speechIntervalsPerParticipant[speakerId])
+            this.speechIntervalsPerParticipant[speakerId] = [];
+
+        this.speechIntervalsPerParticipant[speakerId].push({type: 'start', timestampMs: timestampMs});
+
+        // Not going to send this to server for now.
+        /*
+        window.ws.sendJson({
+            type: 'SpeechStart',
+            participant_uuid: speakerId,
+            timestamp: timestampMs
+        });
+        */
+    }
+
+    addSpeechIntervalEnd(timestampMs, speakerId) {
+        if (!this.speechIntervalsPerParticipant[speakerId])
+            this.speechIntervalsPerParticipant[speakerId] = [];
+
+        this.speechIntervalsPerParticipant[speakerId].push({type: 'end', timestampMs: timestampMs});
+
+        // Not going to send this to server for now.
+        /*
+        window.ws.sendJson({
+            type: 'SpeechStop',
+            participant_uuid: speakerId,
+            timestamp: timestampMs
+        });
+        */
     }
 
     addCaptionAudioTime(timestampMs, speakerId) {
@@ -794,11 +913,20 @@ The tracks have a streamId that looks like this mainVideo-39016. The SDP has tha
 class ChatMessageManager {
     constructor(ws) {
         this.ws = ws;
+        this.chatMessages = {};
     }
 
     // The more sophisticated approach gets blocked by trusted html csp
     stripHtml(html) {
         return html.replace(/<[^>]*>/g, '');
+    }
+
+    // Teams client sometimes sends duplicate updates, this filters them out.
+    isNewOrUpdatedChatMessage(chatMessage) {
+        const currentMessage = this.chatMessages[chatMessage.clientMessageId];
+        if (!currentMessage)
+            return true;
+        return currentMessage.content !== chatMessage.content || currentMessage.originalArrivalTime !== chatMessage.originalArrivalTime || currentMessage.from !== chatMessage.from;
     }
 
     handleChatMessage(chatMessage) {
@@ -811,6 +939,10 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            if (!this.isNewOrUpdatedChatMessage(chatMessage))
+                return;
+
+            this.chatMessages[chatMessage.clientMessageId] = chatMessage;
 
             const timestamp_ms = new Date(chatMessage.originalArrivalTime).getTime();
             this.ws.sendJson({
@@ -891,7 +1023,9 @@ class UserManager {
             profile: '',
             status: user.state,
             humanized_status: user.state === "active" ? "in_meeting" : "not_in_meeting",
-            isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId)
+            isCurrentUser: (!!currentUserId) && (user.details.id === currentUserId),
+            isHost: user.meetingRole === "organizer",
+            meetingId: user.callId,
         }
     }
 
@@ -929,7 +1063,9 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost,
+                meetingId: user.meetingId
             });
         }
 
@@ -954,7 +1090,9 @@ class UserManager {
                 status: user.status,
                 humanized_status: user.humanized_status,
                 parentDeviceId: user.parentDeviceId,
-                isCurrentUser: user.isCurrentUser
+                isCurrentUser: user.isCurrentUser,
+                isHost: user.isHost,
+                meetingId: user.meetingId
             });
         }
 
@@ -970,7 +1108,7 @@ class UserManager {
         }
     }
 }
-var realConsole;
+var realConsole = globalThis.__realConsole;
 // Websocket client
 class WebSocketClient {
     // Message types
@@ -1051,9 +1189,9 @@ class WebSocketClient {
   
     enableMediaSending() {
         this.mediaSendingEnabled = true;
+        window.receiverManager.startPollingReceivers();
         window.styleManager.start();
         window.callManager.syncParticipants();
-
         // No longer need this because we're not using MediaStreamTrackProcessor's
         //this.startBlackFrameTimer();
     }
@@ -1383,15 +1521,23 @@ function syncVirtualStreamsFromParticipant(participant) {
     }
 }
 
+function extractCallIdFromEventDataObject(eventDataObject) {
+    return eventDataObject?.headers?.["X-Microsoft-Skype-Chain-ID"];
+}
+
 function handleRosterUpdate(eventDataObject) {
     try {
         const decodedBody = decodeWebSocketBody(eventDataObject.body);
         realConsole?.log('handleRosterUpdate decodedBody', decodedBody);
         // Teams includes a user with no display name. Not sure what this user is but we don't want to sync that user.
         const participants = Object.values(decodedBody.participants).filter(participant => participant.details?.displayName);
-
+        const callId = extractCallIdFromEventDataObject(eventDataObject);
         for (const participant of participants) {
-            window.userManager.singleUserSynced(participant);
+            const participantWithCallId = {
+                ...participant,
+                callId: callId
+            };
+            window.userManager.singleUserSynced(participantWithCallId);
             syncVirtualStreamsFromParticipant(participant);
         }
     } catch (error) {
@@ -1416,16 +1562,31 @@ function handleConversationEnd(eventDataObject) {
     }
 
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
+    window.ws?.sendJson({
+        type: 'ConversationEndPayload',
+        body: eventDataObjectBody
+    });
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
+    const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
 
     if (subCode === subCodeValueForDeniedRequestToJoin)
     {
-        // For now this won't do anything, but good to have it in our logs
+        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'request_to_join_denied'
+        });
+        return;
+    }
+
+    if (subCode === subCodeForAnonymousJoinDisabledForTenantByPolicy)
+    {
+        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
+        window.ws?.sendJson({
+            type: 'MeetingStatusChange',
+            change: 'anonymous_join_disabled_for_tenant_by_policy'
         });
         return;
     }
@@ -1470,6 +1631,114 @@ const wsInterceptor = new WebSocketInterceptor({
     }
 });
 
+class ParticipantSpeakingStateMachine {
+    constructor(participantId) {
+        this.participantId = participantId;
+        this.state = 'NOT_SPEAKING';
+        this.samples = [];
+    }
+
+    addSample(sample) {
+        this.samples.push(sample);
+
+        if (this.samples.length > 10) {
+            this.samples.shift();
+        }
+
+        const lastFiveSamples = this.samples.slice(-5);
+        if (lastFiveSamples.length < 5)
+            return;
+
+        const majorityOfLastFiveSamplesWereTrue = lastFiveSamples.filter(sample => sample.isSpeaking).length > 3;
+        const previousState = this.state;
+        const firstOfLastFiveSamplesTimestamp = lastFiveSamples[0].timestamp;
+        if (majorityOfLastFiveSamplesWereTrue) {
+            this.state = 'SPEAKING';
+        } else {
+            this.state = 'NOT_SPEAKING';
+        }
+
+        if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
+            realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
+            dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+        } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
+            realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
+            dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+        }
+    }
+}
+
+class ReceiverManager {
+    constructor() {
+        this.receiverMap = new Map();
+        this.participantSpeakingStateMachineMap = new Map();
+    }
+
+    startPollingReceivers() {
+        window.ws.sendJson({
+            type: 'ReceiverManagerUpdate',
+            update: "startPollingReceivers"
+        });
+        setInterval(() => {
+            this.pollReceivers();
+        }, 100);
+    }
+
+    pollReceivers() {
+        for (const [receiver, isActive] of this.receiverMap) {
+            const contributingSources = receiver.getContributingSources();
+
+            if (contributingSources.length > 0 && !isActive) {
+                this.receiverMap.set(receiver, true);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverActive",
+                    receiverTrackId: receiver.track?.id
+                });
+            }
+
+            if (!isActive)
+                continue;
+
+            const currentTime = Date.now();
+            const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
+            const speakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
+
+            for (const speakingParticipantId of speakingParticipantIds) {
+                if (!this.participantSpeakingStateMachineMap.has(speakingParticipantId)) {
+                    this.participantSpeakingStateMachineMap.set(speakingParticipantId, new ParticipantSpeakingStateMachine(speakingParticipantId));
+                }
+            }
+
+            // Now iterate through the participantSpeakingStateMachineMap and update the isSpeaking state for each participant
+            for (const [participantId, participantSpeakingStateMachine] of this.participantSpeakingStateMachineMap) {
+                participantSpeakingStateMachine.addSample({
+                    isSpeaking: speakingParticipantIds.has(participantId),
+                    timestamp: currentTime
+                });
+            }
+            
+            /*
+            {
+    "rtpTimestamp": 506968569,
+    "source": 414,
+    "timestamp": 1759288487277
+}
+            */
+        }
+    }
+
+    addReceiver(receiver) {
+        if (!receiver || this.receiverMap.has(receiver)) return;
+        realConsole?.log('ReceiverManager is adding receiver', receiver);
+        window.ws?.sendJson({
+            type: 'ReceiverManagerUpdate',
+            update: "addReceiver",
+            receiverTrackId: receiver.track?.id
+        });
+        this.receiverMap.set(receiver, false);
+    }
+}
 
 const ws = new WebSocketClient();
 window.ws = ws;
@@ -1486,19 +1755,8 @@ const dominantSpeakerManager = new DominantSpeakerManager();
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
 
-if (!realConsole) {
-    if (document.readyState === 'complete') {
-        createIframe();
-    } else {
-        document.addEventListener('DOMContentLoaded', createIframe);
-    }
-    function createIframe() {
-        const iframe = document.createElement('iframe');
-        iframe.src = 'about:blank';
-        document.body.appendChild(iframe);
-        realConsole = iframe.contentWindow.console;
-    }
-}
+const receiverManager = new ReceiverManager();
+window.receiverManager = receiverManager;
 
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
@@ -1547,12 +1805,14 @@ class UtteranceIdGenerator {
 
 const utteranceIdGenerator = new UtteranceIdGenerator();
 
+window.captureDominantSpeakerViaCaptions = false;
+
 const processClosedCaptionData = (item) => {
     realConsole?.log('processClosedCaptionData', item);
 
     // If we're collecting per participant audio, we actually need the caption data because it's the most accurate
     // way to estimate when someone started speaking.
-    if (window.initialData.sendPerParticipantAudio)
+    if (window.initialData.sendPerParticipantAudio && window.captureDominantSpeakerViaCaptions)
     {
         const timeStampAudioSentUnixMs = convertTimestampAudioSentToUnixTimeMs(item.timestampAudioSent);
         dominantSpeakerManager.addCaptionAudioTime(timeStampAudioSentUnixMs, item.userId);
@@ -1821,11 +2081,21 @@ const handleVideoTrack = async (event) => {
     }
   };
 
+  const globalAudioQueueIntervalsSet = new Set();
 
   const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
     const audioDataQueue = [];
     const ACTIVE_SPEAKER_LATENCY_MS = 2000;
+    let trackIsNonSilent = false;
+    let handleAudioTrackDebugInfo = {
+        framesWithoutDominantSpeaker: 0,
+        framesWithDominantSpeaker: 0,
+        totalFrames: 0,
+    };
+    let timeSinceLastDebugInfoSend = 0;
+
+    window.receiverManager.addReceiver(event.receiver);
     
     // Start continuous background processing of the audio queue
     const processAudioQueue = () => {
@@ -1834,22 +2104,53 @@ const handleVideoTrack = async (event) => {
             const { audioData, audioArrivalTime } = audioDataQueue.shift();
 
             // Get the dominant speaker and assume that's who the participant speaking is
-            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
+            const dominantSpeakerId = dominantSpeakerManager.getSpeakerIdForTimestampMsUsingSpeechIntervals(audioArrivalTime);
 
             // Send audio data through websocket
+            handleAudioTrackDebugInfo.totalFrames++;
             if (dominantSpeakerId) {
                 ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
+                handleAudioTrackDebugInfo.framesWithDominantSpeaker++;
             }
+            else
+            {
+                handleAudioTrackDebugInfo.framesWithoutDominantSpeaker++;
+            }
+        }
+
+        if (Date.now() - timeSinceLastDebugInfoSend >= 10000)  {
+            timeSinceLastDebugInfoSend = Date.now();
+            ws.sendJson({
+                type: 'HandleAudioTrackDebugInfo',
+                trackId: event.track?.id,
+                debugInfo: handleAudioTrackDebugInfo
+            });
+            handleAudioTrackDebugInfo = {
+                framesWithoutDominantSpeaker: 0,
+                framesWithDominantSpeaker: 0,
+                totalFrames: 0,
+            };
         }
     };
 
     // Set up background processing every 100ms
     const queueProcessingInterval = setInterval(processAudioQueue, 100);
+    globalAudioQueueIntervalsSet.add(queueProcessingInterval);
+    if (globalAudioQueueIntervalsSet.size > 1) {
+        window.ws?.sendJson({
+            type: 'MultipleAudioQueuesDetected',
+            trackId: event.track?.id,
+        });
+    }
     
     // Clean up interval when track ends
     event.track.addEventListener('ended', () => {
         clearInterval(queueProcessingInterval);
         console.log('Audio track ended, cleared queue processing interval');
+        window.ws?.sendJson({
+            type: 'AudioTrackEnded',
+            trackId: event.track?.id,
+        });
     });
     
     try {
@@ -1932,6 +2233,24 @@ const handleVideoTrack = async (event) => {
                   //    return;
                   //}
 
+                  if (!trackIsNonSilent && audioData.some(value => value !== 0)) {
+                    trackIsNonSilent = true;
+                    window.ws?.sendJson({
+                        type: 'WebRTCTrackIsNonSilent',
+                        trackId: event.track?.id,
+                    });
+                  }
+
+                  // Don't bother sending unless we've gotten some non-silent audio data in this track.
+                  if (!trackIsNonSilent) {
+                    return;
+                  }
+
+                  // If we have multiple audio queues, we hit multiple audioTracks, so we're in an irregular state. Filter out non-zero audio data.
+                  if (globalAudioQueueIntervalsSet.size > 1 && !audioData.some(value => value !== 0)) {
+                    return;
+                  }
+
                   // Add to queue with timestamp - the background thread will process it
                   audioDataQueue.push({
                     audioArrivalTime: Date.now(),
@@ -1949,6 +2268,10 @@ const handleVideoTrack = async (event) => {
               console.log('Transform stream flush called');
               // Clear the interval when the stream ends
               clearInterval(queueProcessingInterval);
+              window.ws?.sendJson({
+                type: 'AudioQueueFlush',
+                trackId: event.track?.id,
+            });
           }
       });
   
@@ -1974,12 +2297,20 @@ const handleVideoTrack = async (event) => {
           abortController.abort();
           // Clear the interval on error
           clearInterval(queueProcessingInterval);
+          window.ws?.sendJson({
+            type: 'AudioQueueError',
+            trackId: event.track?.id,
+          });
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
         // Clear the interval on error
         clearInterval(queueProcessingInterval);
+        window.ws?.sendJson({
+            type: 'AudioQueueError',
+            trackId: event.track?.id,
+        });
     }
   };
   
@@ -2004,19 +2335,25 @@ new RTCInterceptor({
 
         peerConnection.addEventListener('track', (event) => {
             console.log('New track:', {
-                trackId: event.track.id,
-                trackKind: event.track.kind,
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
                 streams: event.streams,
+            });
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track?.id,
+                trackKind: event.track?.kind,
+                streams: event.streams?.map(stream => stream?.id),
             });
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
-            if (event.track.kind === 'audio') {
+            if (event.track?.kind === 'audio') {
                 window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
             }
-            if (event.track.kind === 'video') {
+            if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
             }
         });
@@ -2177,14 +2514,31 @@ if (window.initialData.addClickRipple) {
 
 
 
-function turnOnCamera() {
+async function turnOnCamera() {
     // Click camera button to turn it on
-    const cameraButton = document.querySelector('button[aria-label="Turn camera on"]');
+    let cameraButton = null;
+    const numAttempts = 30;
+    for (let i = 0; i < numAttempts; i++) {
+        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || document.querySelector('div[aria-label="Turn camera on"]');
+        if (cameraButton) {
+            break;
+        }
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera, but will try again'
+        });
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
     if (cameraButton) {
         console.log("Clicking the camera button to turn it on");
         cameraButton.click();
     } else {
         console.log("Camera button not found");
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera'
+        });
     }
 }
 
@@ -2227,7 +2581,7 @@ function turnOnMicAndCamera() {
 }
 
 function turnOffMicAndCamera() {
-    // Click microphone button to turn it on
+    // Click microphone button to turn it off
     const microphoneButton = document.querySelector('button[aria-label="Mute mic"]');
     if (microphoneButton) {
         console.log("Clicking the microphone button to turn it off");
@@ -2236,7 +2590,7 @@ function turnOffMicAndCamera() {
         console.log("Microphone off button not found");
     }
 
-    // Click camera button to turn it on
+    // Click camera button to turn it off
     const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
     if (cameraButton) {
         console.log("Clicking the camera button to turn it off");
@@ -2246,320 +2600,107 @@ function turnOffMicAndCamera() {
     }
 }
 
-const _getUserMedia = navigator.mediaDevices.getUserMedia;
-
-class BotOutputManager {
-    constructor() {
-        
-        // For outputting video
-        this.botOutputVideoElement = null;
-        this.videoSource = null;
-        this.botOutputVideoElementCaptureStream = null;
-
-        // For outputting image
-        this.botOutputCanvasElement = null;
-        this.botOutputCanvasElementCaptureStream = null;
-        
-        // For outputting audio
-        this.audioContextForBotOutput = null;
-        this.gainNode = null;
-        this.destination = null;
-        this.botOutputAudioTrack = null;
+function turnOffCamera() {
+    // Click camera button to turn it off
+    const cameraButton = document.querySelector('button[aria-label="Turn camera off"]');
+    if (cameraButton) {
+        console.log("Clicking the camera button to turn it off");
+        cameraButton.click();
+    } else {
+        console.log("Camera off button not found");
     }
+}
 
-    displayImage(imageBytes) {
-        try {
-            // Wait for the image to be loaded onto the canvas
-            return this.writeImageToBotOutputCanvas(imageBytes)
-                .then(() => {
-                // If the stream is already broadcasting, don't do anything
-                if (this.botOutputCanvasElementCaptureStream)
-                {
-                    console.log("Stream already broadcasting, skipping");
-                    return;
-                }
+const turnOnMicArialLabel = "Unmute mic"
+const turnOnScreenshareButtonId = "screenshare-button"
+const turnOnScreenshareButtonAlternateId = "share-button"
+const turnOffMicArialLabel = "Turn off microphone"
+const turnOffScreenshareAriaLabel = "Stop sharing"
 
-                // Now that the image is loaded, capture the stream and turn on camera
-                this.botOutputCanvasElementCaptureStream = this.botOutputCanvasElement.captureStream(1);
-                // Wait for 3 seconds before turning on camera, this is necessary for teams only
-                setTimeout(turnOnCamera, 3000);
-            })
-            .catch(error => {
-                console.error('Error in botOutputManager.displayImage:', error);
-            });
-        } catch (error) {
-            console.error('Error in botOutputManager.displayImage:', error);
-        }
-    }
-
-    writeImageToBotOutputCanvas(imageBytes) {
-        if (!this.botOutputCanvasElement) {
-            // Create a new canvas element with fixed dimensions
-            this.botOutputCanvasElement = document.createElement('canvas');
-            this.botOutputCanvasElement.width = 1280; // Fixed width
-            this.botOutputCanvasElement.height = 640; // Fixed height
-        }
-        
-        return new Promise((resolve, reject) => {
-            // Create an Image object to load the PNG
-            const img = new Image();
-            
-            // Convert the image bytes to a data URL
-            const blob = new Blob([imageBytes], { type: 'image/png' });
-            const url = URL.createObjectURL(blob);
-            
-            // Draw the image on the canvas when it loads
-            img.onload = () => {
-                // Revoke the URL immediately after image is loaded
-                URL.revokeObjectURL(url);
-                
-                const canvas = this.botOutputCanvasElement;
-                const ctx = canvas.getContext('2d');
-                
-                // Clear the canvas
-                ctx.fillStyle = 'black';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                
-                // Calculate aspect ratios
-                const imgAspect = img.width / img.height;
-                const canvasAspect = canvas.width / canvas.height;
-                
-                // Calculate dimensions to fit image within canvas with letterboxing
-                let renderWidth, renderHeight, offsetX, offsetY;
-                
-                if (imgAspect > canvasAspect) {
-                    // Image is wider than canvas (horizontal letterboxing)
-                    renderWidth = canvas.width;
-                    renderHeight = canvas.width / imgAspect;
-                    offsetX = 0;
-                    offsetY = (canvas.height - renderHeight) / 2;
-                } else {
-                    // Image is taller than canvas (vertical letterboxing)
-                    renderHeight = canvas.height;
-                    renderWidth = canvas.height * imgAspect;
-                    offsetX = (canvas.width - renderWidth) / 2;
-                    offsetY = 0;
-                }
-                
-                this.imageDrawParams = {
-                    img: img,
-                    offsetX: offsetX,
-                    offsetY: offsetY,
-                    width: renderWidth,
-                    height: renderHeight
-                };
-
-                // Clear any existing draw interval
-                if (this.drawInterval) {
-                    clearInterval(this.drawInterval);
-                }
-
-                ctx.drawImage(
-                    this.imageDrawParams.img,
-                    this.imageDrawParams.offsetX,
-                    this.imageDrawParams.offsetY,
-                    this.imageDrawParams.width,
-                    this.imageDrawParams.height
-                );
-
-                // Set up interval to redraw the image every 1 second
-                this.drawInterval = setInterval(() => {
-                    ctx.drawImage(
-                        this.imageDrawParams.img,
-                        this.imageDrawParams.offsetX,
-                        this.imageDrawParams.offsetY,
-                        this.imageDrawParams.width,
-                        this.imageDrawParams.height
-                    );
-                }, 1000);
-                
-                // Resolve the promise now that image is loaded
-                resolve();
-            };
-            
-            // Handle image loading errors
-            img.onerror = (error) => {
-                URL.revokeObjectURL(url);
-                reject(new Error('Failed to load image'));
-            };
-            
-            // Set the image source to start loading
-            img.src = url;
+function turnOnMicAndScreenshare() {
+    // Click microphone button to turn it on
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOnMicArialLabel}"]`);
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it on");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone button not found");
+        window.ws.sendJson({
+            turnOnMicAndScreenshareError: "Microphone button not found in turnOnMicAndScreenshare"
         });
     }
 
-
-    initializeBotOutputAudioTrack() {
-        if (this.botOutputAudioTrack) {
-            return;
-        }
-
-        // Create AudioContext and nodes
-        this.audioContextForBotOutput = new AudioContext();
-        this.gainNode = this.audioContextForBotOutput.createGain();
-        this.destination = this.audioContextForBotOutput.createMediaStreamDestination();
-
-        // Set initial gain
-        this.gainNode.gain.value = 1.0;
-
-        // Connect gain node to both destinations
-        this.gainNode.connect(this.destination);
-        this.gainNode.connect(this.audioContextForBotOutput.destination);  // For local monitoring
-
-        this.botOutputAudioTrack = this.destination.stream.getAudioTracks()[0];
-        
-        // Initialize audio queue for continuous playback
-        this.audioQueue = [];
-        this.nextPlayTime = 0;
-        this.isPlaying = false;
-        this.sampleRate = 44100; // Default sample rate
-        this.numChannels = 1;    // Default channels
-        this.turnOffMicTimeout = null;
+    // Click screenshare button to turn it on
+    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it on");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare button not found");
+        window.ws.sendJson({
+            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
+        });
     }
-
-    playPCMAudio(pcmData, sampleRate = 44100, numChannels = 1) {
-        turnOnMic();
-
-        // Make sure audio context is initialized
-        this.initializeBotOutputAudioTrack();
-        
-        // Update properties if they've changed
-        if (this.sampleRate !== sampleRate || this.numChannels !== numChannels) {
-            this.sampleRate = sampleRate;
-            this.numChannels = numChannels;
-        }
-        
-        // Convert Int16 PCM data to Float32 with proper scaling
-        let audioData;
-        if (pcmData instanceof Float32Array) {
-            audioData = pcmData;
-        } else {
-            // Create a Float32Array of the same length
-            audioData = new Float32Array(pcmData.length);
-            // Scale Int16 values (-32768 to 32767) to Float32 range (-1.0 to 1.0)
-            for (let i = 0; i < pcmData.length; i++) {
-                // Division by 32768.0 scales the range correctly
-                audioData[i] = pcmData[i] / 32768.0;
-            }
-        }
-        
-        // Add to queue with timing information
-        const chunk = {
-            data: audioData,
-            duration: audioData.length / (numChannels * sampleRate)
-        };
-        
-        this.audioQueue.push(chunk);
-        
-        // Start playing if not already
-        if (!this.isPlaying) {
-            this.processAudioQueue();
-        }
-    }
-    
-    processAudioQueue() {
-        if (this.audioQueue.length === 0) {
-            this.isPlaying = false;
-
-            if (this.turnOffMicTimeout) {
-                clearTimeout(this.turnOffMicTimeout);
-                this.turnOffMicTimeout = null;
-            }
-            
-            // Delay turning off the mic by 2 second and check if queue is still empty
-            this.turnOffMicTimeout = setTimeout(() => {
-                // Only turn off mic if the queue is still empty
-                if (this.audioQueue.length === 0)
-                    turnOffMic();
-            }, 2000);
-            
-            return;
-        }
-        
-        this.isPlaying = true;
-        
-        // Get current time and next play time
-        const currentTime = this.audioContextForBotOutput.currentTime;
-        this.nextPlayTime = Math.max(currentTime, this.nextPlayTime);
-        
-        // Get next chunk
-        const chunk = this.audioQueue.shift();
-        
-        // Create buffer for this chunk
-        const audioBuffer = this.audioContextForBotOutput.createBuffer(
-            this.numChannels,
-            chunk.data.length / this.numChannels,
-            this.sampleRate
-        );
-        
-        // Fill the buffer
-        if (this.numChannels === 1) {
-            const channelData = audioBuffer.getChannelData(0);
-            channelData.set(chunk.data);
-        } else {
-            for (let channel = 0; channel < this.numChannels; channel++) {
-                const channelData = audioBuffer.getChannelData(channel);
-                for (let i = 0; i < chunk.data.length / this.numChannels; i++) {
-                    channelData[i] = chunk.data[i * this.numChannels + channel];
-                }
-            }
-        }
-        
-        // Create source and schedule it
-        const source = this.audioContextForBotOutput.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.gainNode);
-        
-        // Schedule precisely
-        source.start(this.nextPlayTime);
-        this.nextPlayTime += chunk.duration;
-        
-        // Schedule the next chunk processing
-        const timeUntilNextProcess = (this.nextPlayTime - currentTime) * 1000 * 0.8;
-        setTimeout(() => this.processAudioQueue(), Math.max(0, timeUntilNextProcess));
-    }
-
 }
 
-const botOutputManager = new BotOutputManager();
+function turnOffMicAndScreenshare() {
+    // Click microphone button to turn it off
+    const microphoneButton = document.querySelector(`button[aria-label="${turnOffMicArialLabel}"]`);
+    if (microphoneButton) {
+        console.log("Clicking the microphone button to turn it off");
+        microphoneButton.click();
+    } else {
+        console.log("Microphone off button not found");
+    }
+
+    // Click screenshare button to turn it off
+    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it off");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare off button not found");
+    }
+}
+
+
+function turnOnScreenshare() {
+    // Click screenshare button to turn it on
+    const screenshareButton = document.querySelector(`button[id="${turnOnScreenshareButtonId}"]`) || document.querySelector(`button[id="${turnOnScreenshareButtonAlternateId}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it on");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare button not found");
+        window.ws.sendJson({
+            turnOnMicAndScreenshareError: "Screenshare button not found in turnOnMicAndScreenshare"
+        });
+    }
+}
+
+function turnOffScreenshare() {
+    // Click screenshare button to turn it off
+    const screenshareButton = document.querySelector(`button[aria-label="${turnOffScreenshareAriaLabel}"]`);
+    if (screenshareButton) {
+        console.log("Clicking the screenshare button to turn it off");
+        screenshareButton.click();
+    } else {
+        console.log("Screenshare off button not found");
+    }
+}
+
+// BotOutputManager is defined in shared_chromedriver_payload.js
+
+botOutputManager = new BotOutputManager({
+    turnOnWebcam: turnOnCamera,
+    turnOffWebcam: turnOffCamera,
+    turnOnScreenshare: turnOnScreenshare,
+    turnOffScreenshare: turnOffScreenshare,
+    turnOnMic: turnOnMic,
+    turnOffMic: turnOffMic,
+});
+
 window.botOutputManager = botOutputManager;
-
-navigator.mediaDevices.getUserMedia = function(constraints) {
-    return _getUserMedia.call(navigator.mediaDevices, constraints)
-      .then(originalStream => {
-        realConsole?.log("Intercepted getUserMedia:", constraints);
-  
-        // Stop any original tracks so we don't actually capture real mic/cam
-        originalStream.getTracks().forEach(t => t.stop());
-  
-        // Create a new MediaStream to return
-        const newStream = new MediaStream();
-  
-        // Video sending not supported yet
-        /* 
-        if (constraints.video && botOutputVideoElementCaptureStream) {
-            console.log("Adding video track", botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputVideoElementCaptureStream.getVideoTracks()[0]);
-        }
-        */
-
-        if (constraints.video && botOutputManager.botOutputCanvasElementCaptureStream) {
-            realConsole?.log("Adding canvas track", botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-            newStream.addTrack(botOutputManager.botOutputCanvasElementCaptureStream.getVideoTracks()[0]);
-        }
-
-        if (constraints.audio) {  // Only create once
-            botOutputManager.initializeBotOutputAudioTrack();
-            newStream.addTrack(botOutputManager.botOutputAudioTrack);
-        }  
-  
-        return newStream;
-      })
-      .catch(err => {
-        console.error("Error in custom getUserMedia override:", err);
-        throw err;
-      });
-  };
 
 (function () {
     const _bind = Function.prototype.bind;
@@ -2584,6 +2725,8 @@ navigator.mediaDevices.getUserMedia = function(constraints) {
 class CallManager {
     constructor() {
         this.activeCall = null;
+        this.closedCaptionLanguageInterval = null;
+        this.closedCaptionLanguage = null;
     }
 
     setActiveCall() {
@@ -2607,6 +2750,15 @@ class CallManager {
         }
     }
 
+    getCallId() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return;
+        }
+
+        return this.activeCall._callId;
+    }
+
     getCurrentUserId() {
         this.setActiveCall();
         if (!this.activeCall) {
@@ -2616,6 +2768,26 @@ class CallManager {
         return this.activeCall.callerMri;
         // We're using callerMri because it includes the 8: prefix. If callerMri stops working, we can easily use the thing below.
         // return this.activeCall.currentUserSkypeIdentity?.id;
+    }
+
+
+    getSpeakingParticipantIds(contributingSources) {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+
+        const speakingParticipantIds = new Set();
+
+        this.activeCall.participants.forEach(participant => {
+            if (contributingSources.some(contributingSource => participant.hasAudioSource(contributingSource.source)) && participant.id)
+                speakingParticipantIds.add(participant.id);
+        });
+
+        return speakingParticipantIds;
     }
 
     syncParticipants() {
@@ -2630,6 +2802,7 @@ class CallManager {
                 id: participant.id,
                 displayName: participant.displayName,
                 endpoints: participant.endpoints,
+                meetingRole: participant.meetingRole
             };
         }).filter(participant => participant.displayName);
 
@@ -2653,10 +2826,13 @@ class CallManager {
                 ]
             }).filter(endpoint => endpoint);
 
+            // Transform this funny format of a participant into Teams "standard" format
             const participantConverted = {
                 details: {id: participant.id, displayName: participant.displayName},
+                meetingRole: participant.meetingRole,
                 state: "active",
-                endpoints: Object.fromEntries(endpoints)
+                endpoints: Object.fromEntries(endpoints),
+                callId: this.getCallId()
             };
             window.userManager.singleUserSynced(participantConverted);
             syncVirtualStreamsFromParticipant(participantConverted);
@@ -2675,35 +2851,40 @@ class CallManager {
     setClosedCaptionsLanguage(language) {
         this.setActiveCall();
         if (this.activeCall) {
-            this.activeCall.setClosedCaptionsLanguage(language);
+            this.closedCaptionLanguage = language;
+            this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
             // Unfortunately, this is needed for improved reliability.
             // It seems like when the host joins at the same time as the bot, they reset the cc language to the default.
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                 }
             }, 1000);         
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                 }
             }, 3000);
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                 }
             }, 5000);
             setTimeout(() => {
                 if (this.activeCall) {
-                    this.activeCall.setClosedCaptionsLanguage(language);
+                    this.activeCall.setClosedCaptionsLanguage(this.closedCaptionLanguage);
                     // Set an interval that runs every 60 seconds and makes sure the current closed caption language is equal to the language
                     // This is for debugging purposes
-                    setInterval(() => {
+
+                    // Only do it if the interval is not already set
+                    if (this.closedCaptionLanguageInterval)
+                        return;
+                    this.closedCaptionLanguageInterval = setInterval(() => {
                         if (this.activeCall && this.activeCall.getClosedCaptionsLanguage) {
-                            if (this.activeCall.getClosedCaptionsLanguage() !== language) {
+                            if (this.activeCall.getClosedCaptionsLanguage() !== this.closedCaptionLanguage) {
                                 window.ws?.sendJson({
                                     type: "closedCaptionsLanguageMismatch",
-                                    desiredLanguage: language,
+                                    desiredLanguage: this.closedCaptionLanguage,
                                     currentLanguage: this.activeCall.getClosedCaptionsLanguage()
                                 });
                             }

@@ -5,10 +5,13 @@ import uuid
 from enum import Enum
 
 import redis
+from concurrency.exceptions import RecordModifiedError
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.urls import reverse
 
+from .meeting_url_utils import meeting_type_from_url
 from .models import (
     Bot,
     BotChatMessageRequest,
@@ -23,6 +26,8 @@ from .models import (
     MeetingTypes,
     Project,
     Recording,
+    TranscriptionProviders,
+    TranscriptionSettings,
     TranscriptionTypes,
     WebhookSecret,
     WebhookSubscription,
@@ -31,10 +36,26 @@ from .models import (
 from .serializers import (
     CreateBotSerializer,
     PatchBotSerializer,
+    PatchBotTranscriptionSettingsSerializer,
+    PatchBotVoiceAgentSettingsSerializer,
 )
-from .utils import meeting_type_from_url, transcription_provider_from_bot_creation_data
+from .utils import transcription_provider_from_bot_creation_data
 
 logger = logging.getLogger(__name__)
+
+
+def build_site_url(path=""):
+    """
+    Build a full URL using SITE_DOMAIN setting.
+    Automatically uses http:// for localhost, https:// for everything else.
+
+    If EXTERNAL_WEBHOOK_SITE_DOMAIN is set, it takes priority (useful for webhooks that need
+    to be accessible from external services like Microsoft/Google).
+    """
+    # Use EXTERNAL_WEBHOOK_SITE_DOMAIN if set (for external webhooks), otherwise use SITE_DOMAIN
+    site_domain = os.getenv("EXTERNAL_WEBHOOK_SITE_DOMAIN") or settings.SITE_DOMAIN
+    protocol = "http" if site_domain.startswith("localhost") else "https"
+    return f"{protocol}://{site_domain}{path}"
 
 
 def send_sync_command(bot, command="sync"):
@@ -57,12 +78,21 @@ def create_bot_chat_message_request(bot, chat_message_data):
         BotChatMessageRequest: The created chat message request
     """
     try:
+        # Make sure the bot has a participant with the given to_user_uuid
+        to_user_uuid = chat_message_data.get("to_user_uuid")
+        if to_user_uuid:
+            participant = bot.participants.filter(uuid=to_user_uuid).first()
+            if not participant:
+                raise ValidationError(f"No participant found with uuid {to_user_uuid}. Use the /participants endpoint to get the list of participants.", params={"to_user_uuid": to_user_uuid})
+
         bot_chat_message_request = BotChatMessageRequest.objects.create(
             bot=bot,
-            to_user_uuid=chat_message_data.get("to_user_uuid"),
+            to_user_uuid=to_user_uuid,
             to=chat_message_data["to"],
             message=chat_message_data["message"],
         )
+    except ValidationError as e:
+        raise e
     except Exception as e:
         error_message_first_line = str(e).split("\n")[0]
         logging.error(f"Error creating bot chat message request: {error_message_first_line}")
@@ -97,11 +127,21 @@ def validate_meeting_url_and_credentials(meeting_url, project):
     """
 
     if meeting_type_from_url(meeting_url) == MeetingTypes.ZOOM:
-        zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first()
+        zoom_credentials = project.credentials.filter(credential_type=Credentials.CredentialTypes.ZOOM_OAUTH).first() or project.zoom_oauth_apps.first()
         if not zoom_credentials:
             relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-            settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+            settings_url = build_site_url(relative_url)
             return {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at {settings_url}"}
+
+    return None
+
+
+def validate_bot_concurrency_limit(project):
+    active_bots_count = Bot.objects.filter(project=project).filter(BotEventManager.get_in_meeting_states_q_filter()).count()
+    concurrent_bots_limit = project.concurrent_bots_limit()
+    if active_bots_count >= concurrent_bots_limit:
+        logger.error(f"Project {project.object_id} has exceeded the maximum number of concurrent bots ({concurrent_bots_limit}).")
+        return {"error": f"You have exceeded the maximum number of concurrent bots ({concurrent_bots_limit}) for your account. Please reach out to customer support to increase the limit."}
 
     return None
 
@@ -133,7 +173,7 @@ def validate_external_media_storage_settings(external_media_storage_settings, pr
 
     if not project.credentials.filter(credential_type=Credentials.CredentialTypes.EXTERNAL_MEDIA_STORAGE).exists():
         relative_url = reverse("bots:project-credentials", kwargs={"object_id": project.object_id})
-        settings_url = f"https://{os.getenv('SITE_DOMAIN', 'app.attendee.dev')}{relative_url}"
+        settings_url = build_site_url(relative_url)
         return {"error": f"External media storage credentials are required to upload recordings to an external storage bucket. Please add external media storage credentials at {settings_url}."}
 
     return None
@@ -173,6 +213,7 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     recording_settings = serializer.validated_data["recording_settings"]
     debug_settings = serializer.validated_data["debug_settings"]
     automatic_leave_settings = serializer.validated_data["automatic_leave_settings"]
+    google_meet_settings = serializer.validated_data["google_meet_settings"]
     teams_settings = serializer.validated_data["teams_settings"]
     zoom_settings = serializer.validated_data["zoom_settings"]
     bot_image = serializer.validated_data["bot_image"]
@@ -184,9 +225,14 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
     webhook_subscriptions = serializer.validated_data["webhooks"]
     callback_settings = serializer.validated_data["callback_settings"]
     external_media_storage_settings = serializer.validated_data["external_media_storage_settings"]
+    voice_agent_settings = serializer.validated_data["voice_agent_settings"]
     initial_state = BotStates.SCHEDULED if join_at else BotStates.READY
 
     error = validate_external_media_storage_settings(external_media_storage_settings, project)
+    if error:
+        return None, error
+
+    error = validate_bot_concurrency_limit(project)
     if error:
         return None, error
 
@@ -196,11 +242,13 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         "recording_settings": recording_settings,
         "debug_settings": debug_settings,
         "automatic_leave_settings": automatic_leave_settings,
+        "google_meet_settings": google_meet_settings,
         "teams_settings": teams_settings,
         "zoom_settings": zoom_settings,
         "websocket_settings": websocket_settings,
         "callback_settings": callback_settings,
         "external_media_storage_settings": external_media_storage_settings,
+        "voice_agent_settings": voice_agent_settings,
     }
 
     try:
@@ -254,6 +302,77 @@ def create_bot(data: dict, source: BotCreationSource, project: Project) -> tuple
         return None, {"error": f"An error occurred while creating the bot. Error ID: {error_id}"}
 
 
+def patch_bot_voice_agent_settings(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
+    # Check if bot is in a state that allows updating voice agent settings
+    if not BotEventManager.is_state_that_can_update_voice_agent_settings(bot.state):
+        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot update voice agent settings"}
+
+    # Check if bot launched a webpage streamer
+    if not bot.should_launch_webpage_streamer():
+        return None, {"error": "Voice agent resources were not reserved. You must create the bot with voice_agent_settings.reserve_resources set to true."}
+
+    # Validate the request data
+    serializer = PatchBotVoiceAgentSettingsSerializer(data=data)
+    if not serializer.is_valid():
+        return None, serializer.errors
+
+    validated_data = serializer.validated_data
+
+    # Update the bot in the DB. Handle concurrency conflict
+    # Only legal update is to update the teams closed captions language
+    try:
+        if "url" in validated_data:
+            bot.settings["voice_agent_settings"]["url"] = validated_data.get("url")
+            if "screenshare_url" in bot.settings["voice_agent_settings"]:
+                del bot.settings["voice_agent_settings"]["screenshare_url"]
+        if "screenshare_url" in validated_data:
+            bot.settings["voice_agent_settings"]["screenshare_url"] = validated_data.get("screenshare_url")
+            if "url" in bot.settings["voice_agent_settings"]:
+                del bot.settings["voice_agent_settings"]["url"]
+        bot.save()
+    except RecordModifiedError:
+        return None, {"error": "Version conflict. Please try again."}
+
+    return bot, None
+
+
+def patch_bot_transcription_settings(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
+    # Check if bot is in a state that allows updating transcription settings
+    if not BotEventManager.is_state_that_can_update_transcription_settings(bot.state):
+        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot update transcription settings"}
+
+    default_recording = Recording.objects.get(bot=bot, is_default_recording=True)
+    if default_recording.transcription_provider != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
+        return None, {"error": "Bot is not transcribing with meeting closed captions"}
+
+    # Validate the request data
+    serializer = PatchBotTranscriptionSettingsSerializer(data=data)
+    if not serializer.is_valid():
+        return None, serializer.errors
+
+    validated_data = serializer.validated_data
+
+    # Update the bot in the DB. Handle concurrency conflict
+    # Only legal update is to update the teams closed captions language or google meet closed captions language
+    try:
+        if "transcription_settings" not in bot.settings:
+            bot.settings["transcription_settings"] = {}
+        if "meeting_closed_captions" not in bot.settings["transcription_settings"]:
+            bot.settings["transcription_settings"]["meeting_closed_captions"] = {}
+        new_transcription_settings = TranscriptionSettings(validated_data.get("transcription_settings"))
+        new_teams_language = new_transcription_settings.teams_closed_captions_language()
+        if new_teams_language:
+            bot.settings["transcription_settings"]["meeting_closed_captions"]["teams_language"] = new_teams_language
+        new_google_meet_language = new_transcription_settings.google_meet_closed_captions_language()
+        if new_google_meet_language:
+            bot.settings["transcription_settings"]["meeting_closed_captions"]["google_meet_language"] = new_google_meet_language
+        bot.save()
+    except RecordModifiedError:
+        return None, {"error": "Version conflict. Please try again."}
+
+    return bot, None
+
+
 def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
     """
     Updates a scheduled bot with the provided data.
@@ -265,9 +384,6 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
     Returns:
         tuple: (updated_bot, error) where one is None
     """
-    # Check if bot is in scheduled state
-    if bot.state != BotStates.SCHEDULED:
-        return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but can only be updated when in scheduled state"}
 
     # Validate the request data
     serializer = PatchBotSerializer(data=data)
@@ -278,8 +394,17 @@ def patch_bot(bot: Bot, data: dict) -> tuple[Bot | None, dict | None]:
 
     try:
         # Update the bot
+        previous_join_at = bot.join_at
         bot.join_at = validated_data.get("join_at", bot.join_at)
+        previous_meeting_url = bot.meeting_url
         bot.meeting_url = validated_data.get("meeting_url", bot.meeting_url)
+        bot.metadata = validated_data.get("metadata", bot.metadata)
+
+        # If the join_at or meeting_url is being updated, the state must be scheduled. If it isn't error out.
+        update_only_legal_for_scheduled_bots = bot.join_at != previous_join_at or bot.meeting_url != previous_meeting_url
+        if update_only_legal_for_scheduled_bots and bot.state != BotStates.SCHEDULED:
+            return None, {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} but the join_at or meeting_url can only be updated when in the scheduled state"}
+
         bot.save()
 
         return bot, None
@@ -342,7 +467,7 @@ def validate_webhook_data(url, triggers, project, bot=None):
             return f"Invalid webhook trigger type: {trigger}"
 
     # Check if URL is valid
-    if not url.startswith("https://"):
+    if not url.startswith("https://") and settings.REQUIRE_HTTPS_WEBHOOKS:
         return "webhook URL must start with https://"
 
     # Check for duplicate URLs

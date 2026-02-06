@@ -4,16 +4,21 @@ import os
 import threading
 import time
 from base64 import b64encode
+from contextlib import contextmanager
 from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 from django.db import connection
+from django.db.backends.signals import connection_created
 from django.test.testcases import TransactionTestCase
 from selenium.common.exceptions import TimeoutException
+from websockets.sync.client import connect as ws_connect
 
 from bots.bot_controller import BotController
 from bots.google_meet_bot_adapter.google_meet_ui_methods import GoogleMeetUIMethods
 from bots.models import (
+    AsyncTranscription,
+    AsyncTranscriptionStates,
     Bot,
     BotEventManager,
     BotEventSubTypes,
@@ -27,6 +32,7 @@ from bots.models import (
     RecordingStates,
     RecordingTranscriptionStates,
     RecordingTypes,
+    TranscriptionFailureReasons,
     TranscriptionProviders,
     TranscriptionTypes,
     Utterance,
@@ -35,8 +41,39 @@ from bots.models import (
     WebhookSubscription,
     WebhookTriggerTypes,
 )
+from bots.tasks.process_async_transcription_task import process_async_transcription
 from bots.tests.mock_data import create_mock_file_uploader, create_mock_google_meet_driver
 from bots.web_bot_adapter.ui_methods import UiCouldNotJoinMeetingWaitingRoomTimeoutException
+
+
+@contextmanager
+def track_db_connections():
+    events = []  # (thread_ident, thread_name, alias)
+
+    def handler(sender, connection, **kwargs):
+        events.append(
+            (
+                threading.get_ident(),
+                threading.current_thread().name,
+                connection.alias,
+            )
+        )
+
+    uid = object()
+    connection_created.connect(handler, dispatch_uid=uid)
+    try:
+        yield events
+    finally:
+        connection_created.disconnect(handler, dispatch_uid=uid)
+
+
+def assert_only_threads_created_connections(testcase, events, allowed_thread_idents):
+    offenders = [e for e in events if e[0] not in allowed_thread_idents]
+    testcase.assertEqual(
+        offenders,
+        [],
+        f"DB connections created from disallowed threads: {offenders}",
+    )
 
 
 class TestGoogleMeetBot(TransactionTestCase):
@@ -87,7 +124,7 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("deepgram.DeepgramClient")
@@ -110,7 +147,7 @@ class TestGoogleMeetBot(TransactionTestCase):
         self.webhook_subscription = WebhookSubscription.objects.create(
             project=self.project,
             url="https://example.com/webhook",
-            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE, WebhookTriggerTypes.TRANSCRIPT_UPDATE],
+            triggers=[WebhookTriggerTypes.BOT_STATE_CHANGE, WebhookTriggerTypes.TRANSCRIPT_UPDATE, WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE],
             is_active=True,
         )
 
@@ -277,11 +314,13 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Verify utterances were processed
         utterances = Utterance.objects.filter(recording=self.recording)
         self.assertGreater(utterances.count(), 0)
+        self.assertEqual(utterances.count(), self.recording.audio_chunks.count())
 
         # Verify an audio utterance exists with the correct transcription
         audio_utterance = utterances.filter(source=Utterance.Sources.PER_PARTICIPANT_AUDIO, failure_data__isnull=True).first()
         self.assertIsNotNone(audio_utterance)
         self.assertEqual(audio_utterance.transcription.get("transcript"), "This is a test transcription from Deepgram")
+        self.assertEqual(audio_utterance.audio_chunk, self.recording.audio_chunks.first())
 
         # Verify webhook delivery attempts were created for transcript updates
         webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE)
@@ -313,10 +352,82 @@ class TestGoogleMeetBot(TransactionTestCase):
         # Close the database connection since we're in a thread
         connection.close()
 
+        # Now test creating an async transcription
+        async_transcription = AsyncTranscription.objects.create(recording=self.recording, settings={"transcription_settings": {"deepgram": {}}})
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.NOT_STARTED)
+
+        process_async_transcription.delay(async_transcription.id)
+
+        async_transcription.refresh_from_db()
+
+        self.assertEqual(async_transcription.state, AsyncTranscriptionStates.COMPLETE)
+        self.assertIsNotNone(async_transcription.completed_at)
+        self.assertIsNotNone(async_transcription.started_at)
+        self.assertIsNone(async_transcription.failure_data)
+        self.assertEqual(utterances.first().transcription, async_transcription.utterances.first().transcription)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording, async_transcription=async_transcription).count(), Utterance.objects.filter(recording=self.recording, async_transcription=None).count())
+
+        # Verify webhook delivery attempts were created for async transcription state changes
+        async_transcription_webhook_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE)
+        # Should have two webhook attempts: one for IN_PROGRESS, one for COMPLETE
+        self.assertEqual(async_transcription_webhook_attempts.count(), 2, "Expected webhook delivery attempts for async transcription state changes")
+
+        # Verify the webhook payloads contain the expected async transcription data
+        in_progress_webhook = async_transcription_webhook_attempts.filter(payload__state="in_progress").first()
+        self.assertIsNotNone(in_progress_webhook, "Expected webhook for IN_PROGRESS state")
+        self.assertEqual(in_progress_webhook.payload["id"], async_transcription.object_id)
+        self.assertIsNone(in_progress_webhook.payload["failure_data"])
+
+        complete_webhook = async_transcription_webhook_attempts.filter(payload__state="complete").first()
+        self.assertIsNotNone(complete_webhook, "Expected webhook for COMPLETE state")
+        self.assertEqual(complete_webhook.payload["id"], async_transcription.object_id)
+        self.assertIsNone(complete_webhook.payload["failure_data"])
+
+        # Now delete the deepgram credentials to simulate transcription failure
+        self.deepgram_credentials.delete()
+        async_transcription_after_credentials_deleted = AsyncTranscription.objects.create(recording=self.recording, settings={"transcription_settings": {"deepgram": {}}})
+
+        process_async_transcription.delay(async_transcription_after_credentials_deleted.id)
+
+        async_transcription_after_credentials_deleted.refresh_from_db()
+
+        self.assertEqual(async_transcription_after_credentials_deleted.state, AsyncTranscriptionStates.FAILED)
+        self.assertIsNotNone(async_transcription_after_credentials_deleted.failure_data.get("failure_reasons"))
+        self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, async_transcription_after_credentials_deleted.failure_data.get("failure_reasons"))
+        self.assertIsNotNone(async_transcription_after_credentials_deleted.failed_at)
+        self.assertIsNotNone(async_transcription_after_credentials_deleted.started_at)
+        self.assertIsNone(async_transcription_after_credentials_deleted.completed_at)
+        self.assertEqual(Utterance.objects.filter(recording=self.recording, async_transcription=async_transcription_after_credentials_deleted).count(), Utterance.objects.filter(recording=self.recording, async_transcription=None).count())
+
+        # Verify webhook delivery attempts were created for the failed async transcription
+        failed_async_transcription_webhook_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.ASYNC_TRANSCRIPTION_STATE_CHANGE).order_by("created_at")
+        # Should now have 4 total webhook attempts: 2 from successful transcription + 2 from failed transcription
+        self.assertEqual(failed_async_transcription_webhook_attempts.count(), 4, "Expected additional webhook delivery attempts for failed async transcription")
+
+        # Get the last two webhook attempts (for the failed transcription)
+        latest_webhooks = failed_async_transcription_webhook_attempts.order_by("-created_at")[:2]
+
+        # Find the IN_PROGRESS and FAILED webhooks for the second transcription
+        failed_transcription_in_progress_webhook = None
+        failed_transcription_failed_webhook = None
+
+        for webhook in latest_webhooks:
+            if webhook.payload.get("id") == async_transcription_after_credentials_deleted.object_id:
+                if webhook.payload.get("state") == "in_progress":
+                    failed_transcription_in_progress_webhook = webhook
+                elif webhook.payload.get("state") == "failed":
+                    failed_transcription_failed_webhook = webhook
+
+        self.assertIsNotNone(failed_transcription_in_progress_webhook, "Expected webhook for failed transcription IN_PROGRESS state")
+        self.assertIsNone(failed_transcription_in_progress_webhook.payload["failure_data"])
+
+        self.assertIsNotNone(failed_transcription_failed_webhook, "Expected webhook for FAILED state")
+        self.assertIn(TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, failed_transcription_failed_webhook.payload["failure_data"]["failure_reasons"])
+
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.look_for_blocked_element", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.look_for_denied_your_request_element", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.click_this_meeting_is_being_recorded_join_now_button", return_value=None)
@@ -442,7 +553,7 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("time.time")
@@ -595,7 +706,7 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     def test_google_meet_bot_can_join_meeting_and_record_audio_and_video(
@@ -607,153 +718,200 @@ class TestGoogleMeetBot(TransactionTestCase):
         MockDisplay,
         mock_create_debug_recording,
     ):
-        # Configure the mock uploader
-        mock_uploader = create_mock_file_uploader()
-        MockFileUploader.return_value = mock_uploader
+        with track_db_connections() as events:
+            # Configure the mock uploader
+            mock_uploader = create_mock_file_uploader()
+            MockFileUploader.return_value = mock_uploader
 
-        # Mock the Chrome driver
-        mock_driver = create_mock_google_meet_driver()
-        MockChromeDriver.return_value = mock_driver
+            # Mock the Chrome driver
+            mock_driver = create_mock_google_meet_driver()
+            MockChromeDriver.return_value = mock_driver
 
-        # Mock virtual display
-        mock_display = MagicMock()
-        MockDisplay.return_value = mock_display
+            # Mock virtual display
+            mock_display = MagicMock()
+            MockDisplay.return_value = mock_display
 
-        # Create bot controller
-        controller = BotController(self.bot.id)
+            # Use closed captions for transcription so websocket caption messages are handled
+            self.recording.transcription_provider = TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
+            self.recording.save()
 
-        # Run the bot in a separate thread since it has an event loop
-        bot_thread = threading.Thread(target=controller.run)
-        bot_thread.daemon = True
-        bot_thread.start()
+            # Create bot controller
+            controller = BotController(self.bot.id)
 
-        def simulate_join_flow():
-            # Sleep to allow initialization
-            time.sleep(2)
+            # Run the bot in a separate thread since it has an event loop
+            bot_thread = threading.Thread(target=controller.run)
+            bot_thread.daemon = True
+            bot_thread.start()
 
-            # Add participants - simulate websocket message processing
-            controller.adapter.participants_info["user1"] = {"deviceId": "user1", "fullName": "Test User", "active": True, "isCurrentUser": False}
+            def send_websocket_message(port, message_dict):
+                """Send a JSON message to the adapter's websocket server."""
+                json_bytes = json.dumps(message_dict).encode("utf-8")
+                # Message type 1 = JSON, as 4 bytes little-endian
+                message = (1).to_bytes(4, byteorder="little") + json_bytes
+                with ws_connect(f"ws://localhost:{port}") as websocket:
+                    websocket.send(message)
 
-            # Simulate caption data arrival
-            caption_data = {"captionId": "caption1", "deviceId": "user1", "text": "This is a test caption", "isFinal": 1}
-            controller.closed_caption_manager.upsert_caption(caption_data)
+            def simulate_join_flow():
+                # Sleep to allow initialization and wait for websocket server to start
+                time.sleep(2)
 
-            # Process these events
-            time.sleep(2)
+                # Wait for the websocket port to be available
+                while controller.adapter.websocket_port is None:
+                    time.sleep(0.1)
 
-            # Simulate flushing captions - normally done before leaving
-            controller.closed_caption_manager.flush_captions()
+                ws_port = controller.adapter.websocket_port
 
-            # Trigger only one participant in meeting auto leave
-            controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
-            time.sleep(4)
+                # Add participants via websocket UsersUpdate message
+                users_update_message = {
+                    "type": "UsersUpdate",
+                    "newUsers": [
+                        {
+                            "deviceId": "user1",
+                            "fullName": "Test User",
+                            "humanized_status": "in_meeting",
+                            "isCurrentUser": False,
+                            "isHost": False,
+                        }
+                    ],
+                    "removedUsers": [],
+                    "updatedUsers": [],
+                }
+                send_websocket_message(ws_port, users_update_message)
 
-            # Clean up connections in thread
+                # Allow time for participant to be processed
+                time.sleep(0.5)
+
+                # Simulate caption data arrival via websocket CaptionUpdate message
+                caption_update_message = {
+                    "type": "CaptionUpdate",
+                    "caption": {
+                        "captionId": "caption1",
+                        "deviceId": "user1",
+                        "text": "This is a test caption",
+                        "isFinal": 1,
+                    },
+                }
+                send_websocket_message(ws_port, caption_update_message)
+
+                # Process these events
+                time.sleep(2)
+
+                # Simulate flushing captions - normally done before leaving
+                controller.closed_caption_manager.flush_captions()
+
+                # Trigger only one participant in meeting auto leave
+                controller.adapter.only_one_participant_in_meeting_at = time.time() - 10000000000
+                time.sleep(4)
+
+                # Clean up connections in thread
+                connection.close()
+
+            # Run join flow simulation after a short delay
+            threading.Timer(2, simulate_join_flow).start()
+
+            # Give the bot some time to process
+            bot_thread.join(timeout=10)
+
+            # Assert that only the main thread created the database connection
+            assert_only_threads_created_connections(self, events, [bot_thread.ident])
+
+            # Refresh the bot from the database
+            self.bot.refresh_from_db()
+
+            # Assert that the heartbeat timestamp was set
+            self.assertIsNotNone(self.bot.first_heartbeat_timestamp)
+            self.assertIsNotNone(self.bot.last_heartbeat_timestamp)
+
+            # Assert that joined at is not none
+            self.assertIsNotNone(controller.adapter.joined_at)
+
+            # Assert that the bot is in the ENDED state
+            self.assertEqual(self.bot.state, BotStates.ENDED)
+
+            # Verify bot events in sequence
+            bot_events = self.bot.bot_events.all()
+            self.assertEqual(len(bot_events), 6)  # We expect 5 events in total
+
+            # Verify join_requested_event (Event 1)
+            join_requested_event = bot_events[0]
+            self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
+            self.assertEqual(join_requested_event.old_state, BotStates.READY)
+            self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
+
+            # Verify bot_joined_meeting_event (Event 2)
+            bot_joined_meeting_event = bot_events[1]
+            self.assertEqual(bot_joined_meeting_event.event_type, BotEventTypes.BOT_JOINED_MEETING)
+            self.assertEqual(bot_joined_meeting_event.old_state, BotStates.JOINING)
+            self.assertEqual(bot_joined_meeting_event.new_state, BotStates.JOINED_NOT_RECORDING)
+
+            # Verify recording_permission_granted_event (Event 3)
+            recording_permission_granted_event = bot_events[2]
+            self.assertEqual(
+                recording_permission_granted_event.event_type,
+                BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
+            )
+            self.assertEqual(recording_permission_granted_event.old_state, BotStates.JOINED_NOT_RECORDING)
+            self.assertEqual(recording_permission_granted_event.new_state, BotStates.JOINED_RECORDING)
+
+            # Verify bot requested to leave meeting (Event 4)
+            bot_requested_to_leave_meeting_event = bot_events[3]
+            self.assertEqual(bot_requested_to_leave_meeting_event.event_type, BotEventTypes.LEAVE_REQUESTED)
+            self.assertEqual(bot_requested_to_leave_meeting_event.old_state, BotStates.JOINED_RECORDING)
+            self.assertEqual(bot_requested_to_leave_meeting_event.new_state, BotStates.LEAVING)
+
+            # Verify bot left meeting (Event 5)
+            bot_left_meeting_event = bot_events[4]
+            self.assertEqual(bot_left_meeting_event.event_type, BotEventTypes.BOT_LEFT_MEETING)
+            self.assertEqual(bot_left_meeting_event.old_state, BotStates.LEAVING)
+            self.assertEqual(bot_left_meeting_event.new_state, BotStates.POST_PROCESSING)
+
+            # Verify post_processing_completed_event (Event 6)
+            post_processing_completed_event = bot_events[5]
+            self.assertEqual(post_processing_completed_event.event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
+            self.assertEqual(post_processing_completed_event.old_state, BotStates.POST_PROCESSING)
+            self.assertEqual(post_processing_completed_event.new_state, BotStates.ENDED)
+
+            # Verify that the recording was finished
+            self.recording.refresh_from_db()
+            self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
+
+            # Verify captions were processed
+            utterances = Utterance.objects.filter(recording=self.recording)
+            self.assertGreater(utterances.count(), 0)
+
+            # Verify a caption utterance exists with the correct text
+            caption_utterance = utterances.filter(source=Utterance.Sources.CLOSED_CAPTION_FROM_PLATFORM).first()
+            self.assertIsNotNone(caption_utterance)
+            self.assertEqual(caption_utterance.transcription.get("transcript"), "This is a test caption")
+
+            # Verify webhook delivery attempts were created for transcript updates
+            webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE)
+            self.assertEqual(webhook_delivery_attempts.count(), 0, "Expected zero webhook delivery attempts for transcript updates")
+
+            # Verify WebSocket media sending was enabled and performance.timeOrigin was queried
+            mock_driver.execute_script.assert_has_calls([call("window.ws?.enableMediaSending();"), call("return performance.timeOrigin;")])
+
+            # Verify that no charge was created (since the env var is not set in this test suite)
+            credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()
+            self.assertIsNone(credit_transaction, "A credit transaction was created for the bot")
+
+            # Verify file uploader was used
+            mock_uploader.upload_file.assert_called_once()
+            self.assertGreater(mock_uploader.upload_file.call_count, 0)
+            mock_uploader.wait_for_upload.assert_called_once()
+            mock_uploader.delete_file.assert_called_once()
+            # Cleanup
+            controller.cleanup()
+            bot_thread.join(timeout=5)
+
+            # Close the database connection since we're in a thread
             connection.close()
-
-        # Run join flow simulation after a short delay
-        threading.Timer(2, simulate_join_flow).start()
-
-        # Give the bot some time to process
-        bot_thread.join(timeout=10)
-
-        # Refresh the bot from the database
-        self.bot.refresh_from_db()
-
-        # Assert that the heartbeat timestamp was set
-        self.assertIsNotNone(self.bot.first_heartbeat_timestamp)
-        self.assertIsNotNone(self.bot.last_heartbeat_timestamp)
-
-        # Assert that joined at is not none
-        self.assertIsNotNone(controller.adapter.joined_at)
-
-        # Assert that the bot is in the ENDED state
-        self.assertEqual(self.bot.state, BotStates.ENDED)
-
-        # Verify bot events in sequence
-        bot_events = self.bot.bot_events.all()
-        self.assertEqual(len(bot_events), 6)  # We expect 5 events in total
-
-        # Verify join_requested_event (Event 1)
-        join_requested_event = bot_events[0]
-        self.assertEqual(join_requested_event.event_type, BotEventTypes.JOIN_REQUESTED)
-        self.assertEqual(join_requested_event.old_state, BotStates.READY)
-        self.assertEqual(join_requested_event.new_state, BotStates.JOINING)
-
-        # Verify bot_joined_meeting_event (Event 2)
-        bot_joined_meeting_event = bot_events[1]
-        self.assertEqual(bot_joined_meeting_event.event_type, BotEventTypes.BOT_JOINED_MEETING)
-        self.assertEqual(bot_joined_meeting_event.old_state, BotStates.JOINING)
-        self.assertEqual(bot_joined_meeting_event.new_state, BotStates.JOINED_NOT_RECORDING)
-
-        # Verify recording_permission_granted_event (Event 3)
-        recording_permission_granted_event = bot_events[2]
-        self.assertEqual(
-            recording_permission_granted_event.event_type,
-            BotEventTypes.BOT_RECORDING_PERMISSION_GRANTED,
-        )
-        self.assertEqual(recording_permission_granted_event.old_state, BotStates.JOINED_NOT_RECORDING)
-        self.assertEqual(recording_permission_granted_event.new_state, BotStates.JOINED_RECORDING)
-
-        # Verify bot requested to leave meeting (Event 4)
-        bot_requested_to_leave_meeting_event = bot_events[3]
-        self.assertEqual(bot_requested_to_leave_meeting_event.event_type, BotEventTypes.LEAVE_REQUESTED)
-        self.assertEqual(bot_requested_to_leave_meeting_event.old_state, BotStates.JOINED_RECORDING)
-        self.assertEqual(bot_requested_to_leave_meeting_event.new_state, BotStates.LEAVING)
-
-        # Verify bot left meeting (Event 5)
-        bot_left_meeting_event = bot_events[4]
-        self.assertEqual(bot_left_meeting_event.event_type, BotEventTypes.BOT_LEFT_MEETING)
-        self.assertEqual(bot_left_meeting_event.old_state, BotStates.LEAVING)
-        self.assertEqual(bot_left_meeting_event.new_state, BotStates.POST_PROCESSING)
-
-        # Verify post_processing_completed_event (Event 6)
-        post_processing_completed_event = bot_events[5]
-        self.assertEqual(post_processing_completed_event.event_type, BotEventTypes.POST_PROCESSING_COMPLETED)
-        self.assertEqual(post_processing_completed_event.old_state, BotStates.POST_PROCESSING)
-        self.assertEqual(post_processing_completed_event.new_state, BotStates.ENDED)
-
-        # Verify that the recording was finished
-        self.recording.refresh_from_db()
-        self.assertEqual(self.recording.state, RecordingStates.COMPLETE)
-
-        # Verify captions were processed
-        utterances = Utterance.objects.filter(recording=self.recording)
-        self.assertGreater(utterances.count(), 0)
-
-        # Verify a caption utterance exists with the correct text
-        caption_utterance = utterances.filter(source=Utterance.Sources.CLOSED_CAPTION_FROM_PLATFORM).first()
-        self.assertIsNotNone(caption_utterance)
-        self.assertEqual(caption_utterance.transcription.get("transcript"), "This is a test caption")
-
-        # Verify webhook delivery attempts were created for transcript updates
-        webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=self.bot, webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE)
-        self.assertEqual(webhook_delivery_attempts.count(), 0, "Expected zero webhook delivery attempts for transcript updates")
-
-        # Verify WebSocket media sending was enabled and performance.timeOrigin was queried
-        mock_driver.execute_script.assert_has_calls([call("window.ws?.enableMediaSending();"), call("return performance.timeOrigin;")])
-
-        # Verify that no charge was created (since the env var is not set in this test suite)
-        credit_transaction = CreditTransaction.objects.filter(bot=self.bot).first()
-        self.assertIsNone(credit_transaction, "A credit transaction was created for the bot")
-
-        # Verify file uploader was used
-        mock_uploader.upload_file.assert_called_once()
-        self.assertGreater(mock_uploader.upload_file.call_count, 0)
-        mock_uploader.wait_for_upload.assert_called_once()
-        mock_uploader.delete_file.assert_called_once()
-        # Cleanup
-        controller.cleanup()
-        bot_thread.join(timeout=5)
-
-        # Close the database connection since we're in a thread
-        connection.close()
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
     @patch("bots.web_bot_adapter.web_bot_adapter.webdriver.Chrome")
     @patch("bots.google_meet_bot_adapter.google_meet_bot_adapter.GoogleMeetBotAdapter.send_raw_audio")
-    @patch("bots.bot_controller.bot_controller.FileUploader")
+    @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
     @patch("bots.bot_controller.bot_controller.BotWebsocketClient")

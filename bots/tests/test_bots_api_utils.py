@@ -1,13 +1,48 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Organization
-from bots.bots_api_utils import BotCreationSource, create_bot, create_webhook_subscription, validate_meeting_url_and_credentials
+from bots.bots_api_utils import BotCreationSource, build_site_url, create_bot, create_webhook_subscription, validate_bot_concurrency_limit, validate_meeting_url_and_credentials
 from bots.calendars_api_utils import create_calendar
-from bots.models import Bot, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Credentials, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes
+from bots.models import Bot, BotEventManager, BotEventTypes, BotStates, CalendarEvent, CalendarPlatform, Project, TranscriptionProviders, WebhookSubscription, WebhookTriggerTypes, ZoomOAuthApp
+
+
+class TestBuildSiteUrl(TestCase):
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_build_site_url_with_localhost(self, mock_settings):
+        """Test that localhost domains use http protocol."""
+        mock_settings.SITE_DOMAIN = "localhost:8000"
+        result = build_site_url("/test/path")
+        self.assertEqual(result, "http://localhost:8000/test/path")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {}, clear=True)
+    def test_build_site_url_with_production_domain(self, mock_settings):
+        """Test that non-localhost domains use https protocol."""
+        mock_settings.SITE_DOMAIN = "example.com"
+        result = build_site_url("/api/webhook")
+        self.assertEqual(result, "https://example.com/api/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "external.example.com"}, clear=True)
+    def test_build_site_url_uses_external_webhook_domain_when_set(self, mock_settings):
+        """Test that EXTERNAL_WEBHOOK_SITE_DOMAIN takes priority over SITE_DOMAIN."""
+        mock_settings.SITE_DOMAIN = "internal.example.com"
+        result = build_site_url("/webhook")
+        self.assertEqual(result, "https://external.example.com/webhook")
+
+    @patch("bots.bots_api_utils.settings")
+    @patch.dict("os.environ", {"EXTERNAL_WEBHOOK_SITE_DOMAIN": "localhost:9000"}, clear=True)
+    def test_build_site_url_external_domain_localhost_uses_http(self, mock_settings):
+        """Test that localhost external webhook domain uses http protocol."""
+        mock_settings.SITE_DOMAIN = "production.example.com"
+        result = build_site_url("/callback")
+        self.assertEqual(result, "http://localhost:9000/callback")
 
 
 class TestValidateMeetingUrlAndCredentials(TestCase):
@@ -26,7 +61,7 @@ class TestValidateMeetingUrlAndCredentials(TestCase):
         """Test Zoom URL and credentials validation"""
         # Test Zoom URL without credentials
         error = validate_meeting_url_and_credentials("https://zoom.us/j/123456789", self.project)
-        self.assertEqual(error, {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at https://app.attendee.dev/projects/{self.project.object_id}/credentials"})
+        self.assertEqual(error, {"error": f"Zoom App credentials are required to create a Zoom bot. Please add Zoom credentials at http://localhost:8000/projects/{self.project.object_id}/credentials"})
 
     def test_validate_teams_url(self):
         """Test Teams URL validation"""
@@ -47,7 +82,7 @@ class TestCreateBot(TestCase):
         self.assertIsNone(error)
 
     def test_create_zoom_bot_with_default_settings(self):
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
         print("error", error)
         self.assertIsNotNone(bot)
@@ -57,13 +92,21 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.use_zoom_web_adapter(), False)
 
     def test_create_zoom_bot_with_default_settings_and_web_adapter(self):
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot, error = create_bot(data={"meeting_url": "https://zoom.us/j/123456789", "bot_name": "Test Bot", "zoom_settings": {"sdk": "web"}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNotNone(bot.recordings.first())
         self.assertIsNone(error)
         self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM)
         self.assertEqual(bot.use_zoom_web_adapter(), True)
+
+    def test_create_teams_bot_with_bracket_in_the_url(self):
+        teams_url_with_trailing_carat = "https://teams.microsoft.com/l/meetup-join/19%3ameeting_ttttttttttttttttttttttcqqqqqqqqqqqqqqqqqqqqqqqqq%40thread.v2/0?context=%7b%22Tid%22%3a%22b8291b4b-f793-49bc-1111-111111111111%22%2c%22Oid%22%3a%22216d2e11-ffff-ffff-1111-ffffffffffff%22%7d>"
+        bot, error = create_bot(data={"meeting_url": teams_url_with_trailing_carat, "bot_name": "Test Bot"}, source=BotCreationSource.API, project=self.project)
+        self.assertIsNotNone(bot)
+        teams_url_normalized = 'https://teams.microsoft.com/l/meetup-join/19:meeting_ttttttttttttttttttttttcqqqqqqqqqqqqqqqqqqqqqqqqq@thread.v2/0?context={"Tid":"b8291b4b-f793-49bc-1111-111111111111","Oid":"216d2e11-ffff-ffff-1111-ffffffffffff"}'
+        self.assertEqual(bot.meeting_url, teams_url_normalized)
+        self.assertIsNone(error)
 
     def test_create_bot_with_explicit_transcription_settings(self):
         """Test creating bots with explicit transcription settings for different providers and meeting types"""
@@ -76,7 +119,7 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot.recordings.first().transcription_provider, TranscriptionProviders.ASSEMBLY_AI)
 
         # Test Zoom bot with explicit closed captions (requires credentials and web SDK)
-        Credentials.objects.create(project=self.project, credential_type=Credentials.CredentialTypes.ZOOM_OAUTH)
+        ZoomOAuthApp.objects.create(project=self.project, client_id="123")
         bot2, error2 = create_bot(data={"meeting_url": "https://zoom.us/j/987654321", "bot_name": "Zoom CC Test Bot", "zoom_settings": {"sdk": "web"}, "transcription_settings": {"meeting_closed_captions": {"zoom_language": "Spanish"}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot2)
         self.assertIsNotNone(bot2.recordings.first())
@@ -85,7 +128,7 @@ class TestCreateBot(TestCase):
         self.assertEqual(bot2.use_zoom_web_adapter(), True)
 
     def test_create_bot_with_image(self):
-        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meeting/123", "bot_name": "Test Bot", "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, source=BotCreationSource.API, project=self.project)
+        bot, error = create_bot(data={"meeting_url": "https://teams.microsoft.com/meet/123?p=123", "bot_name": "Test Bot", "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNotNone(bot.recordings.first())
         self.assertIsNotNone(bot.media_requests.first())
@@ -101,20 +144,20 @@ class TestCreateBot(TestCase):
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot with PII Redaction", "transcription_settings": {"deepgram": {"redact": ["pii"]}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
-        self.assertEqual(bot.deepgram_redaction_settings(), ["pii"])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), ["pii"])
 
         # Test with multiple redaction types
         bot2, error2 = create_bot(data={"meeting_url": "https://meet.google.com/xyz-uvw-rst", "bot_name": "Test Bot with Multiple Redaction", "transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot2)
         self.assertIsNone(error2)
-        self.assertEqual(bot2.deepgram_redaction_settings(), ["pii", "pci", "numbers"])
+        self.assertEqual(bot2.transcription_settings.deepgram_redaction_settings(), ["pii", "pci", "numbers"])
 
     def test_create_bot_with_empty_redaction_settings(self):
         """Test creating a bot with empty redaction settings."""
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/empty-redact-test", "bot_name": "Test Bot with Empty Redaction", "transcription_settings": {"deepgram": {"redact": []}}}, source=BotCreationSource.API, project=self.project)
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
-        self.assertEqual(bot.deepgram_redaction_settings(), [])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), [])
 
     def test_create_bot_with_invalid_redaction_type_returns_error(self):
         """Test that creating a bot with invalid redaction type returns validation error."""
@@ -161,7 +204,7 @@ class TestCreateBot(TestCase):
         )
         self.assertIsNotNone(bot)
         self.assertIsNone(error)
-        self.assertEqual(bot.deepgram_redaction_settings(), [])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), [])
 
     def test_create_bot_redaction_settings_combined_with_other_deepgram_settings(self):
         """Test creating a bot with redaction settings combined with other Deepgram settings."""
@@ -170,7 +213,7 @@ class TestCreateBot(TestCase):
         self.assertIsNone(error)
 
         # Verify redaction settings
-        self.assertEqual(bot.deepgram_redaction_settings(), ["pii", "numbers"])
+        self.assertEqual(bot.transcription_settings.deepgram_redaction_settings(), ["pii", "numbers"])
 
         # Verify other settings are preserved
         deepgram_settings = bot.settings["transcription_settings"]["deepgram"]
@@ -180,10 +223,10 @@ class TestCreateBot(TestCase):
 
     def test_create_bot_with_google_meet_url_with_http(self):
         bot, error = create_bot(data={"meeting_url": "http://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"}, source=BotCreationSource.DASHBOARD, project=self.project)
-        self.assertIsNone(bot)
-        self.assertEqual(Bot.objects.count(), 0)
-        self.assertIsNotNone(error)
-        self.assertEqual(error, {"meeting_url": ["Google Meet URL must start with https://meet.google.com/"]})
+        self.assertIsNotNone(bot)
+        self.assertEqual(Bot.objects.count(), 1)
+        self.assertIsNone(error)
+        self.assertEqual(bot.meeting_url, "https://meet.google.com/abc-defg-hij")
 
     def test_create_scheduled_bot(self):
         """Test creating a bot with join_at timestamp"""
@@ -459,7 +502,7 @@ class TestPatchBot(TestCase):
         self.assertEqual(updated_bot.join_at.replace(microsecond=0), new_join_time.replace(microsecond=0))
         self.assertEqual(updated_bot.meeting_url, new_meeting_url)
 
-    def test_patch_bot_not_in_scheduled_state(self):
+    def test_patch_bot_join_at_not_in_scheduled_state(self):
         """Test that patching a bot not in scheduled state fails."""
         from bots.bots_api_utils import patch_bot
 
@@ -479,7 +522,46 @@ class TestPatchBot(TestCase):
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertEqual(patch_error["error"], "Bot is in state joining but can only be updated when in scheduled state")
+        self.assertEqual(patch_error["error"], "Bot is in state joining but the join_at or meeting_url can only be updated when in the scheduled state")
+
+    def test_patch_bot_meeting_url_not_in_scheduled_state(self):
+        """Test that patching a bot not in scheduled state fails."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.JOINING)  # Should be in JOINING state after creation
+
+        # Try to patch the bot
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "https://meet.google.com/new-meeting-url"})
+        self.assertIsNone(updated_bot)
+        self.assertIsNotNone(patch_error)
+
+    def test_patch_bot_metadata_not_in_scheduled_state(self):
+        """Test that patching a bot not in scheduled state succeeds."""
+        from bots.bots_api_utils import patch_bot
+
+        # Create a scheduled bot
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot"},
+            source=BotCreationSource.API,
+            project=self.project,
+        )
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        self.assertEqual(bot.state, BotStates.JOINING)  # Should be in JOINING state after creation
+
+        # Try to patch the bot
+        updated_bot, patch_error = patch_bot(bot, {"metadata": {"test": "test"}})
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.metadata, {"test": "test"})
 
     def test_patch_bot_with_invalid_join_at(self):
         """Test that patching with invalid join_at fails validation."""
@@ -519,12 +601,18 @@ class TestPatchBot(TestCase):
         self.assertEqual(bot.state, BotStates.SCHEDULED)
 
         # Try to patch with an invalid meeting URL (http instead of https for Google Meet)
-        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.google.com/invalid-url"})
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.google.com/xx-xx-xx"})
+
+        self.assertIsNotNone(updated_bot)
+        self.assertIsNone(patch_error)
+        self.assertEqual(updated_bot.meeting_url, "https://meet.google.com/xx-xx-xx")
+
+        # Try to patch with an invalid meeting URL (http instead of https for Google Meet)
+        updated_bot, patch_error = patch_bot(bot, {"meeting_url": "http://meet.googlec.com/xx-xx-xx"})
 
         self.assertIsNone(updated_bot)
         self.assertIsNotNone(patch_error)
-        self.assertIn("meeting_url", patch_error)
-        self.assertIn("Google Meet URL must start with https://meet.google.com/", str(patch_error["meeting_url"]))
+        self.assertEqual(patch_error["meeting_url"], ["Invalid meeting URL"])
 
     def test_patch_bot_with_empty_data(self):
         """Test that patching with empty data works (no changes made)."""
@@ -549,3 +637,168 @@ class TestPatchBot(TestCase):
         self.assertIsNone(patch_error)
         self.assertEqual(updated_bot.join_at, original_join_at)
         self.assertEqual(updated_bot.meeting_url, original_meeting_url)
+
+
+class TestConcurrentBotLimit(TestCase):
+    def setUp(self):
+        organization = Organization.objects.create(name="Test Organization")
+        self.project = Project.objects.create(name="Test Project", organization=organization)
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_validate_bot_concurrency_limit_under_limit(self, mock_limit):
+        """Test that validation passes when under the concurrent bot limit."""
+        mock_limit.return_value = 5
+
+        # Create a few bots in in-meeting states (under the mocked limit)
+        for i in range(4):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/test-{i}",
+                name=f"Test Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+        mock_limit.assert_called_once()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_validate_bot_concurrency_limit_at_limit(self, mock_limit):
+        """Test that validation fails when at the concurrent bot limit."""
+        mock_limit.return_value = 3
+
+        # Create bots equal to the mocked limit
+        for i in range(3):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/test-{i}",
+                name=f"Test Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNotNone(error)
+        self.assertEqual(error["error"], "You have exceeded the maximum number of concurrent bots (3) for your account. Please reach out to customer support to increase the limit.")
+        mock_limit.assert_called_once()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_only_in_meeting_bots_count_toward_limit(self, mock_limit):
+        """Test that only bots in in-meeting states count toward the concurrent limit."""
+        mock_limit.return_value = 5
+
+        # Create 3 bots in in-meeting states
+        in_meeting_states = [
+            BotStates.JOINING,
+            BotStates.JOINED_NOT_RECORDING,
+            BotStates.JOINED_RECORDING,
+        ]
+
+        for i, state in enumerate(in_meeting_states):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/in-meeting-{i}",
+                name=f"In Meeting Bot {i}",
+                state=state,
+            )
+
+        # Create 3 bots in pre-meeting states (should not count)
+        pre_meeting_states = [BotStates.READY, BotStates.SCHEDULED, BotStates.STAGED]
+        for i, state in enumerate(pre_meeting_states):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/pre-meeting-{i}",
+                name=f"Pre Meeting Bot {i}",
+                state=state,
+            )
+
+        # Create 3 bots in post-meeting states (should not count)
+        post_meeting_states = [BotStates.FATAL_ERROR, BotStates.ENDED, BotStates.DATA_DELETED]
+        for i, state in enumerate(post_meeting_states):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/post-meeting-{i}",
+                name=f"Post Meeting Bot {i}",
+                state=state,
+            )
+
+        # Should pass validation because only 3 bots are in in-meeting states (under limit of 5)
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+
+        # Verify the counts
+        active_bots_count = Bot.objects.filter(project=self.project).filter(BotEventManager.get_in_meeting_states_q_filter()).count()
+        self.assertEqual(active_bots_count, 3)
+
+        total_bots_count = Bot.objects.filter(project=self.project).count()
+        self.assertEqual(total_bots_count, 9)
+        mock_limit.assert_called_once()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_scheduled_bots_dont_count_toward_limit(self, mock_limit):
+        """Test that scheduled bots specifically don't count toward the limit."""
+        mock_limit.return_value = 3
+
+        # Create 5 scheduled bots (more than the limit)
+        future_time = timezone.now() + timedelta(hours=1)
+        for i in range(5):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/scheduled-{i}",
+                name=f"Scheduled Bot {i}",
+                state=BotStates.SCHEDULED,
+                join_at=future_time,
+            )
+
+        # Should pass validation because scheduled bots don't count
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+
+        # Add 2 bots in in-meeting states - should still pass (under limit of 3)
+        for i in range(2):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/active-bot-{i}",
+                name=f"Active Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNone(error)
+        mock_limit.assert_called()
+
+    @patch("bots.models.Project.concurrent_bots_limit")
+    def test_different_projects_have_separate_limits(self, mock_limit):
+        """Test that different projects have separate concurrent bot limits."""
+        mock_limit.return_value = 2
+
+        # Create a second project
+        organization2 = Organization.objects.create(name="Test Organization 2")
+        project2 = Project.objects.create(name="Test Project 2", organization=organization2)
+
+        # Fill up the first project to the limit
+        for i in range(2):
+            Bot.objects.create(
+                project=self.project,
+                meeting_url=f"https://meet.google.com/project1-{i}",
+                name=f"Project 1 Bot {i}",
+                state=BotStates.JOINED_RECORDING,
+            )
+
+        # First project should be at limit
+        error = validate_bot_concurrency_limit(self.project)
+        self.assertIsNotNone(error)
+
+        # Second project should still allow bots (no bots created yet)
+        error = validate_bot_concurrency_limit(project2)
+        self.assertIsNone(error)
+
+        # Create a bot in the second project - should succeed
+        bot, error = create_bot(
+            data={"meeting_url": "https://meet.google.com/project2-bot", "bot_name": "Project 2 Bot"},
+            source=BotCreationSource.API,
+            project=project2,
+        )
+
+        self.assertIsNotNone(bot)
+        self.assertIsNone(error)
+        mock_limit.assert_called()

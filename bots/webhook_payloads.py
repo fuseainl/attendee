@@ -1,4 +1,4 @@
-from bots.serializers import CalendarSerializer, ChatMessageSerializer, ParticipantEventSerializer
+from bots.serializers import CalendarSerializer, ChatMessageSerializer, ParticipantEventSerializer, ZoomOAuthConnectionSerializer
 
 
 def chat_message_webhook_payload(chat_message):
@@ -10,6 +10,7 @@ def utterance_webhook_payload(utterance):
         "speaker_name": utterance.participant.full_name,
         "speaker_uuid": utterance.participant.uuid,
         "speaker_user_uuid": utterance.participant.user_uuid,
+        "speaker_is_host": utterance.participant.is_host,
         "timestamp_ms": utterance.timestamp_ms,
         "duration_ms": utterance.duration_ms,
         "transcription": {"transcript": utterance.transcription.get("transcript")} if utterance.transcription else None,
@@ -27,4 +28,14 @@ def calendar_webhook_payload(calendar):
         "connection_failure_data": serialized_calendar["connection_failure_data"],
         "last_successful_sync_at": serialized_calendar["last_successful_sync_at"],
         "last_attempted_sync_at": serialized_calendar["last_attempted_sync_at"],
+    }
+
+
+def zoom_oauth_connection_webhook_payload(zoom_oauth_connection):
+    serialized_zoom_oauth_connection = ZoomOAuthConnectionSerializer(zoom_oauth_connection).data
+    return {
+        "state": serialized_zoom_oauth_connection["state"],
+        "connection_failure_data": serialized_zoom_oauth_connection["connection_failure_data"],
+        "last_successful_sync_at": serialized_zoom_oauth_connection["last_successful_sync_at"],
+        "last_attempted_sync_at": serialized_zoom_oauth_connection["last_attempted_sync_at"],
     }

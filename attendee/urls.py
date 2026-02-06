@@ -44,10 +44,13 @@ if not os.environ.get("DISABLE_ADMIN"):
 urlpatterns += [
     path("accounts/", include("allauth.urls")),
     path("accounts/", include("allauth.socialaccount.urls")),
-    path("external_webhooks/", include("bots.external_webhooks_urls")),
+    path("external_webhooks/", include("bots.external_webhooks_urls", namespace="external_webhooks")),
+    path("bot_sso/", include("bots.bot_sso_urls", namespace="bot_sso")),
     path("", views.home, name="home"),
     path("projects/", include("bots.projects_urls", namespace="projects")),
     path("api/v1/", include("bots.calendars_api_urls")),
+    path("api/v1/", include("bots.zoom_oauth_connections_api_urls")),
+    path("api/v1/", include("bots.app_session_api_urls")),
     path("api/v1/", include("bots.bots_api_urls")),
 ]
 

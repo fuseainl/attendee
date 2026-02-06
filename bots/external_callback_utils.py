@@ -124,6 +124,7 @@ def get_zoom_tokens(bot) -> Dict[str, str]:
             "zak_token": str or None,
             "join_token": str or None,
             "app_privilege_token": str or None
+            "onbehalf_token": str or None
         }
     """
     callback_settings = bot.settings.get("callback_settings", {})
@@ -134,6 +135,7 @@ def get_zoom_tokens(bot) -> Dict[str, str]:
         "zak_token": None,
         "join_token": None,
         "app_privilege_token": None,
+        "onbehalf_token": None,
     }
 
     if not zoom_tokens_url:
@@ -151,7 +153,7 @@ def get_zoom_tokens(bot) -> Dict[str, str]:
         return tokens
 
     # Extract tokens, setting to None if missing or invalid
-    required_fields = ["zak_token", "join_token", "app_privilege_token"]
+    required_fields = ["zak_token", "join_token", "app_privilege_token", "onbehalf_token"]
     for field in required_fields:
         token_value = response_data.get(field)
         if isinstance(token_value, str) and token_value.strip():

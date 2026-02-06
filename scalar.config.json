@@ -30,12 +30,31 @@
           "type": "page"
         },
         {
+          "path": "docs/voice_agents.md",
+          "type": "page"
+        },
+        {
           "path": "docs/realtime_audio.md",
           "type": "page"
         },
         {
           "path": "docs/calendar_integration.md",
           "type": "page"
+        },
+        {
+          "name": "Zoom",
+          "type": "folder",
+          "defaultOpen": true,
+          "children": [
+            {
+              "path": "docs/zoom_app_review.md",
+              "type": "page"
+            },
+            {
+              "path": "docs/zoom_oauth.md",
+              "type": "page"
+            }
+          ]
         },
         {
           "path": "docs/faq.md",

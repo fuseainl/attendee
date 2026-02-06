@@ -18,9 +18,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .authentication import ApiKeyAuthentication
-from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, send_sync_command
+from .bots_api_utils import BotCreationSource, create_bot, create_bot_chat_message_request, create_bot_media_request_for_image, delete_bot, patch_bot, patch_bot_transcription_settings, patch_bot_voice_agent_settings, send_sync_command
 from .launch_bot_utils import launch_bot
+from .meeting_url_utils import meeting_type_from_url
 from .models import (
+    AsyncTranscription,
+    AsyncTranscriptionStates,
     Bot,
     BotEventManager,
     BotEventSubTypes,
@@ -33,23 +36,31 @@ from .models import (
     Credentials,
     MediaBlob,
     MeetingTypes,
+    Participant,
     ParticipantEvent,
     Recording,
+    RecordingViews,
     Utterance,
 )
 from .serializers import (
+    AsyncTranscriptionSerializer,
     BotChatMessageRequestSerializer,
     BotImageSerializer,
     BotSerializer,
     ChatMessageSerializer,
+    CreateAsyncTranscriptionSerializer,
     CreateBotSerializer,
+    OutputVideoRequestSerializer,
     ParticipantEventSerializer,
+    ParticipantSerializer,
     PatchBotSerializer,
+    PatchBotVoiceAgentSettingsSerializer,
     RecordingSerializer,
     SpeechSerializer,
     TranscriptUtteranceSerializer,
 )
-from .utils import meeting_type_from_url
+from .tasks import process_async_transcription
+from .throttling import ProjectPostThrottle
 
 TokenHeaderParameter = [
     OpenApiParameter(
@@ -122,8 +133,149 @@ class NotFoundView(APIView):
         return Response({"error": "Not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
-class BotCreateView(APIView):
+class BotCursorPagination(CursorPagination):
+    ordering = "created_at"
+    page_size = 25
+
+
+class BotListCreateView(GenericAPIView):
     authentication_classes = [ApiKeyAuthentication]
+    pagination_class = BotCursorPagination
+    serializer_class = BotSerializer
+
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(
+        operation_id="List Bots",
+        summary="List bots in a project",
+        description="Returns a list of bots for the authenticated project. Results are paginated using cursor pagination.",
+        responses={
+            200: OpenApiResponse(
+                response=BotSerializer(many=True),
+                description="List of bots",
+            )
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="meeting_url",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter bots by meeting URL",
+                required=False,
+                examples=[OpenApiExample("Meeting URL Example", value="https://zoom.us/j/123456789")],
+            ),
+            OpenApiParameter(
+                name="deduplication_key",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter bots by deduplication key",
+                required=False,
+                examples=[OpenApiExample("Deduplication Key Example", value="my-unique-bot-key")],
+            ),
+            OpenApiParameter(
+                name="states",
+                type={"type": "array", "items": {"type": "string", "enum": list(BotStates._get_state_to_api_code_mapping().values())}},
+                location=OpenApiParameter.QUERY,
+                description="Filter bots by state. Can specify multiple states.",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="join_at_after",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at after this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T12:34:56Z")],
+            ),
+            OpenApiParameter(
+                name="join_at_before",
+                type={"type": "string", "format": "ISO 8601 datetime"},
+                location=OpenApiParameter.QUERY,
+                description="Only return bots with join_at before this time.",
+                required=False,
+                examples=[OpenApiExample("DateTime Example", value="2024-01-18T13:34:56Z")],
+            ),
+            OpenApiParameter(
+                name="cursor",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Cursor for pagination",
+                required=False,
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def get(self, request):
+        # Start with all bots for the project
+        bots_query = Bot.objects.filter(project=request.auth.project)
+
+        # Filter by meeting_url if provided
+        meeting_url = request.query_params.get("meeting_url")
+        if meeting_url:
+            bots_query = bots_query.filter(meeting_url=meeting_url)
+
+        # Filter by deduplication_key if provided
+        deduplication_key = request.query_params.get("deduplication_key")
+        if deduplication_key:
+            bots_query = bots_query.filter(deduplication_key=deduplication_key)
+
+        # Filter by states if provided
+        states = request.query_params.getlist("states")
+        if states:
+            # Convert API code strings to state integer values
+            state_values = []
+            for state_api_code in states:
+                state_value = BotStates.api_code_to_state(state_api_code)
+                if state_value is not None:
+                    state_values.append(state_value)
+                else:
+                    return Response({"error": f"Invalid state: {state_api_code}. Valid states are: {', '.join(BotStates.state_to_api_code(state) for state in BotStates)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            if state_values:
+                bots_query = bots_query.filter(state__in=state_values)
+
+        # Filter by join_at_after if provided
+        join_at_after = request.query_params.get("join_at_after")
+        if join_at_after:
+            try:
+                join_at_after_datetime = parse_datetime(str(join_at_after))
+            except Exception:
+                join_at_after_datetime = None
+
+            if not join_at_after_datetime:
+                return Response(
+                    {"error": "Invalid join_at_after format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__gt=join_at_after_datetime)
+
+        # Filter by join_at_before if provided
+        join_at_before = request.query_params.get("join_at_before")
+        if join_at_before:
+            try:
+                join_at_before_datetime = parse_datetime(str(join_at_before))
+            except Exception:
+                join_at_before_datetime = None
+
+            if not join_at_before_datetime:
+                return Response(
+                    {"error": "Invalid join_at_before format. Use ISO 8601 format (e.g., 2024-01-18T12:34:56Z)"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            bots_query = bots_query.filter(join_at__lt=join_at_before_datetime)
+
+        # Apply ordering for cursor pagination
+        bots = bots_query.order_by("created_at")
+
+        # Let the pagination class handle the rest
+        page = self.paginate_queryset(bots)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(bots, many=True)
+        return Response(serializer.data)
 
     @extend_schema(
         operation_id="Create Bot",
@@ -155,6 +307,7 @@ class BotCreateView(APIView):
 
 class SpeechView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output speech",
@@ -223,24 +376,13 @@ class SpeechView(APIView):
 
 class OutputVideoView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output video",
         summary="Output video",
         description="Causes the bot to output a video in the meeting.",
-        request={
-            "application/json": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL of the video to output. Must be a valid URL to an mp4 file.",
-                    },
-                },
-                "required": ["url"],
-                "additionalProperties": False,
-            }
-        },
+        request=OutputVideoRequestSerializer,
         responses={
             200: OpenApiResponse(description="Video request created successfully"),
             400: OpenApiResponse(description="Invalid input"),
@@ -265,22 +407,13 @@ class OutputVideoView(APIView):
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        serializer = OutputVideoRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         # Get which type of meeting the bot is in
         meeting_type = meeting_type_from_url(bot.meeting_url)
-        if meeting_type != MeetingTypes.GOOGLE_MEET and meeting_type != MeetingTypes.ZOOM:
-            # Video output is not supported in this meeting type
-            return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
         if meeting_type == MeetingTypes.ZOOM and os.getenv("ENABLE_ZOOM_VIDEO_OUTPUT") != "true":
             return Response({"error": "Video output is not supported in this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Validate the request data
-        url = request.data.get("url")
-        if not url:
-            return Response({"error": "URL is required"}, status=status.HTTP_400_BAD_REQUEST)
-        if not url.startswith("https://"):
-            return Response({"error": "URL must start with https://"}, status=status.HTTP_400_BAD_REQUEST)
-        if not url.endswith(".mp4"):
-            return Response({"error": "URL must end with .mp4"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if bot is in a state that can play media
         if not BotEventManager.is_state_that_can_play_media(bot.state):
@@ -296,7 +429,8 @@ class OutputVideoView(APIView):
         BotMediaRequest.objects.create(
             bot=bot,
             media_type=BotMediaRequestMediaTypes.VIDEO,
-            media_url=url,
+            media_url=serializer.validated_data["url"],
+            loop=serializer.validated_data["loop"],
         )
 
         # Send sync command to notify bot of new media request
@@ -307,6 +441,7 @@ class OutputVideoView(APIView):
 
 class OutputAudioView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output Audio",
@@ -406,6 +541,7 @@ class OutputAudioView(APIView):
 
 class OutputImageView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Output Image",
@@ -643,8 +779,16 @@ class TranscriptView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            async_transcription = None
+            if request.query_params.get("async_transcription_id"):
+                async_transcription = recording.async_transcriptions.get(
+                    object_id=request.query_params.get("async_transcription_id"),
+                )
+                if async_transcription.state != AsyncTranscriptionStates.COMPLETE:
+                    return Response({"error": f"Async transcription {async_transcription.object_id} is not complete. It is in state {AsyncTranscriptionStates.state_to_api_code(async_transcription.state)}"}, status=status.HTTP_400_BAD_REQUEST)
+
             # Get all utterances with transcriptions, sorted by timeline
-            utterances_query = Utterance.objects.select_related("participant").filter(recording=recording, transcription__isnull=False)
+            utterances_query = Utterance.objects.select_related("participant").filter(recording=recording, transcription__isnull=False, async_transcription=async_transcription)
 
             # Apply updated_after filter if provided
             updated_after = request.query_params.get("updated_after")
@@ -670,6 +814,7 @@ class TranscriptView(APIView):
                     "speaker_name": utterance.participant.full_name,
                     "speaker_uuid": utterance.participant.uuid,
                     "speaker_user_uuid": utterance.participant.user_uuid,
+                    "speaker_is_host": utterance.participant.is_host,
                     "timestamp_ms": utterance.timestamp_ms,
                     "duration_ms": utterance.duration_ms,
                     "transcription": utterance.transcription,
@@ -683,6 +828,108 @@ class TranscriptView(APIView):
 
         except Bot.DoesNotExist:
             return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+        except AsyncTranscription.DoesNotExist:
+            return Response({"error": "Async Transcription not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            if not bot.project.organization.is_async_transcription_enabled:
+                return Response({"error": "Async transcription is not enabled for your account."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not bot.record_async_transcription_audio_chunks():
+                return Response({"error": "Cannot generate async transcription because you did not enable recording_settings.record_async_transcription_audio_chunks when you created the bot."}, status=status.HTTP_400_BAD_REQUEST)
+
+            if bot.state != BotStates.ENDED:
+                return Response({"error": "Cannot create async transcription because bot is not in state ended. It is in state " + BotStates.state_to_api_code(bot.state)}, status=status.HTTP_400_BAD_REQUEST)
+
+            recording = Recording.objects.filter(bot=bot, is_default_recording=True).first()
+            if not recording:
+                return Response(
+                    {"error": "No recording found for bot"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if not recording.audio_chunks.exclude(audio_blob=b"").exists():
+                return Response({"error": "Cannot create async transcription because the per-speaker audio data has been deleted or was never created."}, status=status.HTTP_400_BAD_REQUEST)
+
+            existing_async_transcription_count = AsyncTranscription.objects.filter(
+                recording=recording,
+            ).count()
+            # We only allow a max of 4 async transcriptions per recording
+            if existing_async_transcription_count >= 4:
+                return Response({"error": "You cannot have more than 4 async transcriptions per bot."}, status=status.HTTP_400_BAD_REQUEST)
+
+            serializer = CreateAsyncTranscriptionSerializer(data={"transcription_settings": request.data.get("transcription_settings")})
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            async_transcription = AsyncTranscription.objects.create(recording=recording, settings=serializer.validated_data)
+
+            # Create celery task to process the async transcription
+            process_async_transcription.delay(async_transcription.id)
+
+            return Response(AsyncTranscriptionSerializer(async_transcription).data)
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    @extend_schema(
+        operation_id="Delete Bot Transcript",
+        summary="Delete the transcript for a bot",
+        description="Deletes transcript utterances. If async_transcription_id is provided, deletes utterances for that async transcription. Otherwise, deletes the default (real-time) transcription utterances.",
+        responses={
+            200: OpenApiResponse(
+                description="Transcript deleted successfully",
+            ),
+            404: OpenApiResponse(description="Bot, recording, or async transcription not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+            OpenApiParameter(
+                name="async_transcription_id",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Optional. If provided, deletes the utterances for the specified async transcription. If not provided, deletes the default (real-time) transcription utterances.",
+                required=False,
+                examples=[OpenApiExample("Async Transcription ID Example", value="tran_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def delete(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            recording = Recording.objects.filter(bot=bot, is_default_recording=True).first()
+            if not recording:
+                return Response(
+                    {"error": "No recording found for bot"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            async_transcription = None
+            if request.query_params.get("async_transcription_id"):
+                async_transcription = recording.async_transcriptions.get(
+                    object_id=request.query_params.get("async_transcription_id"),
+                )
+
+            # Delete all utterances with transcriptions for the given async_transcription
+            Utterance.objects.filter(recording=recording, async_transcription=async_transcription).delete()
+
+            return Response(status=status.HTTP_200_OK)
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+        except AsyncTranscription.DoesNotExist:
+            return Response({"error": "Async Transcription not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class BotDetailView(APIView):
@@ -721,15 +968,15 @@ class BotDetailView(APIView):
 
     @extend_schema(
         operation_id="Patch Bot",
-        summary="Update a scheduled bot",
-        description="Updates a scheduled bot. Currently only the join_at field can be updated, and only for bots in the scheduled state.",
+        summary="Update a bot",
+        description="Updates a bot. Currently only the join_at and metadata fields can be updated. The join_at field can only be updated when the bot is in the scheduled state. The metadata field can be updated at any time.",
         request=PatchBotSerializer,
         responses={
             200: OpenApiResponse(
                 response=BotSerializer,
                 description="Bot updated successfully",
             ),
-            400: OpenApiResponse(description="Invalid input or bot is not in scheduled state"),
+            400: OpenApiResponse(description="Invalid input or bot cannot be updated"),
             404: OpenApiResponse(description="Bot not found"),
         },
         parameters=[
@@ -883,6 +1130,7 @@ class ChatMessagesView(GenericAPIView):
 
 class SendChatMessageView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Send Chat Message",
@@ -936,6 +1184,9 @@ class SendChatMessageView(APIView):
 
             return Response(status=status.HTTP_200_OK)
 
+        except ValidationError as e:
+            logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
+            return Response({"error": e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logging.error(f"Error creating chat message request for bot {bot.object_id}: {str(e)}")
             return Response(
@@ -944,8 +1195,166 @@ class SendChatMessageView(APIView):
             )
 
 
+class VoiceAgentSettingsView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    @extend_schema(
+        operation_id="Update Voice Agent Settings",
+        summary="Update the voice agent settings for a bot",
+        description="Updates the voice agent settings for a bot.",
+        request=PatchBotVoiceAgentSettingsSerializer,
+        responses={
+            200: OpenApiResponse(description="Voice agent settings updated successfully"),
+            400: OpenApiResponse(description="Invalid input"),
+            404: OpenApiResponse(description="Bot not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def patch(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            bot_updated, error = patch_bot_voice_agent_settings(bot, request.data)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                logging.info(f"Patching voice agent settings for bot {bot.object_id}")
+                send_sync_command(bot, "sync_voice_agent_settings")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error patching voice agent settings for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to patch voice agent settings"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class TranscriptionSettingsView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+
+    @extend_schema(exclude=True)
+    def patch(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            bot_updated, error = patch_bot_transcription_settings(bot, request.data)
+            if error:
+                return Response(error, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                logging.info(f"Patching transcription settings for bot {bot.object_id}")
+                send_sync_command(bot, "sync_transcription_settings")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error patching transcription settings for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to patch transcription settings"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AdmitFromWaitingRoomView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(exclude=True)
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            # This functionality is only supported for zoom bots
+            meeting_type = meeting_type_from_url(bot.meeting_url)
+            if meeting_type != MeetingTypes.ZOOM:
+                return Response({"error": "Admitting from waiting room is not supported for this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if bot is in a state that allows admitting from waiting room
+            if not BotEventManager.is_state_that_can_admit_from_waiting_room(bot.state):
+                return Response(
+                    {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot admit from waiting room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Call the utility method on the bot instance to admit from waiting room
+            try:
+                logging.info(f"Admitting from waiting room for bot {bot.object_id}")
+                send_sync_command(bot, "admit_from_waiting_room")
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error admitting from waiting room for bot {bot.object_id}: {str(e)}")
+                return Response(
+                    {"error": "Failed to admit from waiting room"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ChangeGalleryViewPageView(APIView):
+    authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
+
+    @extend_schema(exclude=True)
+    def post(self, request, object_id):
+        try:
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            # This functionality is only supported for zoom bots
+            meeting_type = meeting_type_from_url(bot.meeting_url)
+            if meeting_type != MeetingTypes.ZOOM:
+                return Response({"error": "Changing gallery view page is not supported for this meeting type"}, status=status.HTTP_400_BAD_REQUEST)
+            if not bot.use_zoom_web_adapter():
+                return Response({"error": "Changing gallery view page is only supported for Zoom Web SDK"}, status=status.HTTP_400_BAD_REQUEST)
+            if bot.recording_view() != RecordingViews.GALLERY_VIEW:
+                return Response({"error": "Changing gallery view page is only supported for when recording in gallery view"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if bot is in a state that allows changing the gallery view page
+            if not BotEventManager.is_state_that_can_change_gallery_view_page(bot.state):
+                return Response(
+                    {"error": f"Bot is in state {BotStates.state_to_api_code(bot.state)} and cannot change the gallery view page"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            direction = request.data.get("direction", "next")
+            sync_command_to_send = "change_gallery_view_page_next" if direction == "next" else "change_gallery_view_page_previous"
+
+            # Call the utility method on the bot instance to change the gallery view page
+            try:
+                logging.info(f"Changing gallery view page for bot {bot.object_id} to {direction}")
+
+                send_sync_command(bot, sync_command_to_send)
+                return Response(status=status.HTTP_200_OK)
+            except Exception as e:
+                logging.error(f"Error changing gallery view page for bot {bot.object_id} to {direction}: {str(e)}")
+                return Response(
+                    {"error": f"Failed to change gallery view page for bot {bot.object_id} to {direction}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
 class PauseRecordingView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Pause Recording",
@@ -974,12 +1383,6 @@ class PauseRecordingView(APIView):
     def post(self, request, object_id):
         try:
             bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
-
-            # This functionality is not supported for zoom yet
-            meeting_type = meeting_type_from_url(bot.meeting_url)
-            if meeting_type == MeetingTypes.ZOOM:
-                # Pausing recording is not supported for zoom
-                return Response({"error": "Pausing the recording is not supported for zoom bots"}, status=status.HTTP_400_BAD_REQUEST)
 
             # Check if bot is in a state that allows pausing the recording
             if not BotEventManager.is_state_that_can_pause_recording(bot.state):
@@ -1020,6 +1423,7 @@ class PauseRecordingView(APIView):
 
 class ResumeRecordingView(APIView):
     authentication_classes = [ApiKeyAuthentication]
+    throttle_classes = [ProjectPostThrottle]
 
     @extend_schema(
         operation_id="Resume Recording",
@@ -1192,6 +1596,100 @@ class ParticipantEventsView(GenericAPIView):
                 return self.get_paginated_response(serializer.data)
 
             serializer = self.get_serializer(events, many=True)
+            return Response(serializer.data)
+
+        except Bot.DoesNotExist:
+            return Response({"error": "Bot not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ParticipantCursorPagination(CursorPagination):
+    ordering = "created_at"
+    page_size = 25
+
+
+class ParticipantsView(GenericAPIView):
+    authentication_classes = [ApiKeyAuthentication]
+    pagination_class = ParticipantCursorPagination
+    serializer_class = ParticipantSerializer
+
+    @extend_schema(
+        operation_id="Get Participants",
+        summary="Get participants for a bot",
+        description="Returns the participants for a bot. Results are paginated using cursor pagination.",
+        responses={
+            200: OpenApiResponse(
+                response=ParticipantSerializer(many=True),
+                description="List of participants",
+            ),
+            404: OpenApiResponse(description="Bot not found"),
+        },
+        parameters=[
+            *TokenHeaderParameter,
+            OpenApiParameter(
+                name="object_id",
+                type=str,
+                location=OpenApiParameter.PATH,
+                description="Bot ID",
+                examples=[OpenApiExample("Bot ID Example", value="bot_xxxxxxxxxxx")],
+            ),
+            OpenApiParameter(
+                name="cursor",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Cursor for pagination",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="is_host",
+                type=bool,
+                location=OpenApiParameter.QUERY,
+                description="Filter participants by whether they are the meeting host",
+                required=False,
+            ),
+            OpenApiParameter(
+                name="id",
+                type=str,
+                location=OpenApiParameter.QUERY,
+                description="Filter participants by participant ID",
+                required=False,
+                examples=[OpenApiExample("Participant ID Example", value="par_xxxxxxxxxxx")],
+            ),
+        ],
+        tags=["Bots"],
+    )
+    def get(self, request, object_id):
+        try:
+            # Get the bot and verify it belongs to the project
+            bot = Bot.objects.get(object_id=object_id, project=request.auth.project)
+
+            # Query participants for this bot. Do not show the participant for the bot itself
+            participants_query = Participant.objects.filter(bot=bot, is_the_bot=False)
+
+            # Optional filters
+            is_host_param = request.query_params.get("is_host")
+            if is_host_param is not None:
+                value = str(is_host_param).strip().lower()
+                if value == "true":
+                    participants_query = participants_query.filter(is_host=True)
+                elif value == "false":
+                    participants_query = participants_query.filter(is_host=False)
+                else:
+                    return Response({"error": "Invalid is_host value. Use true or false."}, status=status.HTTP_400_BAD_REQUEST)
+
+            participant_id = request.query_params.get("id")
+            if participant_id:
+                participants_query = participants_query.filter(object_id=participant_id)
+
+            # Apply ordering for cursor pagination
+            participants = participants_query.order_by("created_at")
+
+            # Let the pagination class handle the rest
+            page = self.paginate_queryset(participants)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+
+            serializer = self.get_serializer(participants, many=True)
             return Response(serializer.data)
 
         except Bot.DoesNotExist:

@@ -1,17 +1,25 @@
 import logging
+import os
 import signal
 import time
 
+import redis
 from django.core.management.base import BaseCommand
-from django.db import connection, transaction
+from django.db import connection, models, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from bots.models import Bot, BotStates, Calendar, CalendarStates
+from accounts.models import Organization
+from bots.models import Bot, BotStates, Calendar, CalendarStates, ZoomOAuthConnection, ZoomOAuthConnectionStates
+from bots.tasks.autopay_charge_task import enqueue_autopay_charge_task
 from bots.tasks.launch_scheduled_bot_task import launch_scheduled_bot
+from bots.tasks.refresh_zoom_oauth_connection_task import enqueue_refresh_zoom_oauth_connection_task
 from bots.tasks.sync_calendar_task import enqueue_sync_calendar_task
+from bots.tasks.sync_zoom_oauth_connection_task import enqueue_sync_zoom_oauth_connection_task
 
 log = logging.getLogger(__name__)
+
+CALENDAR_SYNC_THRESHOLD_HOURS = 24  # The longest a calendar can go without having been synced
 
 
 class Command(BaseCommand):
@@ -27,10 +35,27 @@ class Command(BaseCommand):
 
     # Graceful shutdown flags
     _keep_running = True
+    _redis_client = None
 
     def _graceful_exit(self, signum, frame):
         log.info("Received %s, shutting down after current cycle", signum)
         self._keep_running = False
+
+    def _get_redis_client(self):
+        """Get or create a Redis client connection."""
+        if self._redis_client is None:
+            redis_url = os.getenv("REDIS_URL") + ("?ssl_cert_reqs=none" if os.getenv("DISABLE_REDIS_SSL") else "")
+            self._redis_client = redis.from_url(redis_url)
+        return self._redis_client
+
+    def _log_celery_queue_size(self):
+        """Log the size of the default Celery queue."""
+        try:
+            queue_size = self._get_redis_client().llen("celery")
+            log.info("Celery queue size: %d", queue_size)
+        except Exception:
+            log.exception("Failed to get Celery queue size")
+            self._redis_client = None  # Reset connection on failure
 
     def handle(self, *args, **opts):
         # Trap SIGINT / SIGTERM so Kubernetes or Heroku can stop the container cleanly
@@ -43,8 +68,12 @@ class Command(BaseCommand):
         while self._keep_running:
             began = time.monotonic()
             try:
+                self._log_celery_queue_size()
                 self._run_scheduled_bots()
                 self._run_periodic_calendar_syncs()
+                self._run_periodic_zoom_oauth_connection_syncs()
+                self._run_periodic_zoom_oauth_connection_token_refreshs()
+                self._run_autopay_tasks()
             except Exception:
                 log.exception("Scheduler cycle failed")
             finally:
@@ -71,12 +100,12 @@ class Command(BaseCommand):
     def _run_periodic_calendar_syncs(self):
         """
         Run periodic calendar syncs.
-        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 30 minutes.
+        Launch sync tasks for calendars that haven't had a sync task enqueued in the last 24 hours.
         """
         now = timezone.now()
-        cutoff_time = now - timezone.timedelta(minutes=30)
+        cutoff_time = now - timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
 
-        # Find connected calendars that haven't had a sync task enqueued in the last 30 minutes
+        # Find connected calendars that haven't had a sync task enqueued in the last 24 hours
         calendars = Calendar.objects.filter(
             state=CalendarStates.CONNECTED,
         ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))
@@ -87,6 +116,46 @@ class Command(BaseCommand):
             enqueue_sync_calendar_task(calendar)
 
         log.info("Launched %d calendar sync tasks", len(calendars))
+
+    def _run_periodic_zoom_oauth_connection_token_refreshs(self):
+        """
+        Run periodic zoom oauth connection token refreshs.
+        Launch token refresh tasks for zoom oauth connections that haven't had a token refresh task enqueued in the last 30 days.
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(days=30)
+
+        zoom_oauth_connections = ZoomOAuthConnection.objects.filter(
+            state=ZoomOAuthConnectionStates.CONNECTED,
+        ).filter(Q(token_refresh_task_enqueued_at__isnull=True) | Q(token_refresh_task_enqueued_at__lte=cutoff_time) | Q(token_refresh_task_requested_at__isnull=False))
+
+        for zoom_oauth_connection in zoom_oauth_connections:
+            last_enqueued = zoom_oauth_connection.token_refresh_task_enqueued_at.isoformat() if zoom_oauth_connection.token_refresh_task_enqueued_at else "never"
+            log.info("Launching zoom oauth connection token refresh for zoom oauth connection %s (last enqueued: %s)", zoom_oauth_connection.object_id, last_enqueued)
+            enqueue_refresh_zoom_oauth_connection_task(zoom_oauth_connection)
+
+        log.info("Launched %d zoom oauth connection token refresh tasks", len(zoom_oauth_connections))
+
+    def _run_periodic_zoom_oauth_connection_syncs(self):
+        """
+        Run periodic zoom oauth connection syncs.
+        Launch sync tasks for zoom oauth connections that haven't had a sync task enqueued in the last 7 days.
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(days=7)
+
+        # Find connected zoom oauth connections that haven't had a sync task enqueued in the last 7 days
+        zoom_oauth_connections = ZoomOAuthConnection.objects.filter(
+            state=ZoomOAuthConnectionStates.CONNECTED,
+            is_local_recording_token_supported=True,
+        ).filter(Q(sync_task_enqueued_at__isnull=True) | Q(sync_task_enqueued_at__lte=cutoff_time) | Q(sync_task_requested_at__isnull=False))
+
+        for zoom_oauth_connection in zoom_oauth_connections:
+            last_enqueued = zoom_oauth_connection.sync_task_enqueued_at.isoformat() if zoom_oauth_connection.sync_task_enqueued_at else "never"
+            log.info("Launching zoom oauth connection sync for zoom oauth connection %s (last enqueued: %s)", zoom_oauth_connection.object_id, last_enqueued)
+            enqueue_sync_zoom_oauth_connection_task(zoom_oauth_connection)
+
+        log.info("Launched %d zoom oauth connection sync tasks", len(zoom_oauth_connections))
 
     # -----------------------------------------------------------
     def _run_scheduled_bots(self):
@@ -110,3 +179,46 @@ class Command(BaseCommand):
                 launch_scheduled_bot.delay(bot.id, bot.join_at.isoformat())
 
             log.info("Launched %s bots", len(bots_to_launch))
+
+    def _run_autopay_tasks(self):
+        """
+        Run autopay tasks for organizations that meet all criteria:
+        - Autopay is enabled
+        - Has a Stripe customer ID
+        - Credit balance is below the threshold
+        - No autopay task has been enqueued in the last day
+        """
+        now = timezone.now()
+        cutoff_time = now - timezone.timedelta(days=1)
+
+        # Find organizations that meet all autopay criteria
+        organizations = Organization.objects.filter(
+            # Autopay must be enabled
+            autopay_enabled=True,
+            # Must have a Stripe customer ID
+            autopay_stripe_customer_id__isnull=False,
+            # Credit balance must be below threshold
+            centicredits__lt=models.F("autopay_threshold_centricredits"),
+            # No charge failure
+            autopay_charge_failure_data__isnull=True,
+        ).filter(
+            # No autopay task enqueued in the last day (or never enqueued)
+            Q(autopay_charge_task_enqueued_at__isnull=True) | Q(autopay_charge_task_enqueued_at__lte=cutoff_time)
+        )
+
+        for organization in organizations:
+            credits = organization.credits()
+            threshold = organization.autopay_threshold_credits()
+            last_enqueued = organization.autopay_charge_task_enqueued_at.isoformat() if organization.autopay_charge_task_enqueued_at else "never"
+
+            log.info(
+                "Enqueueing autopay task for organization %s (credits: %.2f, threshold: %.2f, last enqueued: %s)",
+                organization.id,
+                credits,
+                threshold,
+                last_enqueued,
+            )
+
+            enqueue_autopay_charge_task(organization)
+
+        log.info("Enqueued %d autopay tasks", len(organizations))

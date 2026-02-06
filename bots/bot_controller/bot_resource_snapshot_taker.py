@@ -1,5 +1,6 @@
 import datetime
 import logging
+from collections import defaultdict
 
 from django.utils import timezone
 
@@ -9,6 +10,119 @@ logger = logging.getLogger(__name__)
 
 
 from pathlib import Path
+
+
+def get_db_connection_count(db_port: int = 5432) -> int:
+    """
+    Count established TCP connections to the specified port (default: PostgreSQL 5432).
+
+    Reads from /proc/net/tcp and /proc/net/tcp6 to count connections without
+    requiring the psutil dependency.
+
+    The /proc/net/tcp format has columns:
+      sl  local_address  rem_address  st  ...
+    where rem_address is hex IP:PORT and st is connection state (01 = ESTABLISHED).
+    """
+    count = 0
+    db_port_hex = format(db_port, "04X")  # 5432 -> "1538"
+
+    for tcp_file in [Path("/proc/net/tcp"), Path("/proc/net/tcp6")]:
+        try:
+            with tcp_file.open() as f:
+                next(f, None)  # Skip header line
+                for line in f:
+                    parts = line.split()
+                    if len(parts) < 4:
+                        continue
+
+                    rem_address = parts[2]
+                    state = parts[3]
+
+                    # Remote port is after the colon in rem_address (e.g., "0A0A0A0A:1538")
+                    if ":" in rem_address:
+                        rem_port = rem_address.split(":")[1].upper()
+                        # State 01 = ESTABLISHED
+                        if rem_port == db_port_hex and state == "01":
+                            count += 1
+        except (FileNotFoundError, PermissionError):
+            continue
+
+    return count
+
+
+def get_process_memory_list():
+    """
+    Scan /proc and return a list of process *names* with their proportional
+    set size (PSS) memory usage aggregated across all PIDs with that name.
+
+    Returns a list of dicts:
+        [
+            {"memory_megabytes": <int MiB>, "name": <str>, "memory_percentage": <float>},
+            ...
+        ]
+
+    Sorted by memory descending (largest first).
+    """
+    proc_root = Path("/proc")
+    memory_by_name_kb = defaultdict(int)
+
+    for entry in proc_root.iterdir():
+        # Only numeric dirs are PIDs
+        if not entry.name.isdigit():
+            continue
+
+        pid_dir = entry
+        smaps_rollup_path = pid_dir / "smaps_rollup"
+        comm_path = pid_dir / "comm"
+
+        try:
+            # Read PSS from smaps_rollup (kB)
+            pss_kb = None
+            with smaps_rollup_path.open() as f:
+                for line in f:
+                    # Example: "Pss:          12345 kB"
+                    if line.startswith("Pss:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            pss_kb = int(parts[1])
+                        break
+
+            if pss_kb is None:
+                continue
+
+            # Get a human-ish name; fall back to something generic if missing
+            try:
+                name = comm_path.read_text().strip() or "unknown"
+            except FileNotFoundError:
+                name = "unknown"
+
+            # Aggregate by name
+            memory_by_name_kb[name] += pss_kb
+
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            # Process may have exited or we might not have perms; just skip
+            continue
+
+    # Convert to list of dicts in MiB
+    processes = [
+        {
+            "name": name,
+            "memory_megabytes": int(total_kb / 1024),  # kB → MiB (approx)
+        }
+        for name, total_kb in memory_by_name_kb.items()
+    ]
+
+    # Sort by memory descending (largest first)
+    processes.sort(key=lambda p: p["memory_megabytes"], reverse=True)
+
+    # Get total memory and add a percentage of the total memory to the processes
+    total_memory = sum(p["memory_megabytes"] for p in processes) or 1
+    for process in processes:
+        process["memory_percentage"] = process["memory_megabytes"] / total_memory * 100
+
+    # Take top 5 “names”
+    top_5_processes = processes[:5]
+    return top_5_processes
 
 
 def _detect_cgroup_layout():
@@ -159,9 +273,23 @@ class BotResourceSnapshotTaker:
             logger.error(f"Error getting resource usage for bot {self.bot.object_id}: {ram_usage_megabytes} or {cpu_usage_millicores_delta_per_second} was None")
             return
 
+        processes = []
+        try:
+            processes = get_process_memory_list()
+        except Exception as e:
+            logger.error(f"Error getting process memory list for bot {self.bot.object_id}: {e}. Continuing...")
+
+        db_connection_count = None
+        try:
+            db_connection_count = get_db_connection_count()
+        except Exception as e:
+            logger.error(f"Error getting db connection count for bot {self.bot.object_id}: {e}. Continuing...")
+
         snapshot_data = {
             "ram_usage_megabytes": ram_usage_megabytes,
             "cpu_usage_millicores": cpu_usage_millicores_delta_per_second,
+            "processes": processes,
+            "db_connection_count": db_connection_count,
         }
 
         BotResourceSnapshot.objects.create(bot=self.bot, data=snapshot_data)
