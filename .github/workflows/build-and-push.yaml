@@ -12,6 +12,7 @@ on:
     branches:
       - main  # Change this to your preferred branch
       - dev/k8s
+      - patch/upstream-0602
 
 jobs:
   build-and-push:
