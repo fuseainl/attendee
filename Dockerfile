@@ -120,9 +120,9 @@ ENV project=attendee
 ENV cwd=/$project
 WORKDIR $cwd
 
-# Copy only what you need; set ownership/perm at copy time
-COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY --chown=app:app . .
+COPY entrypoint.sh /opt/bin/entrypoint.sh
+RUN chmod +x /opt/bin/entrypoint.sh
+RUN adduser root pulse-access
 
 # COPY /app/migration_entrypoint.sh /opt/bin/migration_entrypoint.sh
 # RUN chmod +x /opt/bin/migration_entrypoint.sh
