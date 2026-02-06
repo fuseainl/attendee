@@ -108,21 +108,18 @@ ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
 RUN chmod +x /tini
 
+
 WORKDIR /opt
 
 FROM deps AS build
 
-# Create non-root user
-RUN useradd -m -u 1000 -s /bin/bash app
-
-# Workdir owned by app in one shot during copy
-ENV project=attendee
-ENV cwd=/$project
 WORKDIR $cwd
+COPY . .
 
 COPY entrypoint.sh /opt/bin/entrypoint.sh
 RUN chmod +x /opt/bin/entrypoint.sh
 RUN adduser root pulse-access
+
 
 # COPY /app/migration_entrypoint.sh /opt/bin/migration_entrypoint.sh
 # RUN chmod +x /opt/bin/migration_entrypoint.sh
