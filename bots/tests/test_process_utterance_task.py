@@ -4,6 +4,7 @@ from unittest import mock
 from django.test import TransactionTestCase
 
 from bots.models import (
+    AudioChunk,
     Bot,
     Credentials,
     Organization,
@@ -15,7 +16,7 @@ from bots.models import (
     TranscriptionFailureReasons,
     Utterance,
 )
-from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_deepgram, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
+from bots.tasks.process_utterance_task import get_transcription_via_assemblyai, get_transcription_via_custom_async, get_transcription_via_deepgram, get_transcription_via_elevenlabs, get_transcription_via_gladia, get_transcription_via_openai, get_transcription_via_sarvam, process_utterance
 
 
 class ProcessUtteranceTaskTest(TransactionTestCase):
@@ -38,13 +39,13 @@ class ProcessUtteranceTaskTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid=str(uuid.uuid4()))
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"rawpcmbytes", timestamp_ms=0, duration_ms=500, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"rawpcmbytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=500,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
 
@@ -114,42 +115,42 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
         """Test that deepgram_redaction_settings returns correct redaction list with single type."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["pii"])
 
     def test_deepgram_redaction_settings_returns_correct_list_with_multiple_types(self):
         """Test that deepgram_redaction_settings returns correct redaction list with multiple types."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii", "pci", "numbers"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["pii", "pci", "numbers"])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_no_redaction_configured(self):
         """Test that deepgram_redaction_settings returns empty list when no redaction is configured."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-3"}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_no_deepgram_settings(self):
         """Test that deepgram_redaction_settings returns empty list when no deepgram settings exist."""
         bot = self._create_bot_with_settings({"transcription_settings": {"openai": {"model": "gpt-4o-transcribe"}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_no_transcription_settings(self):
         """Test that deepgram_redaction_settings returns empty list when no transcription settings exist."""
         bot = self._create_bot_with_settings({"recording_settings": {"format": "mp4"}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_returns_empty_list_when_settings_is_empty(self):
         """Test that deepgram_redaction_settings returns empty list when settings is empty."""
         bot = self._create_bot_with_settings({})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_backward_compatibility_with_no_settings(self):
@@ -161,28 +162,28 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
             # No settings field set
         )
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_with_empty_redaction_array(self):
         """Test that deepgram_redaction_settings handles empty redaction array correctly."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": []}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, [])
 
     def test_deepgram_redaction_settings_preserves_order(self):
         """Test that deepgram_redaction_settings preserves the order of redaction types."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["numbers", "pii", "pci"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["numbers", "pii", "pci"])
 
     def test_deepgram_redaction_settings_with_other_deepgram_settings(self):
         """Test that deepgram_redaction_settings works correctly when combined with other deepgram settings."""
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US", "model": "nova-2", "redact": ["pci", "numbers"], "keywords": ["meeting", "agenda"]}}})
 
-        result = bot.deepgram_redaction_settings()
+        result = bot.transcription_settings.deepgram_redaction_settings()
         self.assertEqual(result, ["pci", "numbers"])
 
     def test_deepgram_redaction_settings_method_consistency_across_calls(self):
@@ -190,14 +191,82 @@ class BotModelRedactionSettingsTest(TransactionTestCase):
         bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"redact": ["pii", "pci"]}}})
 
         # Call the method multiple times
-        result1 = bot.deepgram_redaction_settings()
-        result2 = bot.deepgram_redaction_settings()
-        result3 = bot.deepgram_redaction_settings()
+        result1 = bot.transcription_settings.deepgram_redaction_settings()
+        result2 = bot.transcription_settings.deepgram_redaction_settings()
+        result3 = bot.transcription_settings.deepgram_redaction_settings()
 
         # All results should be identical
         self.assertEqual(result1, result2)
         self.assertEqual(result2, result3)
         self.assertEqual(result1, ["pii", "pci"])
+
+
+class BotModelDeepgramModelTest(TransactionTestCase):
+    """Unit tests for Bot model deepgram_model method."""
+
+    def setUp(self):
+        self.organization = Organization.objects.create(name="Test Org")
+        self.project = Project.objects.create(name="Test Project", organization=self.organization)
+
+    def _create_bot_with_settings(self, settings):
+        """Helper to create a bot with specific settings."""
+        return Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/test", settings=settings)
+
+    def test_deepgram_model_returns_nova3_by_default(self):
+        """Test that deepgram_model returns nova-3 by default."""
+        bot = self._create_bot_with_settings({})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+    def test_deepgram_model_returns_nova3_for_english(self):
+        """Test that deepgram_model returns nova-3 for English language."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": "en-US"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
+
+    def test_deepgram_model_returns_nova3_for_other_languages(self):
+        """Test that deepgram_model returns nova-3 for languages supported by nova-3."""
+        for lang in ["es", "de", "fr", "ja", "ko", "pt", "ru"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-3", f"Expected nova-3 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_chinese_simplified(self):
+        """Test that deepgram_model falls back to nova-2 for Chinese Simplified."""
+        for lang in ["zh", "zh-CN", "zh-Hans"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_chinese_traditional(self):
+        """Test that deepgram_model falls back to nova-2 for Chinese Traditional."""
+        for lang in ["zh-TW", "zh-Hant", "zh-HK"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_fallback_to_nova2_for_thai(self):
+        """Test that deepgram_model falls back to nova-2 for Thai."""
+        for lang in ["th", "th-TH"]:
+            bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"language": lang}}})
+            result = bot.transcription_settings.deepgram_model()
+            self.assertEqual(result, "nova-2", f"Expected nova-2 for language {lang}")
+
+    def test_deepgram_model_settings_override_default(self):
+        """Test that explicit model in settings overrides default nova-3."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"model": "nova-2-general"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-2-general")
+
+    def test_deepgram_model_settings_override_language_fallback(self):
+        """Test that explicit model in settings overrides language-based fallback."""
+        bot = self._create_bot_with_settings({"transcription_settings": {"deepgram": {"model": "nova-3", "language": "zh-CN"}}})
+
+        result = bot.transcription_settings.deepgram_model()
+        self.assertEqual(result, "nova-3")
 
 
 class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
@@ -239,7 +308,8 @@ class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
 
         # Create a proper audio blob as numpy array
         audio_data = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
-        utterance = Utterance.objects.create(recording=recording, participant=participant, audio_blob=audio_data, timestamp_ms=0, duration_ms=1000, sample_rate=16000)
+        audio_chunk = AudioChunk.objects.create(recording=recording, participant=participant, audio_blob=audio_data, timestamp_ms=0, duration_ms=1000, sample_rate=16000)
+        utterance = Utterance.objects.create(recording=recording, participant=participant, audio_chunk=audio_chunk, timestamp_ms=0, duration_ms=1000)
         return utterance
 
     @mock.patch("deepgram.PrerecordedOptions")
@@ -271,7 +341,7 @@ class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
         self.assertEqual(call_kwargs["redact"], ["pii", "pci", "numbers"])
 
         # Verify other expected parameters are also present
-        expected_params = {"model": bot.deepgram_model(), "smart_format": True, "language": bot.deepgram_language(), "detect_language": bot.deepgram_detect_language(), "keyterm": bot.deepgram_keyterms(), "keywords": bot.deepgram_keywords(), "encoding": "linear16", "sample_rate": utterance.sample_rate, "redact": ["pii", "pci", "numbers"]}
+        expected_params = {"model": bot.transcription_settings.deepgram_model(), "smart_format": True, "language": bot.transcription_settings.deepgram_language(), "detect_language": bot.transcription_settings.deepgram_detect_language(), "keyterm": bot.transcription_settings.deepgram_keyterms(), "keywords": bot.transcription_settings.deepgram_keywords(), "encoding": "linear16", "sample_rate": utterance.audio_chunk.sample_rate, "redact": ["pii", "pci", "numbers"]}
 
         for param, expected_value in expected_params.items():
             self.assertIn(param, call_kwargs)
@@ -421,7 +491,7 @@ class DeepgramPrerecordedTranscriptionRedactionTest(TransactionTestCase):
         self.assertEqual(call_kwargs["keywords"], ["meeting", "agenda"])
         self.assertEqual(call_kwargs["smart_format"], True)
         self.assertEqual(call_kwargs["encoding"], "linear16")
-        self.assertEqual(call_kwargs["sample_rate"], utterance.sample_rate)
+        self.assertEqual(call_kwargs["sample_rate"], utterance.audio_chunk.sample_rate)
 
     def _run_task(self):
         """Invoke the Celery task with the test utterance id (synchronously)."""
@@ -532,13 +602,13 @@ class DeepgramProviderTest(TransactionTestCase):
             state=RecordingStates.COMPLETE,
         )
         self.participant = Participant.objects.create(bot=self.bot, uuid=str(uuid.uuid4()))
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"\x01\x02", timestamp_ms=0, duration_ms=500, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"\x01\x02",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=500,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         # Minimal Deepgram creds
@@ -617,13 +687,13 @@ class BotModelTest(TransactionTestCase):
     @mock.patch.dict("os.environ", {}, clear=True)
     def test_openai_transcription_model_default_without_env(self):
         """Test that the default model is used when no env var or settings are present"""
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "gpt-4o-transcribe")
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-env-model"})
     def test_openai_transcription_model_env_var_fallback(self):
         """Test that env var is used as fallback when no bot settings are present"""
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "custom-env-model")
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-env-model"})
@@ -631,7 +701,7 @@ class BotModelTest(TransactionTestCase):
         """Test that bot settings override env var"""
         self.bot.settings = {"transcription_settings": {"openai": {"model": "settings-model"}}}
         self.bot.save()
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "settings-model")
 
     @mock.patch.dict("os.environ", {}, clear=True)
@@ -639,8 +709,16 @@ class BotModelTest(TransactionTestCase):
         """Test that bot settings override default"""
         self.bot.settings = {"transcription_settings": {"openai": {"model": "settings-model"}}}
         self.bot.save()
-        model = self.bot.openai_transcription_model()
+        model = self.bot.transcription_settings.openai_transcription_model()
         self.assertEqual(model, "settings-model")
+
+    @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "gpt-4o-transcribe-diarize"})
+    def test_openai_transcription_response_format_diarize_model(self):
+        """Test defaults for response_format and chunking_strategy for gpt-4o-transcribe-diarize"""
+        response_format = self.bot.transcription_settings.openai_transcription_response_format()
+        chunking_strategy = self.bot.transcription_settings.openai_transcription_chunking_strategy()
+        self.assertEqual(response_format, "diarized_json")
+        self.assertEqual(chunking_strategy, "auto")
 
 
 class GladiaProviderTest(TransactionTestCase):
@@ -661,13 +739,13 @@ class GladiaProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         # "Real" credential row – we'll monkey‑patch get_credentials() later
@@ -790,13 +868,13 @@ class OpenAIProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p‑1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.rec, participant=self.participant, audio_blob=b"pcm", timestamp_ms=0, duration_ms=100, sample_rate=16000)
         self.utt = Utterance.objects.create(
             recording=self.rec,
             participant=self.participant,
-            audio_blob=b"pcm",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=100,
-            sample_rate=16_000,
         )
         self.utt.refresh_from_db()
         # Real credentials row (the crypto doesn't matter – we patch .get_credentials)
@@ -913,6 +991,40 @@ class OpenAIProviderTest(TransactionTestCase):
         files_dict = call_args[1]["files"]
         self.assertEqual(files_dict["model"][1], "gpt-4-turbo-transcribe")
 
+    # ────────────────────────────────────────────────────────────────────────────────
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_diarized_json_transformation(self, mock_pcm, mock_post):
+        """Test that diarized_json format is transformed to Attendee's expected transcription schema"""
+        # Mock diarized_json response with segments
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "text": "Hey, what's up? I'm good, thank you!",
+            "segments": [
+                {"text": "Hey, what's up?", "start": 0.08, "end": 0.28, "speaker": "A"},
+                {"text": "I'm good, thank you!", "start": 0.28, "end": 0.52, "speaker": "B"},
+            ],
+        }
+
+        # Set up bot with diarize model and response_format
+        self.bot.settings = {"transcription_settings": {"openai": {"model": "gpt-4o-transcribe-diarize", "response_format": "diarized_json"}}}
+        self.bot.save()
+        self.utt.refresh_from_db()
+
+        with mock.patch.object(self.creds.__class__, "get_credentials", return_value={"api_key": "sk‑XYZ"}):
+            tx, failure = get_transcription_via_openai(self.utt)
+
+        self.assertIsNone(failure)
+        # Verify transformation to our schema
+        self.assertEqual(tx["transcript"], "Hey, what's up? I'm good, thank you!")
+        self.assertIn("words", tx)
+        self.assertEqual(len(tx["words"]), 2)
+        # Verify first word
+        self.assertEqual(tx["words"][0]["word"], "Hey, what's up?")
+        self.assertEqual(tx["words"][0]["start"], 0.08)
+        self.assertEqual(tx["words"][0]["end"], 0.28)
+        self.assertEqual(tx["words"][0]["speaker"], "A")
+
 
 class OpenAIModelValidationTest(TransactionTestCase):
     """Tests for OpenAI model validation in serializers"""
@@ -927,7 +1039,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {"OPENAI_MODEL_NAME": "custom-whisper-model"})
@@ -936,7 +1048,7 @@ class OpenAIModelValidationTest(TransactionTestCase):
         from bots.serializers import get_openai_model_enum
 
         models = get_openai_model_enum()
-        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "custom-whisper-model"]
+        expected = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize", "custom-whisper-model"]
         self.assertEqual(models, expected)
 
     @mock.patch.dict("os.environ", {}, clear=True)
@@ -999,13 +1111,13 @@ class AssemblyAIProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         self.cred = CredModel.objects.create(
@@ -1241,13 +1353,13 @@ class SarvamProviderTest(TransactionTestCase):
         )
 
         self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
         self.utterance = Utterance.objects.create(
             recording=self.recording,
             participant=self.participant,
-            audio_blob=b"pcm-bytes",
+            audio_chunk=self.audio_chunk,
             timestamp_ms=0,
             duration_ms=600,
-            sample_rate=16_000,
         )
         self.utterance.refresh_from_db()
         self.cred = Credentials.objects.create(
@@ -1306,3 +1418,395 @@ class SarvamProviderTest(TransactionTestCase):
             self.assertIsNone(transcript)
             self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
             self.assertEqual(failure["status_code"], 429)
+
+
+class ElevenLabsProviderTest(TransactionTestCase):
+    """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_elevenlabs"""
+
+    def setUp(self):
+        # Minimal DB fixtures ---------------------------------------------------------------
+        self.org = Organization.objects.create(name="Org")
+        self.project = Project.objects.create(name="Proj", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/999")
+
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,  # finished recording
+            transcription_provider=7,  # ELEVENLABS
+        )
+
+        self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
+        self.utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_chunk=self.audio_chunk,
+            timestamp_ms=0,
+            duration_ms=600,
+        )
+        self.utterance.refresh_from_db()
+
+        # "Real" credential row – we'll monkey‑patch get_credentials() later
+        self.cred = Credentials.objects.create(
+            project=self.project,
+            credential_type=Credentials.CredentialTypes.ELEVENLABS,
+        )
+
+    # ------------------------------------------------------------------ helpers
+
+    def _patch_creds(self):
+        """Always return a fake API key."""
+        return mock.patch.object(Credentials, "get_credentials", return_value={"api_key": "fake‑key"})
+
+    # ------------------------------------------------------------------ SUCCESS PATH
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_success_path(self, mock_pcm, mock_post):
+        """ElevenLabs transcription succeeds and returns formatted transcript with words."""
+        with self._patch_creds():
+            # Mock successful response from ElevenLabs API
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "hello world", "language_code": "eng", "language_probability": 0.9, "words": [{"text": "hello", "start": 0.0, "end": 0.5}, {"text": "world", "start": 0.6, "end": 1.0}]}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+            self.assertEqual(len(transcript["words"]), 2)
+            self.assertEqual(transcript["words"][0]["word"], "hello")
+            self.assertEqual(transcript["words"][0]["start"], 0.0)
+            self.assertEqual(transcript["words"][0]["end"], 0.5)
+            self.assertEqual(transcript["words"][1]["word"], "world")
+            self.assertEqual(transcript["words"][1]["start"], 0.6)
+            self.assertEqual(transcript["words"][1]["end"], 1.0)
+            self.assertEqual(transcript["language"], "eng")
+
+            # Verify API call was made correctly
+            mock_pcm.assert_called_once_with(b"pcm-bytes", sample_rate=16_000)
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            # First argument is the URL
+            self.assertEqual(call_args[0][0], "https://api.elevenlabs.io/v1/speech-to-text")
+            # Check headers in kwargs
+            self.assertEqual(call_args[1]["headers"]["xi-api-key"], "fake‑key")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_success_path_with_bot_settings(self, mock_pcm, mock_post):
+        """ElevenLabs transcription succeeds with bot-specific settings applied."""
+        # Configure bot with ElevenLabs settings
+        self.bot.settings = {"transcription_settings": {"elevenlabs": {"model_id": "scribe_v1_experimental", "language_code": "en", "tag_audio_events": True}}}
+        self.bot.save()
+
+        with self._patch_creds():
+            # Mock successful response from ElevenLabs API
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"text": "test transcript", "language_probability": 0.8, "words": [{"text": "test", "start": 0.0, "end": 0.5}]}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "test transcript")
+
+            # Verify settings were passed in the request
+            call_args = mock_post.call_args
+            data = call_args[1]["data"]
+            self.assertEqual(data["model_id"], "scribe_v1_experimental")
+            self.assertEqual(data["language_code"], "en")
+            self.assertTrue(data["tag_audio_events"])
+
+    def test_missing_credentials_row(self):
+        """No Credentials row → CREDENTIALS_NOT_FOUND."""
+        # Remove the credential row created in setUp
+        self.cred.delete()
+
+        transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+        self.assertIsNone(transcript)
+        self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
+        """ElevenLabs returns 401 → CREDENTIALS_INVALID."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=401)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_request_failure_500(self, mock_pcm, mock_post):
+        """ElevenLabs returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_creds():
+            mock_response = mock.Mock(status_code=500)
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status_code"], 500)
+            self.assertEqual(failure["response_text"], "Internal Server Error")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3")
+    def test_request_exception(self, mock_pcm, mock_post):
+        """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_creds():
+            mock_post.side_effect = Exception("Network error")
+
+            transcript, failure = get_transcription_via_elevenlabs(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.INTERNAL_ERROR)
+            self.assertIn("Network error", failure["error"])
+
+
+class CustomAsyncProviderTest(TransactionTestCase):
+    """Unit‑tests for bots.tasks.process_utterance_task.get_transcription_via_custom_async"""
+
+    def setUp(self):
+        # Minimal DB fixtures ---------------------------------------------------------------
+        self.org = Organization.objects.create(name="Org")
+        self.project = Project.objects.create(name="Proj", organization=self.org)
+        self.bot = Bot.objects.create(project=self.project, meeting_url="https://zoom.us/j/999")
+
+        self.recording = Recording.objects.create(
+            bot=self.bot,
+            recording_type=1,
+            transcription_type=1,
+            state=RecordingStates.COMPLETE,  # finished recording
+            transcription_provider=9,  # CUSTOM_ASYNC
+        )
+
+        self.participant = Participant.objects.create(bot=self.bot, uuid="p1")
+        self.audio_chunk = AudioChunk.objects.create(recording=self.recording, participant=self.participant, audio_blob=b"pcm-bytes", timestamp_ms=0, duration_ms=600, sample_rate=16000)
+        self.utterance = Utterance.objects.create(
+            recording=self.recording,
+            participant=self.participant,
+            audio_chunk=self.audio_chunk,
+            timestamp_ms=0,
+            duration_ms=600,
+        )
+        self.utterance.refresh_from_db()
+
+    # ------------------------------------------------------------------ helpers
+
+    def _patch_env(self, url="http://test-service.com/transcribe", timeout="120"):
+        """Mock environment variables."""
+        return mock.patch.dict("os.environ", {"CUSTOM_ASYNC_TRANSCRIPTION_URL": url, "CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT": timeout})
+
+    # ------------------------------------------------------------------ SUCCESS PATH
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path(self, mock_pcm, mock_post):
+        """Custom async transcription succeeds and returns formatted transcript with words."""
+        with self._patch_env():
+            # Mock successful response from custom async API
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {
+                "status": "done",
+                "result": {
+                    "transcription": {
+                        "full_transcript": "hello world",
+                        "utterances": [
+                            {
+                                "words": [
+                                    {"word": "hello", "start": 0.0, "end": 0.5},
+                                    {"word": "world", "start": 0.6, "end": 1.0},
+                                ]
+                            }
+                        ],
+                    }
+                },
+            }
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "hello world")
+            self.assertEqual(len(transcript["words"]), 2)
+            self.assertEqual(transcript["words"][0]["word"], "hello")
+            self.assertEqual(transcript["words"][0]["start"], 0.0)
+            self.assertEqual(transcript["words"][0]["end"], 0.5)
+            self.assertEqual(transcript["words"][1]["word"], "world")
+            self.assertEqual(transcript["words"][1]["start"], 0.6)
+            self.assertEqual(transcript["words"][1]["end"], 1.0)
+
+            # Verify API call was made correctly
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            # First argument is the URL
+            self.assertEqual(call_args[0][0], "http://test-service.com/transcribe")
+            # Check audio was sent as MP3
+            self.assertEqual(call_args[1]["files"]["audio"][0], "audio.mp3")
+            self.assertEqual(call_args[1]["files"]["audio"][1], b"mp3-audio-data")
+            self.assertEqual(call_args[1]["files"]["audio"][2], "audio/mpeg")
+            # Verify pcm_to_mp3 was called
+            mock_pcm.assert_called_once()
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_success_path_with_bot_settings(self, mock_pcm, mock_post):
+        """Custom async transcription succeeds with bot-specific settings applied."""
+        # Configure bot with custom settings (including nested dict to test JSON conversion)
+        self.bot.settings = {
+            "transcription_settings": {
+                "custom_async": {
+                    "language": "fr-FR",
+                    "model": "whisper-large-v3",
+                    "custom_param": "test_value",
+                    "nested_param": {"key": "value", "list": [1, 2, 3]},
+                }
+            }
+        }
+        self.bot.save()
+
+        with self._patch_env():
+            # Mock successful response
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"status": "done", "result": {"transcription": {"full_transcript": "test transcript", "utterances": [{"words": [{"word": "test", "start": 0.0, "end": 0.5}]}]}}}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            # Assertions
+            self.assertIsNone(failure)
+            self.assertEqual(transcript["transcript"], "test transcript")
+
+            # Verify custom settings were passed in the request
+            call_args = mock_post.call_args
+            data = call_args[1]["data"]
+            self.assertEqual(data["language"], "fr-FR")
+            self.assertEqual(data["model"], "whisper-large-v3")
+            self.assertEqual(data["custom_param"], "test_value")
+            # Verify nested dict/list are converted to JSON string
+            import json
+
+            self.assertEqual(data["nested_param"], json.dumps({"key": "value", "list": [1, 2, 3]}))
+
+    def test_missing_env_url(self):
+        """No CUSTOM_ASYNC_TRANSCRIPTION_URL env var → CREDENTIALS_NOT_FOUND."""
+        with mock.patch.dict("os.environ", {}, clear=True):
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND)
+            self.assertIn("CUSTOM_ASYNC_TRANSCRIPTION_URL", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_credentials_401(self, mock_pcm, mock_post):
+        """Custom async returns 401 → CREDENTIALS_INVALID."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=401)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.CREDENTIALS_INVALID)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_rate_limit_429(self, mock_pcm, mock_post):
+        """Custom async returns 429 → RATE_LIMIT_EXCEEDED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=429)
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_failure_500(self, mock_pcm, mock_post):
+        """Custom async returns 500 → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=500)
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["status_code"], 500)
+            self.assertEqual(failure["response_text"], "Internal Server Error")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_error_status_in_response(self, mock_pcm, mock_post):
+        """Custom async returns status='error' → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.return_value = {"status": "error", "error_code": "TRANSCRIPTION_FAILED"}
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertEqual(failure["error_code"], "TRANSCRIPTION_FAILED")
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_timeout_exception(self, mock_pcm, mock_post):
+        """Request timeout → TIMED_OUT."""
+        with self._patch_env():
+            from requests.exceptions import Timeout
+
+            mock_post.side_effect = Timeout("Request timed out")
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TIMED_OUT)
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_request_exception(self, mock_pcm, mock_post):
+        """Network request exception → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            from requests.exceptions import RequestException
+
+            mock_post.side_effect = RequestException("Network error")
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertIn("Network error", failure["error"])
+
+    @mock.patch("bots.tasks.process_utterance_task.requests.post")
+    @mock.patch("bots.tasks.process_utterance_task.pcm_to_mp3", return_value=b"mp3-audio-data")
+    def test_invalid_json_response(self, mock_pcm, mock_post):
+        """Invalid JSON response → TRANSCRIPTION_REQUEST_FAILED."""
+        with self._patch_env():
+            mock_response = mock.Mock(status_code=200)
+            mock_response.json.side_effect = ValueError("Invalid JSON")
+            mock_post.return_value = mock_response
+
+            transcript, failure = get_transcription_via_custom_async(self.utterance)
+
+            self.assertIsNone(transcript)
+            self.assertEqual(failure["reason"], TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED)
+            self.assertIn("Invalid JSON", failure["error"])

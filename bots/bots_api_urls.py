@@ -3,7 +3,7 @@ from django.urls import path
 from . import bots_api_views
 
 urlpatterns = [
-    path("bots", bots_api_views.BotCreateView.as_view(), name="bot-create"),
+    path("bots", bots_api_views.BotListCreateView.as_view(), name="bot-list-create"),
     path(
         "bots/<str:object_id>",
         bots_api_views.BotDetailView.as_view(),
@@ -70,9 +70,34 @@ urlpatterns = [
         name="bot-resume-recording",
     ),
     path(
+        "bots/<str:object_id>/admit_from_waiting_room",
+        bots_api_views.AdmitFromWaitingRoomView.as_view(),
+        name="bot-admit-from-waiting-room",
+    ),
+    path(
+        "bots/<str:object_id>/change_gallery_view_page",
+        bots_api_views.ChangeGalleryViewPageView.as_view(),
+        name="bot-change-gallery-view-page",
+    ),
+    path(
+        "bots/<str:object_id>/transcription_settings",
+        bots_api_views.TranscriptionSettingsView.as_view(),
+        name="bot-transcription-settings",
+    ),
+    path(
+        "bots/<str:object_id>/voice_agent_settings",
+        bots_api_views.VoiceAgentSettingsView.as_view(),
+        name="bot-voice-agent-settings",
+    ),
+    path(
         "bots/<str:object_id>/participant_events",
         bots_api_views.ParticipantEventsView.as_view(),
         name="bot-participant-events",
+    ),
+    path(
+        "bots/<str:object_id>/participants",
+        bots_api_views.ParticipantsView.as_view(),
+        name="bot-participants",
     ),
 ]
 

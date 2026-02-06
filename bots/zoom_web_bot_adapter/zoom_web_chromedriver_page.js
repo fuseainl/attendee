@@ -3,19 +3,24 @@ ZoomMtg.prepareWebSDK()
 
 var zoomInitialData = window.zoomInitialData;
 
-var authEndpoint = ''
+var authEndpoint = '';
 var sdkKey = zoomInitialData.sdkKey;
 var meetingNumber = zoomInitialData.meetingNumber;
 var passWord = zoomInitialData.meetingPassword;
-var role = 0
+var role = 0;
 var userName = initialData.botName;
-var userEmail = ''
-var registrantToken = ''
-var zakToken = ''
-var leaveUrl = 'https://zoom.us'
-var registrantToken = ''
-var zakToken = ''
+var userEmail = '';
+var registrantToken = '';
+var recordingToken = zoomInitialData.joinToken || zoomInitialData.appPrivilegeToken;
+var zakToken = zoomInitialData.zakToken;
+var onBehalfToken = zoomInitialData.onBehalfToken;
+var leaveUrl = 'https://zoom.us';
 var userEnteredMeeting = false;
+var userEncounteredOnBehalfTokenUserNotInMeetingError = false;
+var userEncounteredGenericJoinError = false;
+var recordingPermissionGranted = false;
+var madeInitialRequestForRecordingPermission = false;
+var sentSaveCaptionNotAllowed = false;
 
 class TranscriptMessageFinalizationManager {
     constructor() {
@@ -24,9 +29,9 @@ class TranscriptMessageFinalizationManager {
 
     sendMessage(message) {
         const messageConverted = {
-            deviceId: message.userId,
+            deviceId: message.userId.toString(),
             captionId: message.msgId,
-            text: message.text,
+            text: message.text ? message.text.replace(/\x00/g, '') : '',
             isFinal: !!message.done
         };
         
@@ -56,9 +61,29 @@ function joinMeeting() {
     startMeeting(signature);
 }
 
+function userHasEnteredMeeting() {
+    return userEnteredMeeting;
+}
+
+window.userHasEnteredMeeting = userHasEnteredMeeting;
+
+function userHasEncounteredOnBehalfTokenUserNotInMeetingError() {
+    return userEncounteredOnBehalfTokenUserNotInMeetingError;
+}
+
+window.userHasEncounteredOnBehalfTokenUserNotInMeetingError = userHasEncounteredOnBehalfTokenUserNotInMeetingError;
+
+function userHasEncounteredGenericJoinError() {
+    return userEncounteredGenericJoinError;
+}
+
+window.userHasEncounteredGenericJoinError = userHasEncounteredGenericJoinError;
+
 function startMeeting(signature) {
 
   document.getElementById('zmmtg-root').style.display = 'block'
+
+    const defaultView = window.initialData.recordingView === 'gallery_view' ? 'gallery' : 'speaker';
 
     ZoomMtg.init({
         leaveUrl: leaveUrl,
@@ -67,6 +92,7 @@ function startMeeting(signature) {
         disableZoomLogo: true,
         disablePreview: true,
         enableWaitingRoomPreview: false,
+        defaultView: defaultView,
         //isSupportCC: true,
         //disableJoinAudio: true,
         //isSupportAV: false,
@@ -105,6 +131,8 @@ function startMeeting(signature) {
             userName: userName,
             userEmail: userEmail,
             tk: registrantToken,
+            recordingToken: recordingToken,
+            obfToken: onBehalfToken,
             zak: zakToken,
             success: (success) => {
                 console.log('join success');
@@ -127,6 +155,12 @@ function startMeeting(signature) {
                 console.log('join error');
                 console.log(error);
 
+                if (isGenericJoinError(error?.errorCode))
+                {
+                    userEncounteredGenericJoinError = true;
+                    return;
+                }
+
                 window.ws.sendJson({
                     type: 'MeetingStatusChange',
                     change: 'failed_to_join',
@@ -142,7 +176,17 @@ function startMeeting(signature) {
     })
 
     ZoomMtg.inMeetingServiceListener('onActiveSpeaker', function (data) {
-        console.log('onActiveSpeaker', data);
+        /*
+        [
+            {
+                "userId": 16778240,
+                "userName": "Noah Duncan"
+            }
+        ]
+        */
+        for (const activeSpeaker of data) {
+            window.dominantSpeakerManager.addCaptionAudioTime(Date.now(), activeSpeaker.userId);
+        }
         // Use active speaker events to determine if we are silent or not
         window.ws.sendJson({
             type: 'SilenceStatus',
@@ -185,7 +229,16 @@ function startMeeting(signature) {
     ZoomMtg.inMeetingServiceListener('onReceiveTranscriptionMsg', function (item) {
         console.log('onReceiveTranscriptionMsg', item);
 
-        if (!item.msgId) {
+        if (item === 'Save caption is not allowed!' && !sentSaveCaptionNotAllowed) {
+            window.ws.sendJson({
+                type: 'ClosedCaptionStatusChange',
+                change: 'save_caption_not_allowed'
+            });
+            sentSaveCaptionNotAllowed = true;
+            return;
+        }
+        
+        if (!item.msgId) {            
             window.ws.sendJson({
                 type: 'TranscriptMessageError',
                 error: 'No msgId',
@@ -193,6 +246,9 @@ function startMeeting(signature) {
             });
             return;
         }
+
+        if (!window.initialData.collectCaptions)
+            return;
 
         transcriptMessageFinalizationManager.addMessage(item);
     });
@@ -204,7 +260,7 @@ function startMeeting(signature) {
             window.ws.sendJson({
                 type: 'ChatMessage',
                 message_uuid: chatMessage.content.messageId,
-                participant_uuid: chatMessage.senderId,
+                participant_uuid: chatMessage.senderId.toString(),
                 timestamp: Math.floor(parseInt(chatMessage.content.t) / 1000),
                 text: chatMessage.content.text,
             });
@@ -228,6 +284,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
     ZoomMtg.inMeetingServiceListener('onUserLeave', function (data) {
@@ -284,6 +341,7 @@ function startMeeting(signature) {
             state: 'active'
         }
         window.userManager.singleUserSynced(dataWithState);
+        requestPermissionToRecordIfUserIsHost(dataWithState);
     });
 
 
@@ -295,20 +353,43 @@ function startMeeting(signature) {
         {
             ZoomMtg.mediaCapture({record: "start", success: (success) => {
                 console.log('mediaCapture success', success);
+                onRecordingPermissionGranted();
             }, error: (error) => {
                 console.log('mediaCapture error', error);
             }});
+        }
 
+        if (permissionChange.allow === false)
+        {
+            recordingPermissionGranted = false;
             window.ws.sendJson({
                 type: 'RecordingPermissionChange',
-                change: 'granted'
+                change: 'denied'
             });
-        }
-        
+        }        
     });
 }
 
+function isGenericJoinError(code) {
+    return code == 1 && !userEnteredMeeting;
+}
+
 function handleJoinFailureFromConsoleIntercept(code, reason) {
+    // Hacky way to determine if we are being rejected because the onbehalf token user is not in the meeting
+    // There currently seems to be no specific error code for this.
+    if (code == 1 && onBehalfToken && !userEnteredMeeting)
+    {
+        userEncounteredOnBehalfTokenUserNotInMeetingError = true;
+        console.log('handleJoinFailureFromConsoleIntercept: user encountered onbehalf token user not in meeting error');
+        return;
+    }
+
+    if (isGenericJoinError(code))
+    {
+        userEncounteredGenericJoinError = true;
+        return;
+    }
+
     window.ws.sendJson({
         type: 'MeetingStatusChange',
         change: 'failed_to_join',
@@ -324,9 +405,10 @@ function leaveMeeting() {
     ZoomMtg.leaveMeeting({});
 }
 
-function sendChatMessage(text) {
+function sendChatMessage(text, to_user_uuid ) {
     ZoomMtg.sendChat({
         message: text,
+        userId: to_user_uuid ? parseInt(to_user_uuid, 10) : 0,
         success: (success) => {
             console.log('sendChatMessage success', success);
         },
@@ -336,15 +418,124 @@ function sendChatMessage(text) {
     });
 }
 
+function changeGalleryViewPage(changeToNextPage) {
+    /*
+    HTML looks like this:
+    <button type="button" class="gallery-video-container__switch-button gallery-video-container__switch-button--back"><div class="gallery-video-container__arrow gallery-video-container__arrow--back"></div><div class="gallery-video-container__pagination">1/5</div></button>
+    <button type="button" class="gallery-video-container__switch-button" style="right: 0px;"><div class="gallery-video-container__arrow gallery-video-container__arrow--next"></div><div class="gallery-video-container__pagination">1/5</div></button>
+    */
+    try {
+        let button;
+        if (changeToNextPage) {
+            // Find the next button (the one without the --back modifier)
+            button = document.querySelector('.gallery-video-container__switch-button:not(.gallery-video-container__switch-button--back)');
+        } else {
+            // Find the back/previous button
+            button = document.querySelector('.gallery-video-container__switch-button--back');
+        }
+        
+        if (button) {
+            button.click();
+        }
+    } catch (error) {
+        // Do nothing if button cannot be identified
+    }
+}
+
+function closeRequestPermissionModal() {
+    try {
+        // Find modal with class zm-modal or zm-modal-legacy
+        const modals = document.querySelectorAll('div.zm-modal, div.zm-modal-legacy');
+        
+        for (const modal of modals) {
+            // Check if this modal has a descendant with class zm-modal-body-title
+            const titleDiv = modal.querySelector('div.zm-modal-body-title');
+            
+            if (titleDiv && titleDiv.innerText.includes('Permission needed from Meeting Host')) {
+                // Found the correct modal, now look for close button within it
+                const buttons = modal.querySelectorAll('button');
+                
+                for (const button of buttons) {
+                    if (button.innerText.toLowerCase() === 'close') {
+                        console.log('Clicking close button on permission modal');
+                        button.click();
+                        return;
+                    }
+                }
+                
+                console.log('Found permission modal but could not find close button');
+                return;
+            }
+        }
+        
+        console.log('Permission modal not found');
+    }
+    catch (error) {
+        console.log('closeRequestPermissionModal error', error);
+    }
+}
+
 window.sendChatMessage = sendChatMessage;
 
 function askForMediaCapturePermission() {
-    // Ask for media capture permission
-    ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
-        console.log('mediaCapturePermission success', success);
-    }, error: (error) => {
-        console.log('mediaCapturePermission error', error);
-    }});
+    madeInitialRequestForRecordingPermission = true;
+    // We need to wait a second to ask for permission because of this issue:
+    // https://devforum.zoom.us/t/error-in-mediacapturepermission-api-typeerror-cannot-read-properties-of-undefined-reading-caps/96683/6
+    setTimeout(() => {
+        // Attempt to start capture
+        ZoomMtg.mediaCapture({record: "start", success: (success) => {
+            // If it succeeds, great, we're done.
+            onRecordingPermissionGranted();
+
+        }, error: (error) => {
+            // Also try to close the you need to ask for permission modal
+            setTimeout(() => {
+                closeRequestPermissionModal();
+            }, 500);
+
+            // If it fails, we need to ask for permission
+            // If this line throws this error 
+            // https://devforum.zoom.us/t/web-sdk-typeerror-cannot-read-properties-of-undefined-reading-caps/122712
+            // it's because host was not present
+            ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
+                console.log('mediaCapturePermission success', success);
+            }, error: (error) => {
+                console.log('mediaCapturePermission error', error);
+            }});
+        }});
+    }, 1000);
+}
+
+function requestPermissionToRecordIfUserIsHost(data) {
+    if (!data.isHost)
+        return;
+    if (recordingPermissionGranted)
+        return;
+
+    setTimeout(() => {
+        if (recordingPermissionGranted)
+            return;
+        if (!madeInitialRequestForRecordingPermission)
+            return;
+        window.ws?.sendJson({
+            type: 'RequestingRecordingPermissionAfterHostJoin',
+            userData: data
+        });
+        // Ask for permission
+        ZoomMtg.mediaCapturePermission({operate: "request", success: (success) => {
+            console.log('mediaCapturePermission success', success);
+        }, error: (error) => {
+            console.log('mediaCapturePermission error', error);
+        }});
+    }, 1000);
+}
+
+function onRecordingPermissionGranted() {
+    recordingPermissionGranted = true;
+    window.ws.sendJson({
+        type: 'RecordingPermissionChange',
+        change: 'granted'
+    });
 }
 
 window.askForMediaCapturePermission = askForMediaCapturePermission;

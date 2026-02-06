@@ -1,7 +1,5 @@
-import re
 import time
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlparse
 
 import cv2
 import gi
@@ -9,7 +7,9 @@ import jwt
 import numpy as np
 import zoom_meeting_sdk as zoom
 
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
+from bots.meeting_url_utils import parse_zoom_join_url
 from bots.utils import png_to_yuv420_frame, scale_i420
 
 from .mp4_demuxer import MP4Demuxer
@@ -53,21 +53,6 @@ def create_black_yuv420_frame(width=640, height=360):
     return yuv_frame.tobytes()
 
 
-def parse_join_url(join_url):
-    # Parse the URL into components
-    parsed = urlparse(join_url)
-
-    # Extract meeting ID using regex to match only numeric characters
-    meeting_id_match = re.search(r"(\d+)", parsed.path)
-    meeting_id = meeting_id_match.group(1) if meeting_id_match else None
-
-    # Extract password from query parameters
-    query_params = parse_qs(parsed.query)
-    password = query_params.get("pwd", [None])[0]
-
-    return (meeting_id, password)
-
-
 class ZoomBotAdapter(BotAdapter):
     def __init__(
         self,
@@ -89,6 +74,8 @@ class ZoomBotAdapter(BotAdapter):
         automatic_leave_configuration: AutomaticLeaveConfiguration,
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
+        zoom_meeting_settings: dict,
+        record_chat_messages_when_paused: bool,
     ):
         self.use_one_way_audio = use_one_way_audio
         self.use_mixed_audio = use_mixed_audio
@@ -102,9 +89,11 @@ class ZoomBotAdapter(BotAdapter):
         self.upsert_chat_message_callback = upsert_chat_message_callback
         self.add_participant_event_callback = add_participant_event_callback
         self.zoom_tokens = zoom_tokens
+        self.zoom_meeting_settings = zoom_meeting_settings
+        self.record_chat_messages_when_paused = record_chat_messages_when_paused
 
         self._jwt_token = generate_jwt(zoom_client_id, zoom_client_secret)
-        self.meeting_id, self.meeting_password = parse_join_url(meeting_url)
+        self.meeting_id, self.meeting_password = parse_zoom_join_url(meeting_url)
 
         self.meeting_service = None
         self.setting_service = None
@@ -121,6 +110,7 @@ class ZoomBotAdapter(BotAdapter):
 
         self.use_raw_recording = True
         self.recording_permission_granted = False
+        self.raw_recording_active = False
 
         self.reminder_controller = None
 
@@ -184,21 +174,93 @@ class ZoomBotAdapter(BotAdapter):
         # more than 10 seconds, we should send a message to the bot controller that we could not connect to the meeting
         # https://devforum.zoom.us/t/linux-sdk-gets-stuck-in-meeting-status-connecting-when-the-provided-password-is-incorrect/130441
         self.stuck_in_connecting_state_timeout = 60
+        self.stuck_in_connecting_state_timeout_id = None
+
+        # Breakout room controller
+        self.breakout_room_ctrl = None
+        self.breakout_room_ctrl_event = None
+        self.is_joining_or_leaving_breakout_room = False
+
+        # Waiting room controller
+        self.waiting_room_ctrl = None
+
+        # webcam is muted initially
+        self.webcam_is_muted = True
+        # Raw bytes from the user
+        self.current_raw_image_to_send = None
+        # Scaled image to send to Zoom
+        self.current_image_to_send = None
+        self.recording_is_paused = False
+
+        self.ready_to_send_chat_messages = False
+
+        self.should_retry_after_meeting_ends = False
+        self.attempts_to_join_started_at = time.time()
+
+    def pause_recording(self):
+        self.recording_is_paused = True
+        if not self.raw_recording_active:
+            logger.info("returning early from pause_recording because raw recording is not active")
+            return
+        self.stop_raw_recording()
+
+    def start_or_resume_recording(self):
+        self.recording_is_paused = False
+        if self.raw_recording_active:
+            logger.info("returning early from resume_recording because raw recording is active")
+            return
+        self.start_raw_recording()
+
+    def request_permission_to_record_if_joined_user_is_host(self, joined_user_id):
+        # No need to request permission if we already have it
+        if self.recording_permission_granted:
+            return
+
+        try:
+            joined_user = self.participants_ctrl.GetUserByUserID(joined_user_id)
+            if joined_user and joined_user.IsHost():
+                logger.info("Re-requesting recording privilege since host just joined.")
+                self.recording_ctrl.RequestLocalRecordingPrivilege()
+        except Exception as e:
+            logger.warning(f"Error retrieving user in request_permission_to_record_if_joined_user_is_host: {e}")
 
     def on_user_join_callback(self, joined_user_ids, _):
         logger.info(f"on_user_join_callback called. joined_user_ids = {joined_user_ids}")
+        self.update_only_one_participant_in_meeting_at()
         for joined_user_id in joined_user_ids:
             self.get_participant(joined_user_id)
             self.send_participant_event(joined_user_id, event_type=ParticipantEventTypes.JOIN)
+            self.request_permission_to_record_if_joined_user_is_host(joined_user_id)
+
+    def update_only_one_participant_in_meeting_at(self):
+        if not self.joined_at:
+            return
+
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
+            return
+
+        all_participant_ids = self.participants_ctrl.GetParticipantsList()
+
+        all_participant_ids_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant_id in all_participant_ids:
+            participant = self.get_participant(participant_id)
+            if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration):
+                all_participant_ids_excluding_other_bots.append(participant_id)
+            else:
+                other_bots_in_meeting_names.append(participant["participant_full_name"])
+
+        if len(all_participant_ids_excluding_other_bots) == 1:
+            if self.only_one_participant_in_meeting_at is None:
+                self.only_one_participant_in_meeting_at = time.time()
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
+        else:
+            self.only_one_participant_in_meeting_at = None
 
     def on_user_left_callback(self, left_user_ids, _):
         logger.info(f"on_user_left_callback called. left_user_ids = {left_user_ids}")
-        all_participant_ids = self.participants_ctrl.GetParticipantsList()
-        if len(all_participant_ids) == 1:
-            if self.only_one_participant_in_meeting_at is None:
-                self.only_one_participant_in_meeting_at = time.time()
-        else:
-            self.only_one_participant_in_meeting_at = None
+        self.update_only_one_participant_in_meeting_at()
 
         for left_user_id in left_user_ids:
             self.send_participant_event(left_user_id, event_type=ParticipantEventTypes.LEAVE)
@@ -221,10 +283,22 @@ class ZoomBotAdapter(BotAdapter):
         self.set_video_input_manager_based_on_state()
 
     def set_video_input_manager_based_on_state(self):
+        if not self.raw_recording_active and self.video_input_manager:
+            self.video_input_manager.set_mode(
+                mode=VideoInputManager.Mode.INACTIVE,
+                active_speaker_id=None,
+                active_sharer_id=None,
+                active_sharer_source_id=None,
+            )
+            return
+
         if not self.wants_any_video_frames_callback():
             return
 
         if not self.recording_permission_granted:
+            return
+
+        if self.is_joining_or_leaving_breakout_room:
             return
 
         if not self.video_input_manager:
@@ -283,18 +357,19 @@ class ZoomBotAdapter(BotAdapter):
             performance_data = self.audio_source.getPerformanceData()
             logger.info(f"totalProcessingTimeMicroseconds = {performance_data.totalProcessingTimeMicroseconds}")
             logger.info(f"numCalls = {performance_data.numCalls}")
-            logger.info(f"maxProcessingTimeMicroseconds = {performance_data.maxProcessingTimeMicroseconds}")
-            logger.info(f"minProcessingTimeMicroseconds = {performance_data.minProcessingTimeMicroseconds}")
-            logger.info(f"meanProcessingTimeMicroseconds = {float(performance_data.totalProcessingTimeMicroseconds) / performance_data.numCalls}")
+            if performance_data.numCalls > 0:
+                logger.info(f"maxProcessingTimeMicroseconds = {performance_data.maxProcessingTimeMicroseconds}")
+                logger.info(f"minProcessingTimeMicroseconds = {performance_data.minProcessingTimeMicroseconds}")
+                logger.info(f"meanProcessingTimeMicroseconds = {float(performance_data.totalProcessingTimeMicroseconds) / performance_data.numCalls}")
 
-            # Print processing time distribution
-            bin_size = (performance_data.processingTimeBinMax - performance_data.processingTimeBinMin) / len(performance_data.processingTimeBinCounts)
-            logger.info("\nProcessing time distribution (microseconds):")
-            for bin_idx, count in enumerate(performance_data.processingTimeBinCounts):
-                if count > 0:
-                    bin_start = bin_idx * bin_size
-                    bin_end = (bin_idx + 1) * bin_size
-                    logger.info(f"{bin_start:6.0f} - {bin_end:6.0f} us: {count:5d} calls")
+                # Print processing time distribution
+                bin_size = (performance_data.processingTimeBinMax - performance_data.processingTimeBinMin) / len(performance_data.processingTimeBinCounts)
+                logger.info("\nProcessing time distribution (microseconds):")
+                for bin_idx, count in enumerate(performance_data.processingTimeBinCounts):
+                    if count > 0:
+                        bin_start = bin_idx * bin_size
+                        bin_end = (bin_idx + 1) * bin_size
+                        logger.info(f"{bin_start:6.0f} - {bin_end:6.0f} us: {count:5d} calls")
 
         if self.meeting_service:
             zoom.DestroyMeetingService(self.meeting_service)
@@ -341,12 +416,16 @@ class ZoomBotAdapter(BotAdapter):
                 "participant_user_uuid": speaker_object.GetPersistentId(),
                 "participant_full_name": speaker_object.GetUserName(),
                 "participant_is_the_bot": speaker_object.GetUserID() == self.my_participant_id,
+                "participant_is_host": speaker_object.IsHost(),
             }
             self._participant_cache[participant_id] = participant_info
             return participant_info
         except:
-            logger.info(f"Error getting participant {participant_id}, falling back to cache")
+            logger.warning(f"Error getting participant {participant_id}, falling back to cache")
             return self._participant_cache.get(participant_id)
+
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self._participant_cache.values() if not participant_is_another_bot(participant["participant_full_name"], participant["participant_is_the_bot"], self.automatic_leave_configuration)])
 
     def on_sharing_status_callback(self, sharing_info):
         user_id = sharing_info.userid
@@ -365,18 +444,26 @@ class ZoomBotAdapter(BotAdapter):
             self.active_sharer_source_id = new_active_sharer_source_id
             self.set_video_input_manager_based_on_state()
 
-    def send_chat_message(self, text):
+    def send_chat_message(self, text, to_user_uuid):
         # Send a welcome message to the chat
         builder = self.chat_ctrl.GetChatMessageBuilder()
         builder.SetContent(text)
-        builder.SetReceiver(0)
-        builder.SetMessageType(zoom.SDKChatMessageType.To_All)
+        if to_user_uuid:
+            builder.SetReceiver(to_user_uuid)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_Individual)
+        else:
+            builder.SetReceiver(0)
+            builder.SetMessageType(zoom.SDKChatMessageType.To_All)
         msg = builder.Build()
         send_chat_message_result = self.chat_ctrl.SendChatMsgTo(msg)
         logger.info(f"send_chat_message_result = {send_chat_message_result}")
         builder.Clear()
 
     def on_chat_msg_notification_callback(self, chat_msg_info, content):
+        if self.recording_is_paused and not self.record_chat_messages_when_paused:
+            logger.info("on_chat_msg_notification_callback called but recording is paused")
+            return
+
         try:
             self.upsert_chat_message_callback(
                 {
@@ -402,7 +489,65 @@ class ZoomBotAdapter(BotAdapter):
     def send_participant_event(self, participant_id, event_type, event_data={}):
         self.add_participant_event_callback({"participant_uuid": participant_id, "event_type": event_type, "event_data": event_data, "timestamp_ms": int(time.time() * 1000)})
 
+    def on_has_attendee_rights_notification(self, attendee):
+        logger.info(f"on_has_attendee_rights_notification called. attendee = {attendee}")
+        join_bo_result = attendee.JoinBo()
+        logger.info(f"join_bo_result = {join_bo_result}")
+
+    def admit_from_waiting_room(self):
+        logger.info("admit_from_waiting_room called")
+        admit_all_to_meeting_result = self.waiting_room_ctrl.AdmitAllToMeeting()
+        logger.info(f"admit_all_to_meeting_result = {admit_all_to_meeting_result}")
+
+    def apply_meeting_settings(self):
+        # Set various aspects of the meeting. Will only work if the bot has host privileges.
+
+        allow_participants_to_unmute_self = self.zoom_meeting_settings.get("allow_participants_to_unmute_self", None)
+        if allow_participants_to_unmute_self is not None:
+            allow_participants_to_unmute_self_result = self.participants_ctrl.AllowParticipantsToUnmuteSelf(allow_participants_to_unmute_self)
+            logger.info(f"AllowParticipantsToUnmuteSelf({allow_participants_to_unmute_self}) returned {allow_participants_to_unmute_self_result}")
+
+        allow_participants_to_share_whiteboard = self.zoom_meeting_settings.get("allow_participants_to_share_whiteboard", None)
+        if allow_participants_to_share_whiteboard is not None:
+            allow_participants_to_share_whiteboard_result = self.participants_ctrl.AllowParticipantsToShareWhiteBoard(allow_participants_to_share_whiteboard)
+            logger.info(f"AllowParticipantsToShareWhiteBoard({allow_participants_to_share_whiteboard}) returned {allow_participants_to_share_whiteboard_result}")
+
+        allow_participants_to_request_cloud_recording = self.zoom_meeting_settings.get("allow_participants_to_request_cloud_recording", None)
+        if allow_participants_to_request_cloud_recording is not None:
+            allow_participants_to_request_cloud_recording_result = self.participants_ctrl.AllowParticipantsToRequestCloudRecording(allow_participants_to_request_cloud_recording)
+            logger.info(f"AllowParticipantsToRequestCloudRecording({allow_participants_to_request_cloud_recording}) returned {allow_participants_to_request_cloud_recording_result}")
+
+        allow_participants_to_request_local_recording = self.zoom_meeting_settings.get("allow_participants_to_request_local_recording", None)
+        if allow_participants_to_request_local_recording is not None:
+            allow_participants_to_request_local_recording_result = self.participants_ctrl.AllowParticipantsToRequestLocalRecording(allow_participants_to_request_local_recording)
+            logger.info(f"AllowParticipantsToRequestLocalRecording({allow_participants_to_request_local_recording}) returned {allow_participants_to_request_local_recording_result}")
+
+        enable_focus_mode = self.zoom_meeting_settings.get("enable_focus_mode", None)
+        if enable_focus_mode is not None:
+            is_focus_mode_on = self.participants_ctrl.IsFocusModeOn()
+            logger.info(f"IsFocusModeOn() returned {is_focus_mode_on}")
+            is_focus_mode_enabled = self.participants_ctrl.IsFocusModeEnabled()
+            logger.info(f"IsFocusModeEnabled() returned {is_focus_mode_enabled}")
+            turn_focus_mode_on_result = self.participants_ctrl.TurnFocusModeOn(enable_focus_mode)
+            logger.info(f"TurnFocusModeOn({enable_focus_mode}) returned {turn_focus_mode_on_result}")
+
+        allow_participants_to_share_screen = self.zoom_meeting_settings.get("allow_participants_to_share_screen", None)
+        if allow_participants_to_share_screen is not None:
+            lock_share_result = self.meeting_sharing_controller.LockShare(not allow_participants_to_share_screen)
+            logger.info(f"LockShare({not allow_participants_to_share_screen}) returned {lock_share_result}")
+
+        allow_participants_to_chat = self.zoom_meeting_settings.get("allow_participants_to_chat", None)
+        if allow_participants_to_chat is not None:
+            allow_participants_to_chat_result = self.participants_ctrl.AllowParticipantsToChat(allow_participants_to_chat)
+            logger.info(f"AllowParticipantsToChat({allow_participants_to_chat}) returned {allow_participants_to_chat_result}")
+
+    def is_ready_to_send_chat_messages(self):
+        return self.ready_to_send_chat_messages
+
     def on_join(self):
+        # Reset breakout room transition flag
+        self.is_joining_or_leaving_breakout_room = False
+
         # Meeting reminder controller
         self.joined_at = time.time()
         self.meeting_reminder_event = zoom.MeetingReminderEventCallbacks(onReminderNotifyCallback=self.on_reminder_notify)
@@ -423,7 +568,16 @@ class ZoomBotAdapter(BotAdapter):
         self.chat_ctrl = self.meeting_service.GetMeetingChatController()
         self.chat_ctrl_event = zoom.MeetingChatEventCallbacks(onChatMsgNotificationCallback=self.on_chat_msg_notification_callback)
         self.chat_ctrl.SetEvent(self.chat_ctrl_event)
+        self.ready_to_send_chat_messages = True
         self.send_message_callback({"message": self.Messages.READY_TO_SEND_CHAT_MESSAGE})
+
+        # Breakout room controller
+        self.breakout_room_ctrl = self.meeting_service.GetMeetingBOController()
+        self.breakout_room_ctrl_event = zoom.MeetingBOEventCallbacks(onHasAttendeeRightsNotificationCallback=self.on_has_attendee_rights_notification)
+        self.breakout_room_ctrl.SetEvent(self.breakout_room_ctrl_event)
+
+        # Waiting room controller
+        self.waiting_room_ctrl = self.meeting_service.GetMeetingWaitingRoomController()
 
         # Meeting sharing controller
         self.meeting_sharing_controller = self.meeting_service.GetMeetingShareController()
@@ -442,17 +596,45 @@ class ZoomBotAdapter(BotAdapter):
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
 
+            # Wire up callbacks for changes to recording privilege
+
             def on_recording_privilege_changed(can_rec):
                 logger.info(f"on_recording_privilege_changed called. can_record = {can_rec}")
                 if can_rec:
-                    self.start_raw_recording()
-                else:
-                    self.stop_raw_recording()
+                    self.handle_recording_permission_granted()
+                elif self.recording_permission_granted:
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION)
 
-            self.recording_event = zoom.MeetingRecordingCtrlEventCallbacks(onRecordPrivilegeChangedCallback=on_recording_privilege_changed)
+            def on_local_recording_privilege_request_status_changed(status):
+                logger.info(f"on_local_recording_privilege_request_status called. status = {status}")
+                if status == zoom.RequestLocalRecordingStatus.RequestLocalRecording_Denied:
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION)
+                if status == zoom.RequestLocalRecordingStatus.RequestLocalRecording_Timeout:
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.REQUEST_TIMED_OUT)
+
+            self.recording_event = zoom.MeetingRecordingCtrlEventCallbacks(onRecordPrivilegeChangedCallback=on_recording_privilege_changed, onLocalRecordingPrivilegeRequestStatusCallback=on_local_recording_privilege_request_status_changed)
             self.recording_ctrl.SetEvent(self.recording_event)
 
-            self.start_raw_recording()
+            # Check if we can start recording.
+            # If we can then start it
+            # If we can't then request it
+
+            can_start_recording_result = self.recording_ctrl.CanStartRawRecording()
+            if can_start_recording_result != zoom.SDKERR_SUCCESS:
+                # Check for various reasons why it might be impossible to get the permission
+                is_support_request_local_recording_privilege_result = self.recording_ctrl.IsSupportRequestLocalRecordingPrivilege()
+                logger.info(f"is_support_request_local_recording_privilege_result = {is_support_request_local_recording_privilege_result}")
+                # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
+                if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
+                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
+
+                self.recording_ctrl.RequestLocalRecordingPrivilege()
+                logger.info("Requesting recording privilege.")
+            else:
+                self.handle_recording_permission_granted()
+
+        # Apply meeting settings
+        self.apply_meeting_settings()
 
         # Set up media streams
         GLib.timeout_add_seconds(1, self.set_up_bot_audio_input)
@@ -469,8 +651,8 @@ class ZoomBotAdapter(BotAdapter):
             logger.info(f"set_external_video_source_result = {set_external_video_source_result}")
             if set_external_video_source_result == zoom.SDKERR_SUCCESS:
                 self.meeting_video_controller = self.meeting_service.GetMeetingVideoController()
-                unmute_video_result = self.meeting_video_controller.UnmuteVideo()
-                logger.info(f"unmute_video_result = {unmute_video_result}")
+                # At this point, we can show the bot image if there is one
+                self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
         else:
             logger.info("video_source_helper is None")
 
@@ -485,43 +667,88 @@ class ZoomBotAdapter(BotAdapter):
             logger.info(f"initial_send_video_frame_response = {initial_send_video_frame_response}")
         self.on_virtual_camera_start_send_callback_called = True
 
-        # At this point, we can show the bot image if there is one
-        self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
-
     def on_virtual_camera_initialize_callback(self, video_sender, support_cap_list, suggest_cap):
         logger.info(f"on_virtual_camera_initialize_callback called with support_cap_list = {list(map(lambda x: f'{x.width}x{x.height}x{x.frame}', support_cap_list))} suggest_cap = {suggest_cap.width}x{suggest_cap.height}x{suggest_cap.frame}")
         self.video_sender = video_sender
         self.suggested_video_cap = suggest_cap
 
-    def send_raw_image(self, png_image_bytes):
-        if not self.on_virtual_camera_start_send_callback_called:
-            if self.cannot_send_video_error_ticker % 500 == 0:
-                logger.error("on_virtual_camera_start_send_callback_called not called so cannot send raw image")
-            self.cannot_send_video_error_ticker += 1
-            return
+    def unmute_webcam(self):
+        if not self.webcam_is_muted:
+            logger.info("webcam is already unmuted")
+            return True
 
+        if not self.meeting_video_controller:
+            logger.info("meeting_video_controller is None so cannot unmute webcam")
+            return False
+
+        unmute_webcam_result = self.meeting_video_controller.UnmuteVideo()
+        if unmute_webcam_result != zoom.SDKERR_SUCCESS:
+            logger.info(f"Failed to unmute webcam. unmute_webcam_result = {unmute_webcam_result}")
+            return False
+        logger.info("Unmuted webcam")
+        self.webcam_is_muted = False
+        return True
+
+    def compute_current_image_to_send(self):
+        if not self.current_raw_image_to_send:
+            logger.info("current_raw_image_to_send is None so cannot compute current image to send")
+            return None
         if not self.suggested_video_cap:
-            logger.error("suggested_video_cap is None so cannot send raw image")
-            return
+            logger.info("suggested_video_cap is None so cannot compute current image to send")
+            return None
 
-        yuv420_image_bytes, original_width, original_height = png_to_yuv420_frame(png_image_bytes)
+        yuv420_image_bytes, original_width, original_height = png_to_yuv420_frame(self.current_raw_image_to_send)
         # We have to scale the image to the zoom video capability width and height for it to display properly
         yuv420_image_bytes_scaled = scale_i420(yuv420_image_bytes, (original_width, original_height), (self.suggested_video_cap.width, self.suggested_video_cap.height))
 
-        self.current_image_to_send = yuv420_image_bytes_scaled
+        return yuv420_image_bytes_scaled
+
+    def send_raw_image(self, png_image_bytes):
+        if not self.meeting_video_controller:
+            logger.info("meeting_video_controller is None so cannot send raw image")
+            return
+
+        if not self.unmute_webcam():
+            return
+
+        self.current_raw_image_to_send = png_image_bytes
+        # We can't compute the scaled image immediately because the video caps may have not arrived yet. So set it to None, which indicates it needs to be recomputed.
+        self.current_image_to_send = None
 
         # Add a timeout to send the image every 500ms if one isn't already active
         if self.send_image_timeout_id is None:
             self.send_image_timeout_id = GLib.timeout_add(500, self.send_current_image_to_zoom)
 
     def send_current_image_to_zoom(self):
-        if self.requested_leave or self.cleaned_up or (not self.suggested_video_cap) or (not self.current_image_to_send):
+        if self.requested_leave or self.cleaned_up or (not self.current_raw_image_to_send):
             self.send_image_timeout_id = None
             return False
 
+        if not self.on_virtual_camera_start_send_callback_called:
+            if self.cannot_send_video_error_ticker % 100 == 0:
+                logger.info("on_virtual_camera_start_send_callback_called not called so cannot send raw image, but will retry later")
+            self.cannot_send_video_error_ticker += 1
+            return True
+
+        if not self.suggested_video_cap:
+            if self.cannot_send_video_error_ticker % 100 == 0:
+                logger.info("suggested_video_cap is None so cannot send raw image, but will retry later")
+            self.cannot_send_video_error_ticker += 1
+            return True
+
+        if not self.current_image_to_send:
+            self.current_image_to_send = self.compute_current_image_to_send()
+        if not self.current_image_to_send:
+            if self.cannot_send_video_error_ticker % 100 == 0:
+                logger.info("Failed to compute current image to send so cannot send raw image, but will retry later")
+            self.cannot_send_video_error_ticker += 1
+            return True
+
         send_video_frame_response = self.video_sender.sendVideoFrame(self.current_image_to_send, self.suggested_video_cap.width, self.suggested_video_cap.height, 0, zoom.FrameDataFormat_I420_FULL)
         if send_video_frame_response != zoom.SDKERR_SUCCESS:
-            logger.info(f"send_current_image_to_zoom failed with send_video_frame_response = {send_video_frame_response}")
+            if self.cannot_send_video_error_ticker % 100 == 0:
+                logger.info(f"send_current_image_to_zoom failed with send_video_frame_response = {send_video_frame_response}")
+            self.cannot_send_video_error_ticker += 1
 
         return True
 
@@ -585,7 +812,7 @@ class ZoomBotAdapter(BotAdapter):
 
         send_result = self.audio_raw_data_sender.send(bytes, sample_rate, zoom.ZoomSDKAudioChannel_Mono)
         if send_result != zoom.SDKERR_SUCCESS:
-            logger.info(f"error with send_raw_audio send_result = {send_result}")
+            logger.warning(f"error with send_raw_audio send_result = {send_result}")
 
     def on_mic_start_send_callback(self):
         self.on_mic_start_send_callback_called = True
@@ -595,26 +822,43 @@ class ZoomBotAdapter(BotAdapter):
         if node_id == self.my_participant_id:
             return
 
+        if self.recording_is_paused:
+            return
+
         current_time = datetime.utcnow()
         self.last_audio_received_at = time.time()
         self.add_audio_chunk_callback(node_id, current_time, data.GetBuffer())
 
     def add_mixed_audio_chunk_convert_to_bytes(self, data):
+        if self.recording_is_paused:
+            return
         self.add_mixed_audio_chunk_callback(chunk=data.GetBuffer())
 
+    def handle_recording_permission_granted(self):
+        if not self.recording_permission_granted:
+            self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
+            self.recording_permission_granted = True
+
+    def stop_raw_recording(self):
+        logger.info("Stopping raw recording")
+        stop_raw_recording_result = self.recording_ctrl.StopRawRecording()
+        # SDKERR_TOO_FREQUENT_CALL means it was already called recently
+        if stop_raw_recording_result != zoom.SDKERR_SUCCESS and stop_raw_recording_result != zoom.SDKERR_TOO_FREQUENT_CALL:
+            logger.warning(f"Error with stop_raw_recording_result = {stop_raw_recording_result}")
+        else:
+            self.raw_recording_active = False
+            logger.info(f"Raw recording stopped stop_raw_recording_result = {stop_raw_recording_result}")
+
+        self.set_video_input_manager_based_on_state()
+
     def start_raw_recording(self):
-        self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
-
-        can_start_recording_result = self.recording_ctrl.CanStartRawRecording()
-        if can_start_recording_result != zoom.SDKERR_SUCCESS:
-            self.recording_ctrl.RequestLocalRecordingPrivilege()
-            logger.info("Requesting recording privilege.")
-            return
-
+        logger.info("Starting raw recording")
         start_raw_recording_result = self.recording_ctrl.StartRawRecording()
         if start_raw_recording_result != zoom.SDKERR_SUCCESS:
-            logger.info("Start raw recording failed.")
-            return
+            logger.warning(f"Error with start_raw_recording_result = {start_raw_recording_result}")
+        else:
+            self.raw_recording_active = True
+            logger.info("Raw recording started")
 
         if self.audio_helper is None:
             self.audio_helper = zoom.GetAudioRawdataHelper()
@@ -629,18 +873,14 @@ class ZoomBotAdapter(BotAdapter):
                 onMixedAudioRawDataReceivedCallback=self.add_mixed_audio_chunk_convert_to_bytes if self.use_mixed_audio else None,
             )
 
-        audio_helper_subscribe_result = self.audio_helper.subscribe(self.audio_source, False)
-        logger.info(f"audio_helper_subscribe_result = {audio_helper_subscribe_result}")
-
-        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_GRANTED})
-        self.recording_permission_granted = True
+            audio_helper_subscribe_result = self.audio_helper.subscribe(self.audio_source, False)
+            logger.info(f"audio_helper_subscribe_result = {audio_helper_subscribe_result}")
 
         GLib.timeout_add(100, self.set_up_video_input_manager)
 
-    def stop_raw_recording(self):
-        rec_ctrl = self.meeting_service.StopRawRecording()
-        if rec_ctrl.StopRawRecording() != zoom.SDKERR_SUCCESS:
-            raise Exception("Error with stop raw recording")
+    def handle_recording_permission_denied(self, reason):
+        self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": reason})
+        self.recording_permission_granted = False
 
     def leave(self):
         if self.meeting_service is None:
@@ -666,7 +906,7 @@ class ZoomBotAdapter(BotAdapter):
         param.meetingNumber = meeting_number
         param.userName = self.display_name
         param.psw = self.meeting_password if self.meeting_password is not None else ""
-        param.isVideoOff = False
+        param.isVideoOff = True
         param.isAudioOff = False
         param.isAudioRawDataStereo = False
         param.isMyVoiceInMix = False
@@ -678,6 +918,8 @@ class ZoomBotAdapter(BotAdapter):
             param.join_token = self.zoom_tokens.get("join_token")
         if self.zoom_tokens.get("app_privilege_token"):
             param.app_privilege_token = self.zoom_tokens.get("app_privilege_token")
+        if self.zoom_tokens.get("onbehalf_token"):
+            param.onBehalfToken = self.zoom_tokens.get("onbehalf_token")
 
         param.eAudioRawdataSamplingRate = zoom.AudioRawdataSamplingRate.AudioRawdataSamplingRate_32K
 
@@ -726,16 +968,44 @@ class ZoomBotAdapter(BotAdapter):
         if self.meeting_status != zoom.MEETING_STATUS_CONNECTING:
             return
 
+        if self.is_joining_or_leaving_breakout_room:
+            return
+
         logger.info(f"We've been in the connecting state for more than {self.stuck_in_connecting_state_timeout} seconds, going to return could not connect to meeting message")
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
+    def clear_stuck_in_connecting_state_timeout(self):
+        if self.stuck_in_connecting_state_timeout_id is not None:
+            removed = GLib.source_remove(self.stuck_in_connecting_state_timeout_id)
+            logger.info(f"Cleared stuck in connecting state timeout id={self.stuck_in_connecting_state_timeout_id} removed={removed}")
+            self.stuck_in_connecting_state_timeout_id = None
+
     def wait_to_get_out_of_connecting_state(self):
-        logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds")
-        GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
+        self.stuck_in_connecting_state_timeout_id = GLib.timeout_add_seconds(self.stuck_in_connecting_state_timeout, self.give_up_if_still_in_connecting_state)
+        logger.info(f"Set a timeout to abort if we're still in the connecting state after {self.stuck_in_connecting_state_timeout} seconds. timeout_id = {self.stuck_in_connecting_state_timeout_id}")
+
+    def handle_failed_to_join_because_onbehalf_token_user_not_in_meeting(self):
+        if time.time() - self.attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+            self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
+            return
+
+        # We don't explicitly retry here because the retry will fail if we do it immediately
+        # Instead, we set a flag to retry after the meeting ends
+        logger.info(f"Failed to join meeting and the onbehalf token user is not in the meeting but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+        self.should_retry_after_meeting_ends = True
 
     def meeting_status_changed(self, status, iResult):
         logger.info(f"meeting_status_changed called. status = {status}, iResult={iResult}")
+        self.clear_stuck_in_connecting_state_timeout()
         self.meeting_status = status
+
+        if status == zoom.MEETING_STATUS_JOIN_BREAKOUT_ROOM:
+            self.is_joining_or_leaving_breakout_room = True
+            self.send_message_callback({"message": self.Messages.JOINING_BREAKOUT_ROOM})
+
+        if status == zoom.MEETING_STATUS_LEAVE_BREAKOUT_ROOM:
+            self.is_joining_or_leaving_breakout_room = True
+            self.send_message_callback({"message": self.Messages.LEAVING_BREAKOUT_ROOM})
 
         if status == zoom.MEETING_STATUS_CONNECTING:
             self.wait_to_get_out_of_connecting_state()
@@ -751,10 +1021,20 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
+            if self.should_retry_after_meeting_ends:
+                self.should_retry_after_meeting_ends = False
+                logger.info("Meeting ended. Will retry to join meeting in 3 seconds...")
+                GLib.timeout_add_seconds(3, self.join_meeting)
+                return
+
             # We get the MEETING_STATUS_ENDED regardless of whether we initiated the leave or not
             self.send_message_callback({"message": self.Messages.MEETING_ENDED})
 
         if status == zoom.MEETING_STATUS_FAILED:
+            # This is a hacky way to determine if the bot failed to join because the onbehalf token user is not in the meeting.
+            # On our current version of the Zoom SDK, there is no specific error code for this.
+            failed_because_onbehalf_token_user_not_in_meeting = iResult == 65535 and self.zoom_tokens.get("onbehalf_token")
+
             # Since the unable to join external meeting issue is so common, we'll handle it separately
             if iResult == zoom.MeetingFailCode.MEETING_FAIL_UNABLE_TO_JOIN_EXTERNAL_MEETING:
                 self.send_message_callback(
@@ -763,6 +1043,8 @@ class ZoomBotAdapter(BotAdapter):
                         "zoom_result_code": iResult,
                     }
                 )
+            elif failed_because_onbehalf_token_user_not_in_meeting:
+                self.handle_failed_to_join_because_onbehalf_token_user_not_in_meeting()
             else:
                 self.send_message_callback(
                     {
@@ -846,8 +1128,11 @@ class ZoomBotAdapter(BotAdapter):
             return False
         return self.mp4_demuxer.is_playing()
 
-    def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}")
+    def send_video(self, video_url, loop=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
+        if not self.unmute_webcam():
+            return
+
         if self.mp4_demuxer:
             self.mp4_demuxer.stop()
             self.mp4_demuxer = None
@@ -856,11 +1141,14 @@ class ZoomBotAdapter(BotAdapter):
             logger.info("No suggested video cap. Not sending video.")
             return
 
+        self.current_raw_image_to_send = None
+
         self.mp4_demuxer = MP4Demuxer(
             url=video_url,
             output_video_dimensions=(self.suggested_video_cap.width, self.suggested_video_cap.height),
             on_video_sample=self.mp4_demuxer_on_video_sample,
             on_audio_sample=self.mp4_demuxer_on_audio_sample,
+            loop=loop,
         )
         self.mp4_demuxer.start()
         return
@@ -883,3 +1171,19 @@ class ZoomBotAdapter(BotAdapter):
 
     def get_staged_bot_join_delay_seconds(self):
         return 0
+
+    # These webpage streaming functionality is not available for the zoom native adapter
+    def webpage_streamer_get_peer_connection_offer(self):
+        pass
+
+    def webpage_streamer_start_peer_connection(self, offer_response):
+        pass
+
+    def webpage_streamer_play_bot_output_media_stream(self, output_destination):
+        pass
+
+    def webpage_streamer_stop_bot_output_media_stream(self, output_destination):
+        pass
+
+    def is_bot_ready_for_webpage_streamer(self):
+        pass

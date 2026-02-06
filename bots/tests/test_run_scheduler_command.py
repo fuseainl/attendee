@@ -5,8 +5,8 @@ from django.test import TestCase
 from django.utils import timezone as django_timezone
 
 from accounts.models import Organization
-from bots.management.commands.run_scheduler import Command
-from bots.models import Bot, BotStates, Calendar, CalendarPlatform, CalendarStates, Project
+from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS, Command
+from bots.models import Bot, BotStates, Calendar, CalendarPlatform, CalendarStates, Project, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
 
 
 class RunSchedulerCommandTestCase(TestCase):
@@ -90,14 +90,14 @@ class RunSchedulerCommandTestCase(TestCase):
             mock_enqueue.assert_not_called()
 
     def test_run_periodic_calendar_syncs_handles_boundary_conditions(self):
-        """Test calendar sync with calendars exactly at the 30 min boundary"""
-        # Calendar synced exactly 30 minutes ago (should be included)
-        exactly_30_minutes_ago = self.now - django_timezone.timedelta(minutes=30)
-        calendar_boundary = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_30_minutes_ago, client_id="test_client_id_boundary")
+        """Test calendar sync with calendars exactly at the threshold boundary"""
+        # Calendar synced exactly at threshold (should be included)
+        exactly_at_threshold = self.now - django_timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS)
+        calendar_boundary = Calendar.objects.create(project=self.project, platform=CalendarPlatform.GOOGLE, state=CalendarStates.CONNECTED, sync_task_enqueued_at=exactly_at_threshold, client_id="test_client_id_boundary")
 
-        # Calendar synced just under 30 minutes ago (should be excluded)
-        just_under_30_minutes_ago = self.now - django_timezone.timedelta(minutes=29)
-        calendar_just_under = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, state=CalendarStates.CONNECTED, sync_task_enqueued_at=just_under_30_minutes_ago, client_id="test_client_id_under")
+        # Calendar synced just under threshold (should be excluded)
+        just_under_threshold = self.now - django_timezone.timedelta(hours=CALENDAR_SYNC_THRESHOLD_HOURS, minutes=-1)
+        calendar_just_under = Calendar.objects.create(project=self.project, platform=CalendarPlatform.MICROSOFT, state=CalendarStates.CONNECTED, sync_task_enqueued_at=just_under_threshold, client_id="test_client_id_under")
 
         command = Command()
 
@@ -112,7 +112,7 @@ class RunSchedulerCommandTestCase(TestCase):
         calendar_boundary.refresh_from_db()
         calendar_just_under.refresh_from_db()
         self.assertEqual(calendar_boundary.sync_task_enqueued_at, self.now)
-        self.assertEqual(calendar_just_under.sync_task_enqueued_at, just_under_30_minutes_ago)
+        self.assertEqual(calendar_just_under.sync_task_enqueued_at, just_under_threshold)
         self.assertEqual(calendar_just_under.sync_task_requested_at, None)
 
     def test_run_periodic_calendar_syncs_handles_requested_syncs(self):
@@ -135,3 +135,156 @@ class RunSchedulerCommandTestCase(TestCase):
         calendar_with_requested_sync.refresh_from_db()
         self.assertEqual(calendar_with_requested_sync.sync_task_enqueued_at, self.now)
         self.assertEqual(calendar_with_requested_sync.sync_task_requested_at, None)
+
+    def test_run_autopay_tasks_enqueues_eligible_organizations(self):
+        """Test that _run_autopay_tasks finds and enqueues autopay tasks for eligible organizations"""
+        # Create organization eligible for autopay
+        eligible_org = Organization.objects.create(
+            name="Eligible Autopay Org",
+            centicredits=500,  # 5 credits, below default threshold of 10
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,  # 10 credits threshold
+            autopay_amount_to_purchase_cents=2000,  # $20
+            autopay_stripe_customer_id="cus_test123",
+            autopay_charge_failure_data=None,
+        )
+
+        # Create organization not eligible (autopay disabled)
+        Organization.objects.create(
+            name="Autopay Disabled Org",
+            centicredits=500,
+            autopay_enabled=False,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_test456",
+        )
+
+        # Create organization not eligible (above threshold)
+        Organization.objects.create(
+            name="Above Threshold Org",
+            centicredits=1500,  # 15 credits, above threshold
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_test789",
+        )
+
+        command = Command()
+
+        with patch("bots.tasks.autopay_charge_task.autopay_charge.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_autopay_tasks()
+
+            # Verify only the eligible organization had an autopay task enqueued
+            mock_delay.assert_called_once_with(eligible_org.id)
+
+    def test_run_autopay_tasks_excludes_organizations_with_recent_charge_tasks(self):
+        """Test that _run_autopay_tasks excludes organizations that had charge tasks enqueued recently"""
+        # Create organization that would be eligible but had a charge task enqueued recently
+        recent_charge_time = self.now - django_timezone.timedelta(hours=12)  # 12 hours ago, within 24 hour window
+        Organization.objects.create(
+            name="Recent Charge Org",
+            centicredits=500,  # Below threshold
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_recent123",
+            autopay_charge_task_enqueued_at=recent_charge_time,
+        )
+
+        # Create organization eligible (charge task enqueued more than 24 hours ago)
+        old_charge_time = self.now - django_timezone.timedelta(days=2)  # 2 days ago, outside 24 hour window
+        old_charge_org = Organization.objects.create(
+            name="Old Charge Org",
+            centicredits=500,  # Below threshold
+            autopay_enabled=True,
+            autopay_threshold_centricredits=1000,
+            autopay_stripe_customer_id="cus_old456",
+            autopay_charge_task_enqueued_at=old_charge_time,
+        )
+
+        command = Command()
+
+        with patch("bots.tasks.autopay_charge_task.autopay_charge.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_autopay_tasks()
+
+            # Verify only the organization with old charge task had an autopay task enqueued
+            mock_delay.assert_called_once_with(old_charge_org.id)
+
+    def test_run_periodic_zoom_oauth_connection_syncs_handles_boundary_conditions(self):
+        """Test zoom oauth connection sync with connections exactly at the 7 day boundary"""
+        zoom_oauth_app = ZoomOAuthApp.objects.create(project=self.project, client_id="test_client_id")
+
+        # Connection synced exactly 7 days ago (should be included)
+        exactly_7_days_ago = self.now - django_timezone.timedelta(days=7)
+        connection_boundary = ZoomOAuthConnection.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            user_id="user_boundary",
+            account_id="account_boundary",
+            state=ZoomOAuthConnectionStates.CONNECTED,
+            is_local_recording_token_supported=True,
+            sync_task_enqueued_at=exactly_7_days_ago,
+        )
+
+        # Connection synced just under 7 days ago (should be excluded)
+        just_under_7_days_ago = self.now - django_timezone.timedelta(days=6, hours=23)
+        connection_just_under = ZoomOAuthConnection.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            user_id="user_under",
+            account_id="account_under",
+            state=ZoomOAuthConnectionStates.CONNECTED,
+            is_local_recording_token_supported=True,
+            sync_task_enqueued_at=just_under_7_days_ago,
+        )
+
+        command = Command()
+
+        with patch("bots.tasks.sync_zoom_oauth_connection_task.sync_zoom_oauth_connection.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_periodic_zoom_oauth_connection_syncs()
+
+            # Verify only the boundary connection had a sync task enqueued
+            mock_delay.assert_called_once_with(connection_boundary.id)
+
+        # Verify the sync_task_enqueued_at field was updated for the boundary connection
+        connection_boundary.refresh_from_db()
+        connection_just_under.refresh_from_db()
+        self.assertEqual(connection_boundary.sync_task_enqueued_at, self.now)
+        self.assertEqual(connection_just_under.sync_task_enqueued_at, just_under_7_days_ago)
+
+    def test_run_periodic_zoom_oauth_connection_token_refreshs_handles_boundary_conditions(self):
+        """Test zoom oauth connection token refresh with connections exactly at the 30 day boundary"""
+        zoom_oauth_app = ZoomOAuthApp.objects.create(project=self.project, client_id="test_client_id")
+
+        # Connection refreshed exactly 30 days ago (should be included)
+        exactly_30_days_ago = self.now - django_timezone.timedelta(days=30)
+        connection_boundary = ZoomOAuthConnection.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            user_id="user_boundary",
+            account_id="account_boundary",
+            state=ZoomOAuthConnectionStates.CONNECTED,
+            token_refresh_task_enqueued_at=exactly_30_days_ago,
+        )
+
+        # Connection refreshed just under 30 days ago (should be excluded)
+        just_under_30_days_ago = self.now - django_timezone.timedelta(days=29, hours=23)
+        connection_just_under = ZoomOAuthConnection.objects.create(
+            zoom_oauth_app=zoom_oauth_app,
+            user_id="user_under",
+            account_id="account_under",
+            state=ZoomOAuthConnectionStates.CONNECTED,
+            token_refresh_task_enqueued_at=just_under_30_days_ago,
+        )
+
+        command = Command()
+
+        with patch("bots.tasks.refresh_zoom_oauth_connection_task.refresh_zoom_oauth_connection.delay") as mock_delay:
+            with patch("django.utils.timezone.now", return_value=self.now):
+                command._run_periodic_zoom_oauth_connection_token_refreshs()
+
+            # Verify only the boundary connection had a refresh task enqueued
+            mock_delay.assert_called_once_with(connection_boundary.id)
+
+        # Verify the token_refresh_task_enqueued_at field was updated for the boundary connection
+        connection_boundary.refresh_from_db()
+        connection_just_under.refresh_from_db()
+        self.assertEqual(connection_boundary.token_refresh_task_enqueued_at, self.now)
+        self.assertEqual(connection_just_under.token_refresh_task_enqueued_at, just_under_30_days_ago)

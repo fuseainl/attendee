@@ -7,6 +7,8 @@ from kubernetes import client, config
 from bots.models import Bot, BotEventTypes
 
 logger = logging.getLogger(__name__)
+from django.conf import settings
+
 from bots.bot_pod_creator import BotPodCreator
 
 
@@ -32,7 +34,7 @@ def restart_bot_pod(self, bot_id):
     except config.ConfigException:
         config.load_kube_config()
     v1 = client.CoreV1Api()
-    namespace = "attendee"
+    namespace = settings.BOT_POD_NAMESPACE
 
     # Check if pod already exists with this name
     pod_name = bot.k8s_pod_name()
@@ -79,6 +81,13 @@ def restart_bot_pod(self, bot_id):
     bot.save()
 
     bot_pod_creator = BotPodCreator()
-    bot_pod_create_result = bot_pod_creator.create_bot_pod(bot_id=bot.id, bot_name=bot.k8s_pod_name(), bot_cpu_request=bot.cpu_request())
+    bot_pod_create_result = bot_pod_creator.create_bot_pod(
+        bot_id=bot.id,
+        bot_name=bot.k8s_pod_name(),
+        bot_cpu_request=bot.cpu_request(),
+        add_webpage_streamer=bot.should_launch_webpage_streamer(),
+        add_persistent_storage=bot.reserve_additional_storage(),
+        bot_pod_spec_type=bot.bot_pod_spec_type,
+    )
 
     logger.info(f"Bot pod create result: {bot_pod_create_result}")

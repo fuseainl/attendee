@@ -95,7 +95,7 @@ class TestBotCpuRequest(TestCase):
             "BOT_CPU_REQUEST": "4",
         }.get(key, default)
 
-        bot = self.create_bot("https://teams.microsoft.com/meeting/123")
+        bot = self.create_bot("https://teams.microsoft.com/meet/123123213?p=123123213")
 
         result = bot.cpu_request()
 
@@ -110,7 +110,7 @@ class TestBotCpuRequest(TestCase):
             "BOT_CPU_REQUEST": "4",
         }.get(key, default)
 
-        bot = self.create_bot("https://teams.microsoft.com/meeting/123", recording_settings={"format": RecordingFormats.MP3})
+        bot = self.create_bot("https://teams.microsoft.com/meet/123123213?p=123123213", recording_settings={"format": RecordingFormats.MP3})
 
         result = bot.cpu_request()
 
@@ -188,7 +188,7 @@ class TestBotCpuRequest(TestCase):
         }.get(key, default)
 
         # Not setting recording_settings means it defaults to MP4
-        bot = self.create_bot("https://teams.microsoft.com/meeting/123")
+        bot = self.create_bot("https://teams.microsoft.com/meet/123123213?p=123123213")
 
         result = bot.cpu_request()
 
@@ -244,7 +244,7 @@ class TestBotCpuRequest(TestCase):
         self.assertEqual(bot2.cpu_request(), "2")
 
         # Teams with WEBM (audio and video)
-        bot3 = self.create_bot("https://teams.microsoft.com/meeting/123", recording_settings={"format": RecordingFormats.WEBM})
+        bot3 = self.create_bot("https://teams.microsoft.com/meet/123123213?p=123123213", recording_settings={"format": RecordingFormats.WEBM})
         self.assertEqual(bot3.cpu_request(), "10")
 
     @patch("bots.models.os.getenv")

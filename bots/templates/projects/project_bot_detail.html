@@ -90,33 +90,52 @@
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
+    .resend-btn {
+        --bs-btn-padding-y: .2rem;
+        --bs-btn-padding-x: .55rem;
+        --bs-btn-font-size: .825rem;
+        --bs-btn-border-radius: .25rem;
+        line-height: 1.2;
+    }
 </style>
 
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="mb-0">Bot Details</h2>
-        <a href="{% url 'projects:project-bots' project.object_id %}" 
-           class="btn btn-outline-secondary">
-            <i class="bi bi-arrow-left"></i> Back to Bots
-        </a>
+        {% if bot.session_type == SessionTypes.BOT %}
+            <h2 class="mb-0">Bot Details</h2>
+            <a href="{% url 'projects:project-bots' project.object_id %}" 
+            class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to Bots
+            </a>
+        {% endif %}
+        {% if bot.session_type == SessionTypes.APP_SESSION %}
+            <h2 class="mb-0">App Session Details</h2>
+            <a href="{% url 'projects:project-app-sessions' project.object_id %}" 
+            class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to App Sessions
+            </a>
+        {% endif %}
     </div>
 
     <div class="row mb-4">
         <div class="col-md-6">
             <p><strong>ID:</strong> {{ bot.object_id }}</p>
-            <p><strong>Name:</strong> {{ bot.name }}</p>
+            {% if bot.session_type == SessionTypes.BOT %}
+                <p><strong>Name:</strong> {{ bot.name }}</p>
+            {% endif %}
             <p><strong>Created:</strong> {{ bot.created_at|date:"M d, Y H:i" }}</p>
             {% if bot.join_at %}
                 <p><strong>Join at:</strong> {{ bot.join_at|date:"M d, Y H:i" }}
-
                 {% if bot.calendar_event %}
-                through {{ bot.calendar_event.name }}
-            {% endif %}
+                    through &nbsp;<a href="{% url 'projects:project-calendar-event-detail' project.object_id bot.calendar_event.calendar.object_id bot.calendar_event.object_id %}" class="text-decoration-none"><i class="bi bi-calendar-event me-1"></i>{{ bot.calendar_event.name }}</a>
+                {% endif %}
                 </p>
             {% endif %}
         </div>
         <div class="col-md-6">
-            <p><strong>Meeting URL:</strong> {{ bot.meeting_url }}</p>
+            {% if bot.session_type == SessionTypes.BOT %}
+                <p><strong>Meeting URL:</strong> {{ bot.meeting_url }}</p>
+            {% endif %}
             <p><strong>Status:</strong> 
                 <span class="badge {% if bot.state == BotStates.READY %}bg-warning{% elif bot.state == BotStates.FATAL_ERROR %}bg-danger{% elif bot.state == BotStates.ENDED %}bg-secondary{% else %}bg-success{% endif %}">
                     {{ bot.get_state_display }}
@@ -270,7 +289,7 @@
                                 <div class="message-content flex-grow-1">
                                     <div class="message-header d-flex justify-content-between align-items-center mb-2">
                                         <span class="fw-semibold">{{ message.participant.full_name }}</span>
-                                        <span class="text-muted small">{{ message.created_at|date:"M d, Y H:i:s" }}</span>
+                                        <span class="text-muted small">{{ message.timestamp|epoch_to_datetime|date:"M d, Y H:i:s" }}</span>
                                     </div>
                                     <div class="message-text">
                                         <div class="font-monospace" style="white-space: pre-wrap; line-height: 1.4;">{{ message.text }}</div>
@@ -281,7 +300,7 @@
                     {% endfor %}
                 </div>
             {% else %}
-                <div class="alert alert-info">The bot did not record any chat messages.</div>
+                <div class="alert alert-info">No chat messages recorded.</div>
             {% endif %}
         </div>
 
@@ -298,6 +317,7 @@
                                 <th>Attempts</th>
                                 <th>Last Attempt</th>
                                 <th>Succeeded At</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -305,7 +325,7 @@
                                 <tr>
                                     <td>{{ attempt.webhook_subscription.url }}</td>
                                     <td>{{ attempt.get_webhook_trigger_type_display }}</td>
-                                    <td>
+                                    <td id="webhook-status-{{ attempt.idempotency_key }}">
                                         <span class="badge {% if attempt.status == WebhookDeliveryAttemptStatus.SUCCESS %}bg-success{% elif attempt.status == WebhookDeliveryAttemptStatus.FAILURE %}bg-danger{% else %}bg-warning{% endif %}">
                                             {{ attempt.get_status_display }}
                                         </span>
@@ -313,10 +333,24 @@
                                     <td>{{ attempt.attempt_count }}</td>
                                     <td>{% if attempt.last_attempt_at %}{{ attempt.last_attempt_at|date:"M d, Y H:i:s" }}{% else %}Not attempted{% endif %}</td>
                                     <td>{% if attempt.succeeded_at %}{{ attempt.succeeded_at|date:"M d, Y H:i:s" }}{% else %}-{% endif %}</td>
+                                    <td>
+                                        {% if attempt.status != WebhookDeliveryAttemptStatus.PENDING %}
+                                            <button 
+                                                class="btn resend-btn btn-outline-secondary"
+                                                hx-post="{% url 'projects:resend-webhook-delivery-attempt' project.object_id attempt.idempotency_key %}"
+                                                hx-target="#webhook-status-{{ attempt.idempotency_key }}"
+                                                hx-swap="innerHTML"
+                                                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                                                hx-on::after-request="this.style.visibility='hidden'"
+                                            >
+                                                Resend
+                                            </button>
+                                        {% endif %}
+                                    </td>
                                 </tr>
                                 {% if attempt.response_body_list or attempt.payload %}
                                     <tr>
-                                        <td colspan="6">
+                                        <td colspan="7">
                                             <div class="accordion" id="responseAccordion{{ attempt.id }}">
                                                 <div class="accordion-item">
                                                     <h2 class="accordion-header" id="heading{{ attempt.id }}">
@@ -479,6 +513,7 @@
             <div class="mb-3">
                 <p><strong>Maximum RAM Usage:</strong> {{ max_ram_usage }} MB</p>
                 <p><strong>Maximum CPU Usage:</strong> {{ max_cpu_usage }} millicores</p>
+                <p><strong>Maximum DB Connection Count:</strong> {{ max_db_connection_count }}</p>
             </div>
             <div class="table-responsive">
                 <table class="table table-striped">
@@ -487,6 +522,7 @@
                             <th>Timestamp</th>
                             <th>RAM Usage (MB)</th>
                             <th>CPU Usage (millicores)</th>
+                            <th>Top 5 Processes by RAM Usage (MB)</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -495,6 +531,20 @@
                                 <td>{{ snapshot.created_at|date:"M d, Y H:i:s" }}</td>
                                 <td>{{ snapshot.data.ram_usage_megabytes|default:"-" }}</td>
                                 <td>{{ snapshot.data.cpu_usage_millicores|default:"-" }}</td>
+                                <td>
+                                    {% if snapshot.data.processes %}
+                                        <div class="small d-flex flex-wrap gap-2">
+                                            {% for process in snapshot.data.processes %}
+                                                <div class="me-2">
+                                                    <strong>{{ process.name }}</strong>: {{ process.memory_megabytes }}
+                                                    <span class="text-muted">({{ process.memory_percentage|floatformat:1 }}%)</span>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </td>
                             </tr>
                         {% endfor %}
                     </tbody>

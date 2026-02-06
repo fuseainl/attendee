@@ -52,6 +52,13 @@ RUN apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scal
 RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_134.0.6998.88-1_amd64.deb
 RUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb
 
+# Install a specific version of ChromeDriver.
+RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf chromedriver-linux64 chromedriver-linux64.zip
+
 # Install ALSA
 RUN apt-get update && apt-get install -y libasound2 libasound2-plugins alsa alsa-utils alsa-oss
 
@@ -61,17 +68,32 @@ RUN apt-get install -y  pulseaudio pulseaudio-utils ffmpeg
 # Install Linux Kernel Dev
 RUN apt-get update && apt-get install -y linux-libc-dev
 
+# Update certificates
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
+
 # Install Ctags
 RUN apt-get update && apt-get install -y universal-ctags
 
 # Install xterm
 RUN apt-get update && apt-get install -y xterm
 
+# Install xmlsec1
+RUN apt-get update && apt-get install -y xmlsec1
+
+# Install xclip
+RUN apt-get update && apt-get install -y xclip
+
 # Install python dependencies
-RUN pip install pyjwt cython gdown deepgram-sdk python-dotenv
+RUN pip install pyjwt cython gdown python-dotenv
+
+# Install libavdevice-dev. Needed so that webpage streaming using pyav will work.
+RUN apt-get update && apt-get install -y libavdevice-dev && pip uninstall -y av && pip install --no-binary av "av==12.0.0"
 
 # Install gstreamer
-RUN apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgirepository1.0-dev --fix-missing
+RUN apt-get install -y gstreamer1.0-alsa gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgirepository1.0-dev --fix-missing
 
 # Alias python3 to python
 RUN ln -s /usr/bin/python3 /usr/bin/python
@@ -90,11 +112,24 @@ WORKDIR /opt
 
 FROM deps AS build
 
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash app
+
+# Workdir owned by app in one shot during copy
+ENV project=attendee
+ENV cwd=/$project
 WORKDIR $cwd
-COPY . .
 
-COPY entrypoint.sh /opt/bin/entrypoint.sh
-RUN chmod +x /opt/bin/entrypoint.sh
-RUN adduser root pulse-access
+# Copy only what you need; set ownership/perm at copy time
+COPY --chown=app:app --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=app:app . .
 
-# CMD ["/bin/bash"] is added in entrypoint.sh
+# Make STATIC_ROOT writeable for the non-root user so collectstatic can run at startup
+RUN mkdir -p "$cwd/staticfiles" && chown -R app:app "$cwd/staticfiles"
+
+# Switch to non-root AFTER copies to avoid permission flakiness
+USER app
+
+# Use tini + entrypoint; CMD can be overridden by compose
+ENTRYPOINT ["/tini","--","/usr/local/bin/entrypoint.sh"]
+CMD ["bash"]
