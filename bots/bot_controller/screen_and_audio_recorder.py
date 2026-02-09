@@ -1,7 +1,6 @@
 import logging
 import os
 import subprocess
-import threading
 
 logger = logging.getLogger(__name__)
 
@@ -16,23 +15,21 @@ class ScreenAndAudioRecorder:
         self.audio_only = audio_only
         self.paused = False
         self.xterm_proc = None
-        self._ffmpeg_log_thread = None
 
     def start_recording(self, display_var):
         logger.info(f"Starting screen recorder for display {display_var} with dimensions {self.screen_dimensions} and file location {self.file_location}")
 
-        ffmpeg_base_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
-        pulse_source = os.getenv("PULSE_RECORD_SOURCE", "default")
         if self.audio_only:
             # FFmpeg command for audio-only recording to MP3
-            ffmpeg_cmd = ffmpeg_base_cmd + [
+            ffmpeg_cmd = [
+                "ffmpeg",
                 "-y",  # Overwrite output file without asking
                 "-thread_queue_size",
                 "4096",
                 "-f",
-                "pulse",  # Audio input format for PulseAudio
+                "alsa",  # Audio input format for Linux
                 "-i",
-                pulse_source,  # PulseAudio source
+                "default",  # Default audio input device
                 "-c:a",
                 "libmp3lame",  # MP3 codec
                 "-b:a",
@@ -44,25 +41,10 @@ class ScreenAndAudioRecorder:
                 self.file_location,
             ]
         else:
-            ffmpeg_cmd = ffmpeg_base_cmd + ["-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "pulse", "-i", pulse_source, "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
+            ffmpeg_cmd = ["ffmpeg", "-y", "-thread_queue_size", "4096", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "alsa", "-i", "default", "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
 
         logger.info(f"Starting FFmpeg command: {' '.join(ffmpeg_cmd)}")
-        self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        self._ffmpeg_log_thread = threading.Thread(target=self._log_ffmpeg_stderr, daemon=True)
-        self._ffmpeg_log_thread.start()
-        threading.Timer(1.0, self._check_ffmpeg_start).start()
-
-    def _log_ffmpeg_stderr(self):
-        if not self.ffmpeg_proc or not self.ffmpeg_proc.stderr:
-            return
-        for line in self.ffmpeg_proc.stderr:
-            logger.error("FFmpeg: %s", line.rstrip())
-
-    def _check_ffmpeg_start(self):
-        if not self.ffmpeg_proc:
-            return
-        if self.ffmpeg_proc.poll() is not None:
-            logger.error("FFmpeg exited early with code %s", self.ffmpeg_proc.returncode)
+        self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
     # Pauses by muting the audio and showing a black xterm covering the entire screen
     def pause_recording(self):
