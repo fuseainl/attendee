@@ -84,10 +84,25 @@ fi
 DEFAULT_SINK="$(pactl info | sed -n 's/^Default Sink: //p')"
 DEFAULT_SOURCE="$(pactl info | sed -n 's/^Default Source: //p')"
 
+ensure_null_sink() {
+  if ! pactl list short sinks | awk '{print $2}' | grep -qx "auto_null"; then
+    pactl load-module module-null-sink sink_name=auto_null >/dev/null 2>&1 || true
+  fi
+  if pactl list short sinks | awk '{print $2}' | grep -qx "auto_null"; then
+    pactl set-default-sink auto_null || true
+    pactl set-default-source auto_null.monitor || true
+  fi
+}
+
 # If there's an auto_null, set it explicitly (idempotent)
 if pactl list short sinks | awk '{print $2}' | grep -qx "auto_null"; then
   pactl set-default-sink auto_null || true
   pactl set-default-source auto_null.monitor || true
+fi
+
+# If defaults are missing, create a null sink and attach defaults
+if [[ -z "$DEFAULT_SINK" || -z "$DEFAULT_SOURCE" ]]; then
+  ensure_null_sink
 fi
 
 if [[ "${PA_DEBUG:-0}" = "1" ]]; then
