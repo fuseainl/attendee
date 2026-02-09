@@ -37,7 +37,14 @@ chmod 700 "$XDG_RUNTIME_DIR" || true
 
 
 # Make ALSA 'default' point at Pulse
-HOME_DIR="${HOME:-/home/$(id -un)}"
+if [[ -z "${HOME:-}" ]]; then
+  if [[ "$UID_CUR" -eq 0 ]]; then
+    export HOME="/root"
+  else
+    export HOME="/home/$(id -un)"
+  fi
+fi
+HOME_DIR="$HOME"
 mkdir -p "$HOME_DIR"
 cat > "$HOME_DIR/.asoundrc" <<'EOF'
 pcm.!default { type pulse }
