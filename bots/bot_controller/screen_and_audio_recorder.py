@@ -22,6 +22,7 @@ class ScreenAndAudioRecorder:
         logger.info(f"Starting screen recorder for display {display_var} with dimensions {self.screen_dimensions} and file location {self.file_location}")
 
         ffmpeg_base_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+        pulse_source = os.getenv("PULSE_RECORD_SOURCE", "default")
         if self.audio_only:
             # FFmpeg command for audio-only recording to MP3
             ffmpeg_cmd = ffmpeg_base_cmd + [
@@ -31,7 +32,7 @@ class ScreenAndAudioRecorder:
                 "-f",
                 "pulse",  # Audio input format for PulseAudio
                 "-i",
-                "default",  # Default audio input device
+                pulse_source,  # PulseAudio source
                 "-c:a",
                 "libmp3lame",  # MP3 codec
                 "-b:a",
@@ -43,7 +44,7 @@ class ScreenAndAudioRecorder:
                 self.file_location,
             ]
         else:
-            ffmpeg_cmd = ffmpeg_base_cmd + ["-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "pulse", "-i", "default", "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
+            ffmpeg_cmd = ffmpeg_base_cmd + ["-y", "-thread_queue_size", "256", "-framerate", "30", "-video_size", f"{self.screen_dimensions[0]}x{self.screen_dimensions[1]}", "-f", "x11grab", "-draw_mouse", "0", "-probesize", "32", "-i", display_var, "-thread_queue_size", "4096", "-f", "pulse", "-i", pulse_source, "-vf", f"crop={self.recording_dimensions[0]}:{self.recording_dimensions[1]}:10:10", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-strict", "experimental", "-b:a", "128k", self.file_location]
 
         logger.info(f"Starting FFmpeg command: {' '.join(ffmpeg_cmd)}")
         self.ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)

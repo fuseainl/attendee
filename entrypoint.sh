@@ -87,30 +87,13 @@ if [[ "${PA_DEBUG:-0}" = "1" ]]; then
   pactl list short sources || true
 fi
 
-# Prefer an existing null sink (auto_null), else just keep whatever default is
-DEFAULT_SINK="$(pactl info | sed -n 's/^Default Sink: //p')"
-DEFAULT_SOURCE="$(pactl info | sed -n 's/^Default Source: //p')"
+# Ensure a null sink exists and set it as default
+pactl load-module module-null-sink sink_name=auto_null >/dev/null 2>&1 || true
+pactl set-default-sink auto_null || true
+pactl set-default-source auto_null.monitor || true
 
-ensure_null_sink() {
-  if ! pactl list short sinks | awk '{print $2}' | grep -qx "auto_null"; then
-    pactl load-module module-null-sink sink_name=auto_null >/dev/null 2>&1 || true
-  fi
-  if pactl list short sinks | awk '{print $2}' | grep -qx "auto_null"; then
-    pactl set-default-sink auto_null || true
-    pactl set-default-source auto_null.monitor || true
-  fi
-}
-
-# If there's an auto_null, set it explicitly (idempotent)
-if pactl list short sinks | awk '{print $2}' | grep -qx "auto_null"; then
-  pactl set-default-sink auto_null || true
-  pactl set-default-source auto_null.monitor || true
-fi
-
-# If defaults are missing, create a null sink and attach defaults
-if [[ -z "$DEFAULT_SINK" || -z "$DEFAULT_SOURCE" ]]; then
-  ensure_null_sink
-fi
+# Record from the null sink monitor by default
+export PULSE_RECORD_SOURCE="auto_null.monitor"
 
 if [[ "${PA_DEBUG:-0}" = "1" ]]; then
   echo "==== FINAL ===="
