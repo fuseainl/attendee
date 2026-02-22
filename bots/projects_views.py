@@ -762,7 +762,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             return redirect("bots:project-bots", object_id=object_id)
 
         # Get webhook delivery attempts for this bot (from both project-level and bot-specific webhook subscriptions)
-        webhook_delivery_attempts = WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
+        webhook_delivery_attempts = []#WebhookDeliveryAttempt.objects.filter(bot=bot).select_related("webhook_subscription").order_by("-created_at")
 
         # Get chat messages for this bot
         chat_messages = ChatMessage.objects.filter(bot=bot).select_related("participant").order_by("created_at")
