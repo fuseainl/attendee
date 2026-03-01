@@ -363,7 +363,7 @@ class BotPodCreator:
             )
         )
 
-        bot_pod_data = self.apply_spec_to_bot_pod(bot_pod)
+        bot_pod_after_spec_applied = self.apply_spec_to_bot_pod(bot_pod)
 
         if add_webpage_streamer:
             # Create specific labels for the webpage streamer pod
@@ -393,7 +393,7 @@ class BotPodCreator:
         try:
             bot_pod_api_response = self.v1.create_namespaced_pod(
                 namespace=self.namespace,
-                body=bot_pod_data
+                body=bot_pod_after_spec_applied,
             )
 
             if add_webpage_streamer:
