@@ -161,6 +161,12 @@ def _get_local_recording_token(meeting_id: str, access_token: str) -> str:
     return response_data.get("token")
 
 
+def _get_onbehalf_token(access_token: str) -> str:
+    base_url = "https://api.zoom.us/v2/users/me/token?type=onbehalf"
+    response_data = _make_zoom_api_request(base_url, access_token, {})
+    return response_data.get("token")
+
+
 def _get_zoom_meetings(access_token: str) -> list[dict]:
     base_url = "https://api.zoom.us/v2/users/me/meetings"
     base_params = {
@@ -239,39 +245,95 @@ def _handle_zoom_api_authentication_error(zoom_oauth_connection: ZoomOAuthConnec
     )
 
 
-def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
+def get_local_recording_token_via_zoom_oauth_app(bot: Bot) -> str | None:
     project = bot.project
     meeting_url = bot.meeting_url
     zoom_oauth_app = project.zoom_oauth_apps.first()
     if not zoom_oauth_app:
-        return {}
+        return None
 
     meeting_id, password = parse_zoom_join_url(meeting_url)
     if not meeting_id:
         logger.info(f"No meeting id found in join url {meeting_url}")
-        return {}
+        return None
 
     mapping_for_meeting_id = ZoomMeetingToZoomOAuthConnectionMapping.objects.filter(zoom_oauth_app=zoom_oauth_app, meeting_id=str(meeting_id)).first()
 
     if not mapping_for_meeting_id:
         logger.info(f"No mapping found for meeting id {meeting_id} in zoom oauth app {zoom_oauth_app.id}")
-        return {}
+        return None
 
     zoom_oauth_connection = mapping_for_meeting_id.zoom_oauth_connection
+
+    if not zoom_oauth_connection.is_local_recording_token_supported:
+        logger.info(f"Zoom oauth connection {zoom_oauth_connection.object_id} does not support local recording tokens, skipping")
+        return None
 
     try:
         access_token = _get_access_token(zoom_oauth_connection)
         local_recording_token = _get_local_recording_token(meeting_id, access_token)
-        return {
-            "zak_token": None,
-            "join_token": None,
-            "app_privilege_token": local_recording_token,
-        }
+        return local_recording_token
 
     except ZoomAPIAuthenticationError as e:
         _handle_zoom_api_authentication_error(zoom_oauth_connection, e)
-        return {}
+        logger.exception(f"Failed to get local recording token via zoom oauth app for {meeting_url}: {e}. This was considered an authentication error.")
+        return None
 
     except Exception as e:
-        logger.exception(f"Failed to get zoom tokens via zoom oauth app for {meeting_url}: {e}")
-        return {}
+        logger.exception(f"Failed to get local recording token via zoom oauth app for {meeting_url}: {e}")
+        return None
+
+
+def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
+    user_id_for_onbehalf_token = bot.zoom_onbehalf_token_zoom_oauth_connection_user_id()
+    if not user_id_for_onbehalf_token:
+        return None
+
+    project = bot.project
+    zoom_oauth_app = project.zoom_oauth_apps.first()
+    if not zoom_oauth_app:
+        return None
+
+    zoom_oauth_connection = ZoomOAuthConnection.objects.filter(zoom_oauth_app=zoom_oauth_app, user_id=user_id_for_onbehalf_token).first()
+    if not zoom_oauth_connection:
+        return None
+
+    if not zoom_oauth_connection.is_onbehalf_token_supported:
+        logger.info(f"Zoom oauth connection {zoom_oauth_connection.object_id} does not support onbehalf tokens, skipping")
+        return None
+
+    try:
+        access_token = _get_access_token(zoom_oauth_connection)
+        onbehalf_token = _get_onbehalf_token(access_token)
+        return onbehalf_token
+
+    except ZoomAPIAuthenticationError as e:
+        _handle_zoom_api_authentication_error(zoom_oauth_connection, e)
+        logger.exception(f"Failed to get onbehalf token via zoom oauth app with user id {user_id_for_onbehalf_token}: {e}. This was considered an authentication error.")
+        return None
+
+    except Exception as e:
+        logger.exception(f"Failed to get onbehalf token via zoom oauth app with user id {user_id_for_onbehalf_token}: {e}")
+        return None
+
+
+def get_zoom_tokens_via_zoom_oauth_app(bot: Bot) -> dict | None:
+    onbehalf_token = get_onbehalf_token_via_zoom_oauth_app(bot)
+
+    # The version of the Zoom Linux SDK we are using cannot handle the scenario of both onbehalf_token and local_recording token.
+    # Upgrading to the latest version of the latest version of the Zoom Linux SDK is not viable because it is unstable. See here
+    # https://devforum.zoom.us/t/latest-version-of-linux-meeting-sdk-6-6-10-crashes-in-certain-conditions/139587
+    # So sticking with the version we are using now is the lesser of two evils.
+    # So if we have an onbehalf token AND we are using the linux sdk, we will not attempt to get the local recording token.
+    if onbehalf_token and not bot.use_zoom_web_adapter():
+        logger.info("Not attempting to get local recording token because we have an onbehalf token and are using the linux sdk")
+        local_recording_token = None
+    else:
+        local_recording_token = get_local_recording_token_via_zoom_oauth_app(bot)
+
+    return {
+        "zak_token": None,
+        "join_token": None,
+        "app_privilege_token": local_recording_token,
+        "onbehalf_token": onbehalf_token,
+    }

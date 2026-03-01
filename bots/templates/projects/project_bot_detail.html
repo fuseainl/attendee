@@ -77,6 +77,64 @@
     .bold {
         font-weight: bold;
     }
+    /* Speaker timeline */
+    .speaker-timeline-wrapper {
+        margin-top: 0.75rem;
+        border: 1px solid #dee2e6;
+        border-radius: 0.25rem;
+        padding: 0.75rem;
+        background: #fafafa;
+    }
+    .speaker-timeline-labels {
+        flex-shrink: 0;
+        max-width: 60px;
+        overflow: hidden;
+    }
+    .speaker-timeline-tracks {
+        flex: 1;
+        position: relative;
+        min-width: 0;
+    }
+    .speaker-timeline-label {
+        height: 22px;
+        line-height: 22px;
+        font-size: 0.7rem;
+        color: #555;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding-right: 6px;
+        margin-bottom: 2px;
+    }
+    .speaker-timeline-track {
+        height: 22px;
+        position: relative;
+        background: #eee;
+        border-radius: 3px;
+        margin-bottom: 2px;
+        cursor: pointer;
+    }
+    .speaker-timeline-bar {
+        position: absolute;
+        top: 2px;
+        height: calc(100% - 4px);
+        border-radius: 2px;
+        opacity: 0.8;
+        transition: opacity 0.15s;
+    }
+    .speaker-timeline-bar:hover {
+        opacity: 1;
+    }
+    .speaker-timeline-playhead {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: #dc3545;
+        z-index: 10;
+        pointer-events: none;
+        transition: left 0.1s linear;
+    }
     /* Override Bootstrap tab colors */
     .nav-tabs .nav-link {
         color: #6c757d !important; /* Light grey for non-active tabs */
@@ -90,21 +148,39 @@
     .nav-tabs .nav-item:last-child .nav-link {
         border-right: none !important; /* Remove border from last tab */
     }
+    .resend-btn {
+        --bs-btn-padding-y: .2rem;
+        --bs-btn-padding-x: .55rem;
+        --bs-btn-font-size: .825rem;
+        --bs-btn-border-radius: .25rem;
+        line-height: 1.2;
+    }
 </style>
 
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="mb-0">Bot Details</h2>
-        <a href="{% url 'projects:project-bots' project.object_id %}" 
-           class="btn btn-outline-secondary">
-            <i class="bi bi-arrow-left"></i> Back to Bots
-        </a>
+        {% if bot.session_type == SessionTypes.BOT %}
+            <h2 class="mb-0">Bot Details</h2>
+            <a href="{% url 'projects:project-bots' project.object_id %}" 
+            class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to Bots
+            </a>
+        {% endif %}
+        {% if bot.session_type == SessionTypes.APP_SESSION %}
+            <h2 class="mb-0">App Session Details</h2>
+            <a href="{% url 'projects:project-app-sessions' project.object_id %}" 
+            class="btn btn-outline-secondary">
+                <i class="bi bi-arrow-left"></i> Back to App Sessions
+            </a>
+        {% endif %}
     </div>
 
     <div class="row mb-4">
         <div class="col-md-6">
             <p><strong>ID:</strong> {{ bot.object_id }}</p>
-            <p><strong>Name:</strong> {{ bot.name }}</p>
+            {% if bot.session_type == SessionTypes.BOT %}
+                <p><strong>Name:</strong> {{ bot.name }}</p>
+            {% endif %}
             <p><strong>Created:</strong> {{ bot.created_at|date:"M d, Y H:i" }}</p>
             {% if bot.join_at %}
                 <p><strong>Join at:</strong> {{ bot.join_at|date:"M d, Y H:i" }}
@@ -115,7 +191,9 @@
             {% endif %}
         </div>
         <div class="col-md-6">
-            <p><strong>Meeting URL:</strong> {{ bot.meeting_url }}</p>
+            {% if bot.session_type == SessionTypes.BOT %}
+                <p><strong>Meeting URL:</strong> {{ bot.meeting_url }}</p>
+            {% endif %}
             <p><strong>Status:</strong> 
                 <span class="badge {% if bot.state == BotStates.READY %}bg-warning{% elif bot.state == BotStates.FATAL_ERROR %}bg-danger{% elif bot.state == BotStates.ENDED %}bg-secondary{% else %}bg-success{% endif %}">
                     {{ bot.get_state_display }}
@@ -181,6 +259,14 @@
             <button class="nav-link" id="resource-tab" data-bs-toggle="tab" 
                     data-bs-target="#resource" type="button" role="tab">
                 Resource Usage
+            </button>
+        </li>
+        {% endif %}
+        {% if network_stats %}
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="network-tab" data-bs-toggle="tab" 
+                    data-bs-target="#network" type="button" role="tab">
+                Network Stats
             </button>
         </li>
         {% endif %}
@@ -269,7 +355,7 @@
                                 <div class="message-content flex-grow-1">
                                     <div class="message-header d-flex justify-content-between align-items-center mb-2">
                                         <span class="fw-semibold">{{ message.participant.full_name }}</span>
-                                        <span class="text-muted small">{{ message.created_at|date:"M d, Y H:i:s" }}</span>
+                                        <span class="text-muted small">{{ message.timestamp|epoch_to_datetime|date:"M d, Y H:i:s" }}</span>
                                     </div>
                                     <div class="message-text">
                                         <div class="font-monospace" style="white-space: pre-wrap; line-height: 1.4;">{{ message.text }}</div>
@@ -280,7 +366,7 @@
                     {% endfor %}
                 </div>
             {% else %}
-                <div class="alert alert-info">The bot did not record any chat messages.</div>
+                <div class="alert alert-info">No chat messages recorded.</div>
             {% endif %}
         </div>
 
@@ -297,6 +383,7 @@
                                 <th>Attempts</th>
                                 <th>Last Attempt</th>
                                 <th>Succeeded At</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -304,7 +391,7 @@
                                 <tr>
                                     <td>{{ attempt.webhook_subscription.url }}</td>
                                     <td>{{ attempt.get_webhook_trigger_type_display }}</td>
-                                    <td>
+                                    <td id="webhook-status-{{ attempt.idempotency_key }}">
                                         <span class="badge {% if attempt.status == WebhookDeliveryAttemptStatus.SUCCESS %}bg-success{% elif attempt.status == WebhookDeliveryAttemptStatus.FAILURE %}bg-danger{% else %}bg-warning{% endif %}">
                                             {{ attempt.get_status_display }}
                                         </span>
@@ -312,10 +399,24 @@
                                     <td>{{ attempt.attempt_count }}</td>
                                     <td>{% if attempt.last_attempt_at %}{{ attempt.last_attempt_at|date:"M d, Y H:i:s" }}{% else %}Not attempted{% endif %}</td>
                                     <td>{% if attempt.succeeded_at %}{{ attempt.succeeded_at|date:"M d, Y H:i:s" }}{% else %}-{% endif %}</td>
+                                    <td>
+                                        {% if attempt.status != WebhookDeliveryAttemptStatus.PENDING %}
+                                            <button 
+                                                class="btn resend-btn btn-outline-secondary"
+                                                hx-post="{% url 'projects:resend-webhook-delivery-attempt' project.object_id attempt.idempotency_key %}"
+                                                hx-target="#webhook-status-{{ attempt.idempotency_key }}"
+                                                hx-swap="innerHTML"
+                                                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                                                hx-on::after-request="this.style.visibility='hidden'"
+                                            >
+                                                Resend
+                                            </button>
+                                        {% endif %}
+                                    </td>
                                 </tr>
                                 {% if attempt.response_body_list or attempt.payload %}
                                     <tr>
-                                        <td colspan="6">
+                                        <td colspan="7">
                                             <div class="accordion" id="responseAccordion{{ attempt.id }}">
                                                 <div class="accordion-item">
                                                     <h2 class="accordion-header" id="heading{{ attempt.id }}">
@@ -432,32 +533,34 @@
                                     <div class="participant-events">
                                         <div class="participant-events-timeline mt-3">
                                             {% for event in participant.events.all %}
-                                                <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
-                                                    <div class="event-icon">
-                                                        {% if event.event_type == ParticipantEventTypes.JOIN %}
-                                                            <i class="bi bi-box-arrow-in-right text-success"></i>
-                                                        {% elif event.event_type == ParticipantEventTypes.LEAVE %}
-                                                            <i class="bi bi-box-arrow-left text-danger"></i>
-                                                        {% endif %}
-                                                    </div>
-                                                    <div class="event-content flex-grow-1">
-                                                        <div class="event-type fw-semibold">
+                                                {% if event.event_type == ParticipantEventTypes.JOIN or event.event_type == ParticipantEventTypes.LEAVE %}
+                                                    <div class="event-item d-flex align-items-start gap-3 py-2 border-bottom">
+                                                        <div class="event-icon">
                                                             {% if event.event_type == ParticipantEventTypes.JOIN %}
-                                                                Joined
+                                                                <i class="bi bi-box-arrow-in-right text-success"></i>
                                                             {% elif event.event_type == ParticipantEventTypes.LEAVE %}
-                                                                Left
+                                                                <i class="bi bi-box-arrow-left text-danger"></i>
                                                             {% endif %}
                                                         </div>
-                                                        <div class="event-timestamp text-muted small">{{ event.created_at|date:"M d, Y H:i:s" }}</div>
-                                                        {% if event.event_data %}
-                                                            <div class="event-data mt-1">
-                                                                <small class="text-muted">
-                                                                    <pre class="small mb-0">{{ event.event_data|pprint }}</pre>
-                                                                </small>
+                                                        <div class="event-content flex-grow-1">
+                                                            <div class="event-type fw-semibold">
+                                                                {% if event.event_type == ParticipantEventTypes.JOIN %}
+                                                                    Joined
+                                                                {% elif event.event_type == ParticipantEventTypes.LEAVE %}
+                                                                    Left
+                                                                {% endif %}
                                                             </div>
-                                                        {% endif %}
+                                                            <div class="event-timestamp text-muted small">{{ event.created_at|date:"M d, Y H:i:s" }}</div>
+                                                            {% if event.event_data %}
+                                                                <div class="event-data mt-1">
+                                                                    <small class="text-muted">
+                                                                        <pre class="small mb-0">{{ event.event_data|pprint }}</pre>
+                                                                    </small>
+                                                                </div>
+                                                            {% endif %}
+                                                        </div>
                                                     </div>
-                                                </div>
+                                                {% endif %}
                                             {% endfor %}
                                         </div>                                       
                                     </div>
@@ -478,6 +581,8 @@
             <div class="mb-3">
                 <p><strong>Maximum RAM Usage:</strong> {{ max_ram_usage }} MB</p>
                 <p><strong>Maximum CPU Usage:</strong> {{ max_cpu_usage }} millicores</p>
+                <p><strong>Maximum PostgreSQL Connection Count:</strong> {{ max_db_connection_count }}</p>
+                <p><strong>Maximum Redis Connection Count:</strong> {{ max_redis_connection_count }}</p>
             </div>
             <div class="table-responsive">
                 <table class="table table-striped">
@@ -516,6 +621,87 @@
             </div>
         </div>
         {% endif %}
+
+        <!-- Network Stats Tab -->
+        {% if network_stats %}
+        <div class="tab-pane fade" id="network" role="tabpanel">
+            <div class="mb-3">
+                <div class="row">
+                    <div class="col-md-6">
+                        <p><strong>Peak RX Throughput:</strong> {{ network_stats.max_rx_bytes_per_sec|floatformat:0 }} bytes/sec</p>
+                        <p><strong>Peak TX Throughput:</strong> {{ network_stats.max_tx_bytes_per_sec|floatformat:0 }} bytes/sec</p>
+                        <p><strong>Peak RX Packet Rate:</strong> {{ network_stats.max_rx_packets_per_sec|floatformat:0 }} pkt/sec</p>
+                        <p><strong>Peak TX Packet Rate:</strong> {{ network_stats.max_tx_packets_per_sec|floatformat:0 }} pkt/sec</p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Total RX Dropped:</strong> 
+                            <span class="{% if network_stats.total_rx_dropped > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_rx_dropped }}</span>
+                        </p>
+                        <p><strong>Total TX Dropped:</strong> 
+                            <span class="{% if network_stats.total_tx_dropped > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_tx_dropped }}</span>
+                        </p>
+                        <p><strong>Total RX Errors:</strong> 
+                            <span class="{% if network_stats.total_rx_errors > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_rx_errors }}</span>
+                        </p>
+                        <p><strong>Total TX Errors:</strong> 
+                            <span class="{% if network_stats.total_tx_errors > 0 %}text-danger fw-bold{% endif %}">{{ network_stats.total_tx_errors }}</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>RX (bytes/sec)</th>
+                            <th>TX (bytes/sec)</th>
+                            <th>RX (pkt/sec)</th>
+                            <th>TX (pkt/sec)</th>
+                            <th>RX Dropped</th>
+                            <th>RX Errors</th>
+                            <th>TX Dropped</th>
+                            <th>TX Errors</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for snapshot in resource_snapshots %}
+                            {% if snapshot.data.network %}
+                            <tr>
+                                <td>{{ snapshot.created_at|date:"M d, Y H:i:s" }}</td>
+                                <td>{{ snapshot.data.network.rx_bytes_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>{{ snapshot.data.network.tx_bytes_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>{{ snapshot.data.network.rx_packets_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>{{ snapshot.data.network.tx_packets_per_sec|floatformat:0|default:"-" }}</td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.rx_dropped_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.rx_dropped_delta|default:"-" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.rx_errors_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.rx_errors_delta|default:"-" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.tx_dropped_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.tx_dropped_delta|default:"-" }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="{% if snapshot.data.network.tx_errors_delta > 0 %}text-danger fw-bold{% endif %}">
+                                        {{ snapshot.data.network.tx_errors_delta|default:"-" }}
+                                    </span>
+                                </td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
     </div>
 </div>
 {% endblock %}

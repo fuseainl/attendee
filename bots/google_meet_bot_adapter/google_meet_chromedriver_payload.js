@@ -28,6 +28,105 @@ function sendChatMessage(text) {
     return true;
 }
 
+class ParticipantSpeechStartStopManager {
+    constructor() {
+        // Tracks the confirmed speaking state (true = speaking, false = not speaking)
+        this.participantSpeechStartStopMap = new Map();
+        // Tracks consecutive samples above/below threshold per participant
+        // Positive values = consecutive samples above threshold
+        // Negative values = consecutive samples below threshold
+        this.participantHysteresisCounters = new Map();
+        // Tracks the timestamp when the current streak (speaking or silent) began
+        // so the event timestamp reflects the true start of the transition
+        this.participantStreakStartTimes = new Map();
+
+        // Number of consecutive samples above threshold required to trigger speech start
+        this.startThresholdSamples = 1;
+        // Number of consecutive samples below threshold required to trigger speech stop
+        // At 500ms sample interval, 4 samples = 2 seconds of silence before stop
+        this.stopThresholdSamples = 4;
+    }
+
+    start() {
+        this.sampleVolumeLevelsInterval = setInterval(() => {
+            this.sampleVolumeLevels();
+        }, 250);
+    }
+
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId,
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
+    sampleVolumeLevels() {
+        // Build a set of participant IDs currently speaking above the threshold
+        const currentlySpeaking = new Set();
+
+        for (const [receiver, contributingSources] of window.receiverManager.receiverMap) {
+            if (!contributingSources) continue;
+
+            for (const source of contributingSources) {
+                const audioLevel = source.audioLevel || 0;
+                if (audioLevel >= 0.01) {
+                    const user = window.userManager.getUserByStreamId(source.source.toString());
+                    if (user) {
+                        currentlySpeaking.add(user.deviceId);
+                    }
+                }
+            }
+        }
+
+        const now = Date.now();
+
+        // Update hysteresis counters and detect speech start/stop transitions
+        // First, handle participants currently above threshold
+        for (const participantId of currentlySpeaking) {
+            const counter = this.participantHysteresisCounters.get(participantId) || 0;
+            // Increment towards positive (speaking); reset to 1 if was negative
+            const newCounter = counter > 0 ? counter + 1 : 1;
+            this.participantHysteresisCounters.set(participantId, newCounter);
+
+            // Record the timestamp when this speaking streak began
+            if (newCounter === 1) {
+                this.participantStreakStartTimes.set(participantId, now);
+            }
+
+            const isSpeaking = this.participantSpeechStartStopMap.get(participantId) || false;
+            if (!isSpeaking && newCounter >= this.startThresholdSamples) {
+                const streakStart = this.participantStreakStartTimes.get(participantId) || now;
+                this.participantSpeechStartStopMap.set(participantId, true);
+                this.sendSpeechStartStopEvent(participantId, true, streakStart);
+            }
+        }
+
+        // Then, handle participants currently below threshold
+        for (const [participantId] of this.participantHysteresisCounters) {
+            if (currentlySpeaking.has(participantId)) continue;
+
+            const counter = this.participantHysteresisCounters.get(participantId) || 0;
+            // Decrement towards negative (silent); reset to -1 if was positive
+            const newCounter = counter < 0 ? counter - 1 : -1;
+            this.participantHysteresisCounters.set(participantId, newCounter);
+
+            // Record the timestamp when this silent streak began
+            if (newCounter === -1) {
+                this.participantStreakStartTimes.set(participantId, now);
+            }
+
+            const isSpeaking = this.participantSpeechStartStopMap.get(participantId) || false;
+            if (isSpeaking && Math.abs(newCounter) >= this.stopThresholdSamples) {
+                const streakStart = this.participantStreakStartTimes.get(participantId) || now;
+                this.participantSpeechStartStopMap.set(participantId, false);
+                this.sendSpeechStartStopEvent(participantId, false, streakStart);
+            }
+        }
+    }
+}
+
 class StyleManager {
     constructor() {
         this.videoTrackIdToSSRC = new Map();
@@ -88,7 +187,7 @@ class StyleManager {
         // Check for recording notification dialog
         const recordingDialog = document.querySelector('div[aria-modal="true"][role="dialog"]');
         
-        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
+        if (recordingDialog && (recordingDialog.textContent.includes('This video call is being recorded') || recordingDialog.textContent.includes('Others may see your video differently') || recordingDialog.textContent.includes('This video call is being transcribed') || recordingDialog.textContent.includes('Gemini is taking notes'))) {           
             // Find and click the "Join now" button (usually the confirm/OK button)
             const joinNowButton = recordingDialog.querySelector('button[data-mdc-dialog-action="ok"]');
             
@@ -555,9 +654,10 @@ class StyleManager {
 
         await this.openChatPanel();
 
-        await this.onlyShowSubsetofGMeetUI();
+        if (window.googleMeetInitialData.modifyDomForVideoRecording) {
+            await this.onlyShowSubsetofGMeetUI();
+        }
         
-
         if (window.initialData.recordingView === 'gallery_view')
         {
             this.unpinInterval = setInterval(() => {
@@ -569,6 +669,10 @@ class StyleManager {
         //document.addEventListener('keydown', this.handleKeyDown.bind(this));
 
         this.startSilenceDetection();
+
+        if (window.initialData.recordParticipantSpeechStartStopEvents) {
+            window.participantSpeechStartStopManager?.start();
+        }
 
         console.log('Started StyleManager');
     }
@@ -688,7 +792,12 @@ class ChatMessageManager {
                 type: 'ChatMessage',
                 message_uuid: chatMessage.messageId,
                 participant_uuid: chatMessage.deviceId,
-                timestamp: Math.floor(chatMessage.timestamp / 1000),
+                // We are not using chatMessage.timestamp, because it seems to correspond to the start of the meeting
+                // not the creation time of the chat message. So we're just taking the current time for now.
+                // It could be off if there is significant latency between the chat message being created and
+                // our client receiving the chat message, but this seems unlikely in practice.
+                // In the future we can see if the payload contains the creation time of the chat message.
+                timestamp: Math.floor(Date.now() / 1000),
                 text: chatMessage.chatMessageContent.text,
             });
         }
@@ -1477,8 +1586,9 @@ const videoTrackManager = new VideoTrackManager(ws);
 const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
 const chatMessageManager = new ChatMessageManager(ws);
+const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 let rtpReceiverInterceptor = null;
-if (window.initialData.sendPerParticipantAudio) {
+if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
     rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
         receiverManager.updateContributingSources(receiver, result);
     });
@@ -1489,6 +1599,7 @@ window.userManager = userManager;
 window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
+window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};
@@ -1944,6 +2055,22 @@ new RTCInterceptor({
         }
     }
 });
+
+function setClosedCaptionsLanguage(language) {
+    // Look for an <li> element whose data-value attribute matches the language code
+    // within the Meeting language dropdown
+    const languageList = document.querySelector('ul[aria-label="Meeting language"]');
+    if (!languageList) {
+        return false;
+    }
+    const languageElement = languageList.querySelector(`li[data-value="${language}"]`);
+    if (languageElement) {
+        languageElement.click();
+        return true;
+    } else {
+        return false;
+    }
+}
 
 function addClickRipple() {
     document.addEventListener('click', function(e) {

@@ -1,7 +1,9 @@
+import json
 import logging
 import re
 import subprocess
 
+from django.conf import settings
 from selenium.webdriver.common.keys import Keys
 
 from bots.teams_bot_adapter.teams_ui_methods import (
@@ -48,11 +50,31 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         *args,
         teams_closed_captions_language: str | None,
         teams_bot_login_credentials: dict | None,
+        teams_bot_login_should_be_used: bool,
+        modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.teams_closed_captions_language = teams_closed_captions_language
         self.teams_bot_login_credentials = teams_bot_login_credentials
+        self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_credentials
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
+
+    def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
+        # If we don't have the ability to login, we can't retry
+        if not self.teams_bot_login_credentials:
+            logger.info("Meeting requires login, but Teams bot login credentials are not available, so we can't retry")
+            return False
+
+        # If we already tried to login, we can't retry
+        if self.teams_bot_login_should_be_used:
+            logger.info("Meeting requires login, but we already tried to login, so we can't retry")
+            return False
+
+        # Activate the flag that says, we are going to login this time and then retry
+        self.teams_bot_login_should_be_used = True
+        logger.info("Meeting requires login and Teams bot login credentials are available, so we will retry by logging in")
+        return True
 
     def get_chromedriver_payload_file_name(self):
         return "teams_bot_adapter/teams_chromedriver_payload.js"
@@ -61,11 +83,13 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         return 8097
 
     def is_sent_video_still_playing(self):
-        return False
+        result = self.driver.execute_script("return window.botOutputManager.isVideoPlaying();")
+        logger.info(f"is_sent_video_still_playing result = {result}")
+        return result
 
-    def send_video(self, video_url):
-        logger.info(f"send_video called with video_url = {video_url}. This is not supported for teams")
-        return
+    def send_video(self, video_url, loop=False):
+        logger.info(f"send_video called with video_url = {video_url}, loop = {loop}")
+        self.driver.execute_script(f"window.botOutputManager.playVideoWithBlobUrl({json.dumps(video_url)}, {json.dumps(loop)})")
 
     def send_chat_message(self, text, to_user_uuid):
         chatInput = self.driver.execute_script('return document.querySelector(\'[aria-label="Type a message"], [placeholder="Type a message"]\')')
@@ -115,7 +139,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
             return
 
         self.teams_closed_captions_language = language
-        closed_caption_set_language_result = self.driver.execute_script(f"return window.callManager?.setClosedCaptionsLanguage('{self.teams_closed_captions_language}')")
+        closed_caption_set_language_result = self.driver.execute_script("return window.callManager?.setClosedCaptionsLanguage(arguments[0]);", self.teams_closed_captions_language)
         if closed_caption_set_language_result:
             logger.info("In update_closed_captions_language, closed captions language set programatically")
         else:
@@ -126,3 +150,30 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
 
     def subclass_specific_after_bot_joined_meeting(self):
         self.after_bot_can_record_meeting()
+
+    def subclass_specific_initial_data_code(self):
+        return f"""
+            window.teamsInitialData = {{
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
+            }}
+        """
+
+    def subclass_specific_chrome_policies(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return {}
+
+        return {
+            "BrowserSwitcherEnabled": True,
+            "AlternativeBrowserPath": "/nonexistent-browser",
+            "AlternativeBrowserParameters": [],
+            "BrowserSwitcherDelay": 0,
+            "BrowserSwitcherParsingMode": 1,
+            "BrowserSwitcherUrlList": [
+                "*",
+                "!microsoft.com",
+                "!office.com",
+                "!cloud.microsoft",
+                "!microsoftonline.com",
+                "!live.com",
+            ],
+        }

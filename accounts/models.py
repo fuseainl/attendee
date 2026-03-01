@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 import uuid
 
@@ -16,7 +16,8 @@ class Organization(models.Model):
     version = IntegerVersionField()
     is_webhooks_enabled = models.BooleanField(default=True)
     is_async_transcription_enabled = models.BooleanField(default=False)
-    is_managed_zoom_oauth_enabled = models.BooleanField(default=False)
+    is_managed_zoom_oauth_enabled = models.BooleanField(default=True)
+    is_app_sessions_enabled = models.BooleanField(default=False)
 
     autopay_enabled = models.BooleanField(default=False)
     autopay_threshold_centricredits = models.IntegerField(default=1000)
@@ -56,7 +57,7 @@ class User(AbstractUser):
 
     def save(self, *args, **kwargs):
         if not self.object_id:
-            rand = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+            rand = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(16))
             self.object_id = f"{self.OBJECT_ID_PREFIX}{rand}"
         super().save(*args, **kwargs)
 

@@ -8,21 +8,24 @@ import os
 import threading
 import time
 from time import sleep
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 import requests
 from django.conf import settings
 from pyvirtualdisplay import Display
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from websockets.sync.server import serve
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
+from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
-from .ui_methods import UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
+from .ui_methods import UiAuthorizedUserNotInMeetingTimeoutExceededException, UiBlockedByCaptchaException, UiCouldNotJoinMeetingWaitingForHostException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiIncorrectPasswordException, UiInfinitelyRetryableException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ class WebBotAdapter(BotAdapter):
         video_frame_size: tuple[int, int],
         record_chat_messages_when_paused: bool,
         disable_incoming_video: bool,
+        record_participant_speech_start_stop_events: bool,
     ):
         self.display_name = display_name
         self.send_message_callback = send_message_callback
@@ -66,6 +70,7 @@ class WebBotAdapter(BotAdapter):
         self.recording_view = recording_view
         self.record_chat_messages_when_paused = record_chat_messages_when_paused
         self.disable_incoming_video = disable_incoming_video
+        self.record_participant_speech_start_stop_events = record_participant_speech_start_stop_events
         self.meeting_url = meeting_url
 
         # This is an internal ID that comes from the platform. It is currently only used for MS Teams.
@@ -89,6 +94,7 @@ class WebBotAdapter(BotAdapter):
         self.last_audio_message_processed_time = None
         self.first_buffer_timestamp_ms_offset = time.time() * 1000
         self.media_sending_enable_timestamp_ms = None
+        self.last_domain_allow_list_violation_check_time = time.time()
 
         self.participants_info = {}
         self.only_one_participant_in_meeting_at = None
@@ -250,19 +256,31 @@ class WebBotAdapter(BotAdapter):
 
             self.add_audio_chunk_callback(participant_id, datetime.datetime.utcnow(), audio_data.tobytes())
 
+    def number_of_participants_ever_in_meeting_excluding_other_bots(self):
+        return len([participant for participant in self.participants_info.values() if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration)])
+
     def update_only_one_participant_in_meeting_at(self):
         if not self.joined_at:
             return
 
-        # If nobody other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
-        if len(self.participants_info) <= 1:
+        # If nobody (excluding other bots) other than the bot was ever in the meeting, then don't activate this. We only want to activate if someone else was in the meeting and left
+        if self.number_of_participants_ever_in_meeting_excluding_other_bots() <= 1:
             return
 
-        all_participants_in_meeting = [x for x in self.participants_info.values() if x["active"]]
-        if len(all_participants_in_meeting) == 1 and all_participants_in_meeting[0]["fullName"] == self.display_name:
+        all_participants_in_meeting_excluding_other_bots = []
+        other_bots_in_meeting_names = []
+        for participant in self.participants_info.values():
+            if not participant["active"]:
+                continue
+            if not participant_is_another_bot(participant["fullName"], participant["isCurrentUser"], self.automatic_leave_configuration):
+                all_participants_in_meeting_excluding_other_bots.append(participant)
+            else:
+                other_bots_in_meeting_names.append(participant["fullName"])
+
+        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
-                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}")
+                logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
         else:
             self.only_one_participant_in_meeting_at = None
 
@@ -285,6 +303,9 @@ class WebBotAdapter(BotAdapter):
         # Count a caption as audio activity
         self.last_audio_message_processed_time = time.time()
         self.upsert_caption_callback(json_data["caption"])
+
+    def handle_participant_speech_start_stop_event(self, json_data):
+        self.add_participant_event_callback({"participant_uuid": json_data["participantId"], "event_type": ParticipantEventTypes.SPEECH_START if json_data["isSpeechStart"] else ParticipantEventTypes.SPEECH_STOP, "event_data": {}, "timestamp_ms": int(json_data["timestamp"])})
 
     def handle_chat_message(self, json_data):
         if self.recording_paused and not self.record_chat_messages_when_paused:
@@ -311,13 +332,17 @@ class WebBotAdapter(BotAdapter):
 
                 if message_type == 1:  # JSON
                     json_data = json.loads(message[4:].decode("utf-8"))
-                    if json_data.get("type") == "CaptionUpdate":
-                        logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
-                    else:
-                        logger.info("Received JSON message: %s", json_data)
+                    json_data_is_dict = isinstance(json_data, dict)
 
-                    # Handle audio format information
-                    if isinstance(json_data, dict):
+                    if not json_data_is_dict:
+                        logger.warning("Received non-dict JSON message: %s (type: %s)", json_data, type(json_data).__name__)
+
+                    if json_data_is_dict:
+                        if json_data.get("type") == "CaptionUpdate":
+                            logger.info("Received JSON message: %s", self.mask_transcript_if_required(json_data))
+                        else:
+                            logger.info("Received JSON message: %s", json_data)
+
                         if json_data.get("type") == "AudioFormatUpdate":
                             audio_format = json_data["format"]
                             logger.info(f"audio format {audio_format}")
@@ -327,6 +352,9 @@ class WebBotAdapter(BotAdapter):
 
                         elif json_data.get("type") == "ChatMessage":
                             self.handle_chat_message(json_data)
+
+                        elif json_data.get("type") == "ParticipantSpeechStartStopEvent":
+                            self.handle_participant_speech_start_stop_event(json_data)
 
                         elif json_data.get("type") == "UsersUpdate":
                             for user in json_data["newUsers"]:
@@ -368,6 +396,10 @@ class WebBotAdapter(BotAdapter):
                                 self.after_bot_can_record_meeting()
                             elif json_data.get("change") == "denied":
                                 self.after_bot_recording_permission_denied()
+
+                        elif json_data.get("type") == "ClosedCaptionStatusChange":
+                            if json_data.get("change") == "save_caption_not_allowed":
+                                self.could_not_enable_closed_captions()
 
                 elif message_type == 2:  # VIDEO
                     self.process_video_frame(message)
@@ -429,7 +461,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
-            logger.info(f"Error saving screenshot: {e}")
+            logger.warning(f"Error saving screenshot: {e}")
             screenshot_path = None
 
         mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
@@ -439,7 +471,7 @@ class WebBotAdapter(BotAdapter):
             with open(mhtml_file_path, "w", encoding="utf-8") as f:
                 f.write(mhtml_bytes)
         except Exception as e:
-            logger.info(f"Error saving mhtml: {e}")
+            logger.warning(f"Error saving mhtml: {e}")
             mhtml_file_path = None
 
         return screenshot_path, mhtml_file_path, current_time
@@ -458,6 +490,13 @@ class WebBotAdapter(BotAdapter):
     def send_incorrect_password_message(self):
         self.send_message_callback({"message": self.Messages.COULD_NOT_CONNECT_TO_MEETING})
 
+    def send_blocked_by_captcha_message(self):
+        self.send_message_callback(
+            {
+                "message": self.Messages.BLOCKED_BY_CAPTCHA,
+            }
+        )
+
     def send_debug_screenshot_message(self, step, exception, inner_exception):
         current_time = datetime.datetime.now()
         timestamp = current_time.strftime("%Y%m%d_%H%M%S")
@@ -465,7 +504,7 @@ class WebBotAdapter(BotAdapter):
         try:
             self.driver.save_screenshot(screenshot_path)
         except Exception as e:
-            logger.info(f"Error saving screenshot: {e}")
+            logger.warning(f"Error saving screenshot: {e}")
             screenshot_path = None
 
         mhtml_file_path = f"/tmp/page_snapshot_{timestamp}.mhtml"
@@ -475,7 +514,7 @@ class WebBotAdapter(BotAdapter):
             with open(mhtml_file_path, "w", encoding="utf-8") as f:
                 f.write(mhtml_bytes)
         except Exception as e:
-            logger.info(f"Error saving mhtml: {e}")
+            logger.warning(f"Error saving mhtml: {e}")
             mhtml_file_path = None
 
         self.send_message_callback(
@@ -492,10 +531,25 @@ class WebBotAdapter(BotAdapter):
             }
         )
 
+    def subclass_specific_chrome_policies(self):
+        return {}
+
+    def write_chrome_policies_file(self):
+        # Check if the /etc/.../attendee-chrome-policies.json symlink exists. If not, skip this, we are not running in the docker container.
+        if not os.path.islink("/etc/opt/chrome/policies/managed/attendee-chrome-policies.json"):
+            logger.warning("Attendee chrome policy file symlink does not exist, skipping writing chrome policies.")
+            return
+        policy = self.subclass_specific_chrome_policies()
+        with open("/tmp/attendee-chrome-policies.json", "w") as f:
+            json.dump(policy, f, indent=2)
+        logger.info("Chrome policy file written to /tmp/attendee-chrome-policies.json: %s", policy)
+
     def add_subclass_specific_chrome_options(self, options):
         pass
 
     def init_driver(self):
+        self.write_chrome_policies_file()
+
         options = webdriver.ChromeOptions()
 
         options.add_argument("--autoplay-policy=no-user-gesture-required")
@@ -531,18 +585,18 @@ class WebBotAdapter(BotAdapter):
             try:
                 self.driver.close()
             except Exception as e:
-                logger.info(f"Error closing driver: {e}")
+                logger.warning(f"Error closing driver: {e}")
 
             try:
                 self.driver.quit()
             except Exception as e:
-                logger.info(f"Error closing existing driver: {e}")
+                logger.warning(f"Error closing existing driver: {e}")
             self.driver = None
 
-        self.driver = webdriver.Chrome(options=options)
+        self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Define the CDN libraries needed
         CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]
@@ -611,6 +665,8 @@ class WebBotAdapter(BotAdapter):
         num_expected_exceptions = 0
         num_retries = 0
         max_retries = 3
+        attempts_to_join_started_at = time.time()
+
         while num_retries <= max_retries:
             try:
                 self.init_driver()
@@ -647,6 +703,28 @@ class WebBotAdapter(BotAdapter):
                 self.send_incorrect_password_message()
                 return
 
+            except UiBlockedByCaptchaException:
+                self.send_blocked_by_captcha_message()
+                return
+
+            except UiAuthorizedUserNotInMeetingTimeoutExceededException:
+                # If the timeout has exceeded, send the message. If not, we will retry again.
+                if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+                    self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
+                    return
+                else:
+                    logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+
+            except UiInfinitelyRetryableException as e:
+                # Exceptions of this type will always be retried, it is up to the adapter to
+                # stop throwing this exception
+
+                if self.left_meeting or self.cleaned_up:
+                    logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable but the bot has left the meeting or cleaned up, so returning")
+                    return
+
+                logger.warning(f"Failed to join meeting and the {e.__class__.__name__} exception is infinitely retryable so retrying")
+
             except UiRetryableExpectedException as e:
                 if num_retries >= max_retries:
                     logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable but the number of retries exceeded the limit and there were {num_expected_exceptions} expected exceptions, so returning")
@@ -676,7 +754,6 @@ class WebBotAdapter(BotAdapter):
                 logger.info(f"Failed to join meeting and the {e.__class__.__name__} exception is retryable so retrying")
 
                 num_retries += 1
-
             except Exception as e:
                 if num_retries >= max_retries:
                     logger.exception(f"Failed to join meeting and the unexpected {e.__class__.__name__} exception with message {e.__str__()} is retryable but the number of retries exceeded the limit, so returning.")
@@ -700,6 +777,7 @@ class WebBotAdapter(BotAdapter):
         self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
         self.joined_at = time.time()
         self.update_only_one_participant_in_meeting_at()
+        self.stop_debug_screen_recording()
 
     def after_bot_recording_permission_denied(self):
         self.send_message_callback({"message": self.Messages.BOT_RECORDING_PERMISSION_DENIED, "denied_reason": BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_DENIED_PERMISSION})
@@ -716,13 +794,13 @@ class WebBotAdapter(BotAdapter):
 
         if self.start_recording_screen_callback:
             sleep(2)
-            if self.debug_screen_recorder:
-                self.debug_screen_recorder.stop()
             self.start_recording_screen_callback(self.display_var_for_debug_recording)
 
         self.media_sending_enable_timestamp_ms = time.time() * 1000
 
-        self.ready_to_show_webpage_stream()
+    def stop_debug_screen_recording(self):
+        if self.debug_screen_recorder:
+            self.debug_screen_recorder.stop()
 
     def leave(self):
         if self.left_meeting:
@@ -732,22 +810,32 @@ class WebBotAdapter(BotAdapter):
         if self.stop_recording_screen_callback:
             self.stop_recording_screen_callback()
 
+        # Save a screenshot and mhtml file of the page right before the bot leaves the meeting
+        screenshot_path_right_before_leave = None
+        mhtml_file_path_right_before_leave = None
         try:
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
 
+            screenshot_path_right_before_leave, mhtml_file_path_right_before_leave, _ = self.capture_screenshot_and_mhtml_file()
             self.click_leave_button()
         except Exception as e:
-            logger.info(f"Error during leave: {e}")
+            logger.warning(f"Error during leave: {e}")
         finally:
-            self.send_message_callback({"message": self.Messages.MEETING_ENDED})
+            self.send_message_callback(
+                {
+                    "message": self.Messages.MEETING_ENDED,
+                    "mhtml_file_path": mhtml_file_path_right_before_leave,
+                    "screenshot_path": screenshot_path_right_before_leave,
+                }
+            )
             self.left_meeting = True
 
     def abort_join_attempt(self):
         try:
             self.driver.close()
         except Exception as e:
-            logger.info(f"Error closing driver: {e}")
+            logger.warning(f"Error closing driver: {e}")
 
     def cleanup(self):
         if self.stop_recording_screen_callback:
@@ -757,7 +845,7 @@ class WebBotAdapter(BotAdapter):
             logger.info("disable media sending")
             self.driver.execute_script("window.ws?.disableMediaSending();")
         except Exception as e:
-            logger.info(f"Error during media sending disable: {e}")
+            logger.warning(f"Error during media sending disable: {e}")
 
         # Wait for websocket buffers to be processed
         if self.last_websocket_message_processed_time:
@@ -768,20 +856,22 @@ class WebBotAdapter(BotAdapter):
 
         try:
             if self.driver:
+                self.log_browser_history()
+
                 # Simulate closing browser window
                 try:
                     self.subclass_specific_before_driver_close()
                     self.driver.close()
                 except Exception as e:
-                    logger.info(f"Error closing driver: {e}")
+                    logger.warning(f"Error closing driver: {e}")
 
                 # Then quit the driver
                 try:
                     self.driver.quit()
                 except Exception as e:
-                    logger.info(f"Error quitting driver: {e}")
+                    logger.warning(f"Error quitting driver: {e}")
         except Exception as e:
-            logger.info(f"Error during cleanup: {e}")
+            logger.warning(f"Error during cleanup: {e}")
 
         if self.debug_screen_recorder:
             self.debug_screen_recorder.stop()
@@ -791,15 +881,70 @@ class WebBotAdapter(BotAdapter):
             try:
                 self.websocket_server.shutdown()
             except Exception as e:
-                logger.info(f"Error shutting down websocket server: {e}")
+                logger.warning(f"Error shutting down websocket server: {e}")
 
         self.cleaned_up = True
+
+    def domain_for_history_entry_url(self, url):
+        try:
+            if url.startswith("chrome://browser-switch"):
+                url_normalized = unquote(url.removeprefix("chrome://browser-switch/?url="))
+            else:
+                url_normalized = url
+
+            return str(urlparse(url_normalized).netloc)
+        except Exception as e:
+            logger.warning(f"Error normalizing history entry url: {e}")
+            return url
+
+    def get_navigation_history_urls(self):
+        if not self.driver:
+            return []
+        try:
+            nav_history = self.driver.execute_cdp_cmd("Page.getNavigationHistory", {})
+            nav_history_entries = nav_history.get("entries", [])
+            return [entry.get("url", "") for entry in nav_history_entries]
+        except Exception as e:
+            logger.warning(f"Error getting navigation history: {e}")
+            return []
+
+    def log_browser_history(self):
+        try:
+            nav_history_urls = self.get_navigation_history_urls()
+            nav_history_hosts = list(set([self.domain_for_history_entry_url(url) for url in nav_history_urls]))
+            logger.info(f"Browser navigation history {nav_history_hosts}")
+            # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+            for url in nav_history_urls:
+                if url.startswith("chrome://browser-switch"):
+                    logger.error(f"Domain allow list violation detected after leave: {url}")
+        except Exception as e:
+            logger.warning(f"Error logging browser navigation history: {e}")
+
+    def check_domain_allow_list_violation(self):
+        if not settings.ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME:
+            return
+        if not self.driver:
+            return
+        if time.time() - self.last_domain_allow_list_violation_check_time < 30:
+            return
+
+        self.last_domain_allow_list_violation_check_time = time.time()
+
+        nav_history_urls = self.get_navigation_history_urls()
+
+        # If any of the navigation urls start with chrome://browser-switch, then the url was blocked.
+        for url in nav_history_urls:
+            if url.startswith("chrome://browser-switch"):
+                logger.error(f"Domain allow list violation detected: {url}")
+                raise Exception(f"Domain allow list violation detected: {self.domain_for_history_entry_url(url)}")
 
     def check_auto_leave_conditions(self) -> None:
         if self.left_meeting:
             return
         if self.cleaned_up:
             return
+
+        self.check_domain_allow_list_violation()
 
         if self.only_one_participant_in_meeting_at is not None:
             if time.time() - self.only_one_participant_in_meeting_at > self.automatic_leave_configuration.only_participant_in_meeting_timeout_seconds:
@@ -839,11 +984,20 @@ class WebBotAdapter(BotAdapter):
     def webpage_streamer_stop_bot_output_media_stream(self):
         self.driver.execute_script("window.botOutputManager.stopBotOutputMediaStream();")
 
+    def is_bot_ready_for_webpage_streamer(self):
+        if not self.driver:
+            return False
+        return self.driver.execute_script("return window.botOutputManager?.isReadyForWebpageStreamer();")
+
     def ready_to_show_bot_image(self):
         self.send_message_callback({"message": self.Messages.READY_TO_SHOW_BOT_IMAGE})
 
-    def ready_to_show_webpage_stream(self):
-        self.send_message_callback({"message": self.Messages.READY_TO_SHOW_WEBPAGE_STREAM})
+    def could_not_enable_closed_captions(self):
+        self.send_message_callback({"message": self.Messages.COULD_NOT_ENABLE_CLOSED_CAPTIONS})
+        # Leave meeting if configured to do so
+        if self.automatic_leave_configuration.enable_closed_captions_timeout_seconds is not None:
+            logger.info("Bot is configured to leave meeting if it could not enable closed captions, so leaving meeting")
+            self.send_message_callback({"message": self.Messages.ADAPTER_REQUESTED_BOT_LEAVE_MEETING, "leave_reason": BotAdapter.LEAVE_REASON.AUTO_LEAVE_COULD_NOT_ENABLE_CLOSED_CAPTIONS})
 
     def get_first_buffer_timestamp_ms(self):
         if self.media_sending_enable_timestamp_ms is None:
@@ -881,7 +1035,7 @@ class WebBotAdapter(BotAdapter):
         audio_data = np.frombuffer(bytes, dtype=np.int16).tolist()
 
         # Call the JavaScript function to enqueue the PCM chunk
-        self.driver.execute_script(f"window.botOutputManager.playPCMAudio({audio_data}, {sample_rate})")
+        self.driver.execute_script("window.botOutputManager.playPCMAudio(arguments[0], arguments[1]);", audio_data, sample_rate)
 
     def send_chat_message(self, text, to_user_uuid):
         logger.info("send_chat_message not supported in web bots")

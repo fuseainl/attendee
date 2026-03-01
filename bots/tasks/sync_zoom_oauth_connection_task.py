@@ -13,6 +13,10 @@ from celery import shared_task
 
 def enqueue_sync_zoom_oauth_connection_task(zoom_oauth_connection: ZoomOAuthConnection):
     """Enqueue a sync zoom oauth connection task for a zoom oauth connection."""
+    if not zoom_oauth_connection.is_local_recording_token_supported:
+        logger.info(f"Skipping sync zoom oauth connection task for {zoom_oauth_connection.id} because it does not support local recording tokens")
+        return
+
     with transaction.atomic():
         zoom_oauth_connection.sync_task_enqueued_at = timezone.now()
         zoom_oauth_connection.sync_task_requested_at = None

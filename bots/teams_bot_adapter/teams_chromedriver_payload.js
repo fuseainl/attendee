@@ -1,3 +1,19 @@
+(() => {
+    if (globalThis.__realConsole) return;
+  
+    const c = window.console;
+    const bind = Function.prototype.bind;
+  
+    // Save bound methods so later overwrites don't matter
+    globalThis.__realConsole = {
+      log:   c?.log   ? bind.call(c.log, c)   : () => {},
+      info:  c?.info  ? bind.call(c.info, c)  : () => {},
+      warn:  c?.warn  ? bind.call(c.warn, c)  : () => {},
+      error: c?.error ? bind.call(c.error, c) : () => {},
+      debug: c?.debug ? bind.call(c.debug, c) : () => {},
+    };
+  })();
+
 class StyleManager {
     constructor() {
         this.audioContext = null;
@@ -357,7 +373,10 @@ class StyleManager {
 
     start() {
         this.startSilenceDetection();
-        this.makeMainVideoFillFrame();
+
+        if (window.teamsInitialData.modifyDomForVideoRecording) {
+            this.makeMainVideoFillFrame();
+        }
 
         console.log('Started StyleManager');
     }
@@ -1092,7 +1111,7 @@ class UserManager {
         }
     }
 }
-var realConsole;
+var realConsole = globalThis.__realConsole;
 // Websocket client
 class WebSocketClient {
     // Message types
@@ -1546,16 +1565,31 @@ function handleConversationEnd(eventDataObject) {
     }
 
     realConsole?.log('handleConversationEnd, eventDataObjectBody', eventDataObjectBody);
+    window.ws?.sendJson({
+        type: 'ConversationEndPayload',
+        body: eventDataObjectBody
+    });
 
     const subCode = eventDataObjectBody?.subCode;
     const subCodeValueForDeniedRequestToJoin = 5854;
+    const subCodeForAnonymousJoinDisabledForTenantByPolicy = 5723;
 
     if (subCode === subCodeValueForDeniedRequestToJoin)
     {
-        // For now this won't do anything, but good to have it in our logs
+        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
         window.ws?.sendJson({
             type: 'MeetingStatusChange',
             change: 'request_to_join_denied'
+        });
+        return;
+    }
+
+    if (subCode === subCodeForAnonymousJoinDisabledForTenantByPolicy)
+    {
+        // For now this won't do anything, but good to have it in our logs. In the future, this should probably be the source of truth for these things, instead of the UI inspection.
+        window.ws?.sendJson({
+            type: 'MeetingStatusChange',
+            change: 'anonymous_join_disabled_for_tenant_by_policy'
         });
         return;
     }
@@ -1607,6 +1641,15 @@ class ParticipantSpeakingStateMachine {
         this.samples = [];
     }
 
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId,
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
     addSample(sample) {
         this.samples.push(sample);
 
@@ -1630,9 +1673,13 @@ class ParticipantSpeakingStateMachine {
         if (previousState == 'NOT_SPEAKING' && this.state == 'SPEAKING') {
             realConsole?.log('SPEAKING: adding speech start for participant', this.participantId);
             dominantSpeakerManager.addSpeechIntervalStart(firstOfLastFiveSamplesTimestamp, this.participantId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                this.sendSpeechStartStopEvent(this.participantId, true, firstOfLastFiveSamplesTimestamp);
         } else if (previousState == 'SPEAKING' && this.state == 'NOT_SPEAKING') {
             realConsole?.log('NOT_SPEAKING: adding speech stop for participant', this.participantId);
             dominantSpeakerManager.addSpeechIntervalEnd(firstOfLastFiveSamplesTimestamp - 100, this.participantId);
+            if (window.initialData.recordParticipantSpeechStartStopEvents)
+                this.sendSpeechStartStopEvent(this.participantId, false, firstOfLastFiveSamplesTimestamp - 100);
         }
     }
 }
@@ -1726,20 +1773,6 @@ window.styleManager = styleManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
-
-if (!realConsole) {
-    if (document.readyState === 'complete') {
-        createIframe();
-    } else {
-        document.addEventListener('DOMContentLoaded', createIframe);
-    }
-    function createIframe() {
-        const iframe = document.createElement('iframe');
-        iframe.src = 'about:blank';
-        document.body.appendChild(iframe);
-        realConsole = iframe.contentWindow.console;
-    }
-}
 
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
@@ -2335,6 +2368,10 @@ new RTCInterceptor({
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
+                else if (window.initialData.recordParticipantSpeechStartStopEvents) {
+                    // If we are not recording per participant audio but we need speech start events, then we only need to track the receiver.
+                    window.receiverManager?.addReceiver(event.receiver);
+                }
             }
             if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
@@ -2497,14 +2534,31 @@ if (window.initialData.addClickRipple) {
 
 
 
-function turnOnCamera() {
+async function turnOnCamera() {
     // Click camera button to turn it on
-    const cameraButton = document.querySelector('button[aria-label="Turn camera on"]');
+    let cameraButton = null;
+    const numAttempts = 30;
+    for (let i = 0; i < numAttempts; i++) {
+        cameraButton = document.querySelector('button[aria-label="Turn camera on"]') || document.querySelector('div[aria-label="Turn camera on"]');
+        if (cameraButton) {
+            break;
+        }
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera, but will try again'
+        });
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
     if (cameraButton) {
         console.log("Clicking the camera button to turn it on");
         cameraButton.click();
     } else {
         console.log("Camera button not found");
+        window.ws?.sendJson({
+            type: 'Error',
+            message: 'Camera button not found in turnOnCamera'
+        });
     }
 }
 

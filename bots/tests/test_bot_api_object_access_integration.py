@@ -269,6 +269,54 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(response.json()["error"], "Bot not found")
 
+    def test_transcript_delete_access_control(self):
+        """Test that transcript deletion (DELETE /api/bots/<object_id>/transcript) respects project boundaries"""
+        # API key A can delete bot A's transcript
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_a.object_id}/transcript", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # API key A cannot delete bot B's transcript
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_b.object_id}/transcript", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["error"], "Bot not found")
+
+        # API key B can delete bot B's transcript
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_b.object_id}/transcript", self.api_key_b_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        # API key B cannot delete bot A's transcript
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_a.object_id}/transcript", self.api_key_b_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["error"], "Bot not found")
+
+    def test_transcript_delete_async_transcription_access_control(self):
+        """Test that async transcription deletion respects project boundaries when using async_transcription_id parameter"""
+        # API key A can delete bot A's async transcription
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_a.object_id}/transcript?async_transcription_id={self.async_transcription_a.object_id}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Verify the async transcription was not deleted
+        self.assertTrue(AsyncTranscription.objects.filter(object_id=self.async_transcription_a.object_id).exists())
+        # Verify the utterances were deleted
+        self.assertFalse(Utterance.objects.filter(recording=self.recording_a, async_transcription=self.async_transcription_a).exists())
+
+        # API key A cannot delete bot A's transcript with bot B's async transcription (should fail because async transcription belongs to different recording)
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_a.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("Async Transcription not found", response.json().get("error", ""))
+
+        # API key A cannot delete bot B's transcript with bot B's async transcription (should fail at bot level)
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_b.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_a_plain)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.json()["error"], "Bot not found")
+
+        # API key B can delete bot B's async transcription
+        response = self._make_authenticated_request("DELETE", f"/api/v1/bots/{self.bot_b.object_id}/transcript?async_transcription_id={self.async_transcription_b.object_id}", self.api_key_b_plain)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Verify the async transcription was not deleted
+        self.assertTrue(AsyncTranscription.objects.filter(object_id=self.async_transcription_b.object_id).exists())
+        # Verify the utterances were deleted
+        self.assertFalse(Utterance.objects.filter(recording=self.recording_b, async_transcription=self.async_transcription_b).exists())
+
     # Tests for Recording View (GET /api/bots/<object_id>/recording)
     def test_recording_access_control(self):
         """Test that recording access respects project boundaries"""
@@ -453,6 +501,7 @@ class BotApiObjectAccessIntegrationTest(TransactionTestCase):
         endpoints_to_test = [
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}"),
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/transcript"),
+            ("DELETE", f"/api/v1/bots/{self.bot_b.object_id}/transcript"),
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/recording"),
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/chat_messages"),
             ("GET", f"/api/v1/bots/{self.bot_b.object_id}/participant_events"),

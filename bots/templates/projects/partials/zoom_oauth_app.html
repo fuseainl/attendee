@@ -1,10 +1,13 @@
 <div id="zoom-oauth-app-partial">
     <div class="card mt-4" id="zoom-oauth-app-container">
         <div class="card-header">
-            <h5 class="mb-0">Zoom OAuth App</h5>
-            {% if zoom_oauth_app %}
-            <code class="me-2">{{ zoom_oauth_app.object_id }}</code>
-            {% endif %}
+            <h5 class="mb-0">Zoom OAuth App Credentials</h5>
+            <!-- Simplify UI for now, no need to show the object id since we are assuming one zoom oauth app per project -->
+            {% comment %}
+                {% if zoom_oauth_app %}
+                <code class="me-2">{{ zoom_oauth_app.object_id }}</code>
+                {% endif %}
+            {% endcomment %}
         </div>
         <div class="card-body">
             <div id="credentials-status">
@@ -62,7 +65,7 @@
                 </div>
                 <div class="modal-body">
                     <div id="zoom-oauth-error" class="alert alert-danger d-none" role="alert"></div>
-                    <form id="zoomOAuthAppForm"
+                    <form id="zoomOAuthAppForm" autocomplete="off"
                         hx-post="{% url 'projects:create-zoom-oauth-app' project.object_id %}"
                         hx-target="#zoom-oauth-app-partial"
                         hx-select="#zoom-oauth-app-partial"
@@ -82,7 +85,7 @@
                         
                         <div class="mb-3">
                             <label for="client_id" class="form-label">Client ID</label>
-                            <input type="text" 
+                            <input type="text"
                                 class="form-control" 
                                 id="client_id" 
                                 name="client_id" 
@@ -94,7 +97,7 @@
                         
                         <div class="mb-3">
                             <label for="client_secret" class="form-label">Client Secret</label>
-                            <input type="text" 
+                            <input type="text"
                                 class="form-control" 
                                 id="client_secret" 
                                 name="client_secret" 
@@ -104,8 +107,8 @@
                         </div>
                         
                         <div class="mb-3">
-                            <label for="webhook_secret" class="form-label">Webhook Secret</label>
-                            <input type="text" 
+                            <label for="webhook_secret" class="form-label">Webhook Secret (optional)</label>
+                            <input type="text"
                                 class="form-control" 
                                 id="webhook_secret" 
                                 name="webhook_secret" 

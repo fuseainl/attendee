@@ -9,19 +9,41 @@ from celery import shared_task
 logger = logging.getLogger(__name__)
 
 from bots.models import Credentials, RecordingManager, TranscriptionFailureReasons, TranscriptionProviders, Utterance, WebhookTriggerTypes
+from bots.transcription_utils import get_transcription_via_assemblyai_from_mp3, is_retryable_failure
 from bots.utils import pcm_to_mp3
 from bots.webhook_payloads import utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 
 
-def is_retryable_failure(failure_data):
-    return failure_data.get("reason") in [
-        TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED,
-        TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED,
-        TranscriptionFailureReasons.TIMED_OUT,
-        TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED,
-        TranscriptionFailureReasons.INTERNAL_ERROR,
-    ]
+def transform_diarized_json_to_schema(result):
+    """
+    Transform OpenAI diarized_json format to Attendee's expected transcription schema.
+    """
+    transcription = {"transcript": result.get("text", "")}
+
+    # Extract segments (OpenAI sends each "word" as a separate segment, may contain multiple words).
+    # We will transform each segment into a word object, despite the fact that it may contain multiple words.
+    segments = result.get("segments", [])
+    words = []
+
+    for segment in segments:
+        segment_text = segment.get("text", "")
+        segment_start = segment.get("start", 0.0)
+        segment_end = segment.get("end", segment_start)
+        speaker = segment.get("speaker", None)
+
+        word_obj = {
+            "word": segment_text,
+            "start": segment_start,
+            "end": segment_end,
+            "speaker": speaker,
+        }
+        words.append(word_obj)
+
+    if words:
+        transcription["words"] = words
+
+    return transcription
 
 
 def get_transcription(utterance):
@@ -39,6 +61,8 @@ def get_transcription(utterance):
             transcription, failure_data = get_transcription_via_sarvam(utterance)
         elif utterance.transcription_provider == TranscriptionProviders.ELEVENLABS:
             transcription, failure_data = get_transcription_via_elevenlabs(utterance)
+        elif utterance.transcription_provider == TranscriptionProviders.CUSTOM_ASYNC:
+            transcription, failure_data = get_transcription_via_custom_async(utterance)
         else:
             raise Exception(f"Unknown or streaming-only transcription provider: {utterance.transcription_provider}")
 
@@ -87,9 +111,7 @@ def process_utterance(self, utterance_id):
         # If the utterance has an associated audio chunk, clear the audio blob on the audio chunk.
         # If async transcription data is being saved, do NOT clear it, because we may use it later in an async transcription.
         if utterance.audio_chunk and not utterance.recording.bot.record_async_transcription_audio_chunks():
-            utterance_audio_chunk = utterance.audio_chunk
-            utterance_audio_chunk.audio_blob = b""
-            utterance_audio_chunk.save()
+            utterance.audio_chunk.clear_audio_data()
 
         utterance.transcription = transcription
         utterance.save()
@@ -219,6 +241,7 @@ def get_transcription_via_deepgram(utterance):
     from deepgram import (
         DeepgramApiError,
         DeepgramClient,
+        DeepgramClientOptions,
         FileSource,
         PrerecordedOptions,
     )
@@ -252,7 +275,13 @@ def get_transcription_via_deepgram(utterance):
     if not deepgram_credentials:
         return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
 
-    deepgram = DeepgramClient(deepgram_credentials["api_key"])
+    deepgram_base_url = transcription_settings.deepgram_base_url()
+    if deepgram_base_url:
+        logger.info(f"Using Deepgram base URL {deepgram_base_url} for transcription")
+        config = DeepgramClientOptions(url=deepgram_base_url)
+        deepgram = DeepgramClient(deepgram_credentials["api_key"], config)
+    else:
+        deepgram = DeepgramClient(deepgram_credentials["api_key"])
 
     try:
         response = deepgram.listen.rest.v("1").transcribe_file(payload, options)
@@ -302,6 +331,18 @@ def get_transcription_via_openai(utterance):
         files["prompt"] = (None, transcription_settings.openai_transcription_prompt())
     if transcription_settings.openai_transcription_language():
         files["language"] = (None, transcription_settings.openai_transcription_language())
+    # Add response_format and chunking_strategy for gpt-4o-transcribe-diarize
+    response_format = transcription_settings.openai_transcription_response_format()
+    if response_format:
+        files["response_format"] = (None, response_format)
+    chunking_strategy = transcription_settings.openai_transcription_chunking_strategy()
+    if chunking_strategy:
+        # If chunking_strategy is a dict (server_vad object), JSON stringify it
+        if isinstance(chunking_strategy, dict):
+            files["chunking_strategy"] = (None, json.dumps(chunking_strategy))
+        else:
+            files["chunking_strategy"] = (None, chunking_strategy)
+
     response = requests.post(url, headers=headers, files=files)
 
     if response.status_code == 401:
@@ -314,144 +355,23 @@ def get_transcription_via_openai(utterance):
     result = response.json()
     logger.info(f"OpenAI transcription completed successfully for utterance {utterance.id}.")
 
-    # Format the response to match our expected schema
-    transcription = {"transcript": result.get("text", "")}
+    # If diarized_json format, transform to Attendee's expected transcription schema
+    if response_format == "diarized_json":
+        transcription = transform_diarized_json_to_schema(result)
+    else:
+        transcription = {"transcript": result.get("text", "")}
 
     return transcription, None
 
 
 def get_transcription_via_assemblyai(utterance):
-    recording = utterance.recording
-    transcription_settings = utterance.transcription_settings
-    assemblyai_credentials_record = recording.bot.project.credentials.filter(credential_type=Credentials.CredentialTypes.ASSEMBLY_AI).first()
-    if not assemblyai_credentials_record:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    assemblyai_credentials = assemblyai_credentials_record.get_credentials()
-    if not assemblyai_credentials:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND}
-
-    api_key = assemblyai_credentials.get("api_key")
-    if not api_key:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "api_key not in credentials"}
-
-    # If the audio blob is less than 175ms in duration, just return an empty transcription
-    # Audio clips this short are almost never generated, it almost certainly didn't have any speech
-    # and if we send it to the assemblyai api, the upload will fail
-    if utterance.duration_ms < 175:
-        logger.info(f"AssemblyAI transcription skipped for utterance {utterance.id} because it's less than 175ms in duration")
-        return {"transcript": "", "words": []}, None
-
-    headers = {"authorization": api_key}
-    base_url = transcription_settings.assemblyai_base_url()
-
-    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
-
-    upload_response = requests.post(f"{base_url}/upload", headers=headers, data=payload_mp3)
-
-    if upload_response.status_code == 401:
-        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
-
-    if upload_response.status_code != 200:
-        return None, {"reason": TranscriptionFailureReasons.AUDIO_UPLOAD_FAILED, "status_code": upload_response.status_code, "text": upload_response.text}
-
-    upload_url = upload_response.json()["upload_url"]
-
-    data = {
-        "audio_url": upload_url,
-        "speech_model": "universal",
-    }
-
-    if transcription_settings.assembly_ai_language_detection():
-        data["language_detection"] = True
-    elif transcription_settings.assembly_ai_language_code():
-        data["language_code"] = transcription_settings.assembly_ai_language_code()
-
-    # Add keyterms_prompt and speech_model if set
-    keyterms_prompt = transcription_settings.assemblyai_keyterms_prompt()
-    if keyterms_prompt:
-        data["keyterms_prompt"] = keyterms_prompt
-    speech_model = transcription_settings.assemblyai_speech_model()
-    if speech_model:
-        data["speech_model"] = speech_model
-
-    if transcription_settings.assemblyai_speaker_labels():
-        data["speaker_labels"] = True
-
-    language_detection_options = transcription_settings.assemblyai_language_detection_options()
-    if language_detection_options:
-        data["language_detection_options"] = language_detection_options
-
-    url = f"{base_url}/transcript"
-    response = requests.post(url, json=data, headers=headers)
-
-    if response.status_code != 200:
-        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "text": response.text}
-
-    transcript_id = response.json()["id"]
-    polling_endpoint = f"{base_url}/transcript/{transcript_id}"
-
-    # Poll the result_url until we get a completed transcription
-    max_retries = 120  # Maximum number of retries (2 minutes with 1s sleep)
-    retry_count = 0
-
-    while retry_count < max_retries:
-        polling_response = requests.get(polling_endpoint, headers=headers)
-
-        if polling_response.status_code != 200:
-            logger.error(f"AssemblyAI result fetch failed with status code {polling_response.status_code}")
-            time.sleep(10)
-            retry_count += 10
-            continue
-
-        transcription_result = polling_response.json()
-
-        if transcription_result["status"] == "completed":
-            logger.info("AssemblyAI transcription completed successfully, now deleting from AssemblyAI.")
-
-            # Delete the transcript from AssemblyAI
-            delete_response = requests.delete(polling_endpoint, headers=headers)
-            if delete_response.status_code != 200:
-                logger.error(f"AssemblyAI delete failed with status code {delete_response.status_code}: {delete_response.text}")
-            else:
-                logger.info("AssemblyAI delete successful")
-
-            transcript_text = transcription_result.get("text", "")
-            words = transcription_result.get("words", [])
-
-            formatted_words = []
-            if words:
-                for word in words:
-                    formatted_word = {
-                        "word": word["text"],
-                        "start": word["start"] / 1000.0,
-                        "end": word["end"] / 1000.0,
-                        "confidence": word["confidence"],
-                    }
-                    if "speaker" in word:
-                        formatted_word["speaker"] = word["speaker"]
-
-                    formatted_words.append(formatted_word)
-
-            transcription = {"transcript": transcript_text, "words": formatted_words, "language": transcription_result.get("language_code", None)}
-            return transcription, None
-
-        elif transcription_result["status"] == "error":
-            error = transcription_result.get("error")
-
-            if error and "language_detection cannot be performed on files with no spoken audio" in error:
-                logger.info(f"AssemblyAI transcription skipped for utterance {utterance.id} because it did not have any spoken audio and we tried to detect language")
-                return {"transcript": "", "words": []}, None
-
-            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error": error}
-
-        else:  # queued, processing
-            logger.info(f"AssemblyAI transcription status: {transcription_result['status']}, waiting...")
-            time.sleep(1)
-            retry_count += 1
-
-    # If we've reached here, we've timed out
-    return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "step": "transcribe_result_poll"}
+    return get_transcription_via_assemblyai_from_mp3(
+        retrieve_mp3_data_callback=lambda: pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate()),
+        duration_ms=utterance.duration_ms,
+        identifier=f"utterance {utterance.id}",
+        transcription_settings=utterance.transcription_settings,
+        recording=utterance.recording,
+    )
 
 
 def get_transcription_via_sarvam(utterance):
@@ -600,4 +520,87 @@ def get_transcription_via_elevenlabs(utterance):
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
     except Exception as e:
         logger.error(f"ElevenLabs transcription unexpected error: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
+
+
+def get_transcription_via_custom_async(utterance):
+    transcription_settings = utterance.transcription_settings
+
+    # Get the base URL from environment variable
+    base_url = os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL")
+    if not base_url:
+        return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_NOT_FOUND, "error": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable not set"}
+
+    # Get additional properties from settings
+    additional_props = transcription_settings.custom_async_additional_props()
+
+    payload_mp3 = pcm_to_mp3(utterance.get_audio_blob().tobytes(), sample_rate=utterance.get_sample_rate())
+
+    files = {"audio": ("audio.mp3", payload_mp3, "audio/mpeg")}
+
+    # Add additional properties as form data
+    data = {}
+    for key, value in additional_props.items():
+        if isinstance(value, (dict, list)):
+            data[key] = json.dumps(value)
+        else:
+            data[key] = value
+
+    # Get timeout from environment or use default (120 retries like Gladia and AssemblyAI)
+    timeout = int(os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_TIMEOUT", "120"))  # 120 seconds default timeout
+
+    try:
+        # Make the POST request to the custom transcription service
+        logger.info(f"Sending audio to custom async service at {base_url}")
+        response = requests.post(base_url, files=files, data=data if data else None, timeout=timeout)
+
+        if response.status_code == 401:
+            return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
+
+        if response.status_code == 429:
+            return None, {"reason": TranscriptionFailureReasons.RATE_LIMIT_EXCEEDED, "status_code": response.status_code}
+
+        if response.status_code != 200:
+            logger.error(f"Custom async transcription failed with status code {response.status_code}: {response.text}")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
+
+        result_data = response.json()
+        logger.info("Custom async transcription request completed")
+
+        status = result_data.get("status")
+        if status == "done":
+            transcription = result_data.get("result", {}).get("transcription", "")
+            logger.info("Custom async transcription completed successfully")
+            transcription["transcript"] = transcription["full_transcript"]
+            del transcription["full_transcript"]
+
+            # Extract all words from all utterances into a flat list
+            all_words = []
+            for utt in transcription["utterances"]:
+                if "words" in utt:
+                    all_words.extend(utt["words"])
+            transcription["words"] = all_words
+            del transcription["utterances"]
+
+            return transcription, None
+
+        elif status == "error":
+            error_code = result_data.get("error_code")
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "error_code": error_code}
+
+        else:
+            # Unknown status
+            return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "step": "transcribe_result_poll", "status": status}
+
+    except requests.exceptions.Timeout:
+        logger.error(f"Custom async transcription request timed out after {timeout} seconds")
+        return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "timeout": timeout}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Custom async transcription request failed: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": str(e)}
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"Custom async transcription response parsing failed: {str(e)}")
+        return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
+    except Exception as e:
+        logger.error(f"Custom async transcription unexpected error: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}

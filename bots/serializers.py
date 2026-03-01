@@ -63,7 +63,7 @@ def url_is_allowed_for_voice_agent(url):
 
 def get_openai_model_enum():
     """Get allowed OpenAI models including custom env var if set"""
-    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+    default_models = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-4o-transcribe-diarize"]
     custom_model = os.getenv("OPENAI_MODEL_NAME")
     if custom_model and custom_model not in default_models:
         return default_models + [custom_model]
@@ -269,6 +269,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "model": {"description": "The model to use for transcription. Defaults to 'nova-3' if not specified, which is the recommended model for most use cases. See here for details: https://developers.deepgram.com/docs/models-languages-overview", "type": "string"},
                 "redact": {"type": "array", "items": {"type": "string", "enum": ["pci", "pii", "numbers"]}, "uniqueItems": True, "description": "Array of redaction types to apply to transcription. Automatically removes or masks sensitive information like PII, PCI data, and numbers from transcripts. See here for details: https://developers.deepgram.com/docs/redaction"},
                 "replace": {"type": "array", "items": {"type": "string"}, "description": "Array of terms to find and replace in the transcript. Each string should be in the format 'term_to_find:replacement_term' (e.g., 'kpis:Key Performance Indicators'). See here for details: https://developers.deepgram.com/docs/find-and-replace"},
+                "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
             },
             "additionalProperties": False,
         },
@@ -303,6 +304,28 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "language": {
                     "type": "string",
                     "description": "The language to use for transcription. See here in the 'Set 1' column for available language codes: https://en.wikipedia.org/wiki/List_of_ISO_639_language_codes. This parameter is optional but if you know the language in advance, setting it will improve accuracy.",
+                },
+                "response_format": {
+                    "type": "string",
+                    "enum": ["json", "diarized_json"],
+                    "description": "The format of the transcription response. Only applicable for gpt-4o-transcribe-diarize model. Defaults to diarized_json.",
+                },
+                "chunking_strategy": {
+                    "oneOf": [
+                        {"type": "string", "enum": ["auto"]},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string", "enum": ["server_vad"], "description": "Must be set to server_vad to enable manual chunking using server side VAD."},
+                                "prefix_padding_ms": {"type": "integer", "description": "Amount of audio to include before the VAD detected speech (in milliseconds). Defaults to 300."},
+                                "silence_duration_ms": {"type": "integer", "description": "Duration of silence to detect speech stop (in milliseconds). With shorter values the model will respond more quickly, but may jump in on short pauses from the user. Defaults to 200."},
+                                "threshold": {"type": "number", "description": "Sensitivity threshold (0.0 to 1.0) for voice activity detection. A higher threshold will require louder audio to activate the model, and thus might perform better in noisy environments. Defaults to 0.5."},
+                            },
+                            "required": ["type"],
+                            "additionalProperties": False,
+                        },
+                    ],
+                    "description": "The chunking strategy for transcription. Only applicable for gpt-4o-transcribe-diarize model. Defaults to auto. Can be 'auto' or a server_vad object with optional prefix_padding_ms, silence_duration_ms, and threshold parameters.",
                 },
             },
             "required": ["model"],
@@ -393,6 +416,12 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "required": [],
             "additionalProperties": False,
         },
+        "custom_async": {
+            "type": "object",
+            "description": "Custom self-hosted transcription service with async processing. Additional properties will be sent as form data in the request. Only supported if self-hosting Attendee.",
+            "required": [],
+            "additionalProperties": True,
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -412,9 +441,10 @@ def _validate_metadata_attribute(value):
         raise serializers.ValidationError("Metadata must have at least one key")
 
     # Check if all values are strings
-    for key, val in value.items():
-        if not isinstance(val, str):
-            raise serializers.ValidationError(f"Value for key '{key}' must be a string")
+    if settings.REQUIRE_STRING_VALUES_IN_METADATA:
+        for key, val in value.items():
+            if not isinstance(val, str):
+                raise serializers.ValidationError(f"Value for key '{key}' must be a string")
 
     # Check if all keys are strings
     for key in value.keys():
@@ -429,7 +459,14 @@ def _validate_metadata_attribute(value):
 
 
 class BotValidationMixin:
-    """Mixin class providing meeting URL validation for serializers."""
+    """Mixin class providing validation for common attributes used in both patching and creating bots."""
+
+    def validate_bot_name(self, value):
+        if value is not None and value:
+            for char in value:
+                if ord(char) > 0xFFFF:
+                    raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
+        return value
 
     def validate_meeting_url(self, value):
         meeting_type, normalized_url = normalize_meeting_url(value)
@@ -451,6 +488,38 @@ class BotValidationMixin:
 
         if value > timezone.now() + relativedelta(years=3):
             raise serializers.ValidationError("join_at cannot be more than 3 years in the future")
+
+        return value
+
+    def validate_recording_settings(self, value):
+        if value is None:
+            return value
+
+        # Define defaults
+        try:
+            jsonschema.validate(instance=value, schema=BOT_RECORDING_SETTINGS_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            raise serializers.ValidationError(e.message)
+
+        # If at least one attribute is provided, apply defaults for any missing attributes
+        if value:
+            for key, default_value in BOT_RECORDING_SETTINGS_DEFAULT_VALUES.items():
+                if key not in value:
+                    value[key] = default_value
+
+        # Validate format if provided
+        format = value.get("format")
+        if format not in [RecordingFormats.MP4, RecordingFormats.MP3, RecordingFormats.NONE, None]:
+            raise serializers.ValidationError({"format": "Format must be mp4 or mp3 or 'none'"})
+
+        # Validate view if provided
+        view = value.get("view")
+        if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
+            raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
+
+        # You can only reserve additional storage if you're using Kubernetes to launch the bot
+        if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
+            raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
 
         return value
 
@@ -514,8 +583,12 @@ PATCH_BOT_TRANSCRIPTION_SETTINGS_SCHEMA = {
             "type": "object",
             "properties": {
                 "teams_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["teams_language"],
+                "google_meet_language": TRANSCRIPTION_SETTINGS_SCHEMA["properties"]["meeting_closed_captions"]["properties"]["google_meet_language"],
             },
-            "required": ["teams_language"],
+            "oneOf": [
+                {"required": ["teams_language"]},
+                {"required": ["google_meet_language"]},
+            ],
             "additionalProperties": False,
         },
     },
@@ -549,43 +622,58 @@ class RTMPSettingsJSONField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "format": {
-                "type": "string",
-                "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'.",
-            },
-            "view": {
-                "type": "string",
-                "description": "The view to use for the recording. The supported views are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.",
-            },
-            "resolution": {
-                "type": "string",
-                "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
-                "enum": RecordingResolutions.values,
-            },
-            "record_chat_messages_when_paused": {
-                "type": "boolean",
-                "description": "Whether to record chat messages even when the recording is paused. Defaults to false.",
-                "default": False,
-            },
-            "record_async_transcription_audio_chunks": {
-                "type": "boolean",
-                "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
-                "default": False,
-            },
-            "reserve_additional_storage": {
-                "type": "boolean",
-                "description": "Whether to reserve extra space to store the recording. Only needed when the bot will record video for longer than 6 hours. Defaults to false.",
-                "default": False,
-            },
+BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
+    "format": RecordingFormats.MP4,
+    "view": RecordingViews.SPEAKER_VIEW,
+    "resolution": RecordingResolutions.HD_1080P,
+    "record_chat_messages_when_paused": False,
+    "record_async_transcription_audio_chunks": False,
+    "record_participant_speech_start_stop_events": False,
+    "reserve_additional_storage": False,
+}
+BOT_RECORDING_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "format": {
+            "type": "string",
+            "description": "The format of the recording to save. The supported formats are 'mp4', 'mp3' and 'none'. Defaults to 'mp4'.",
         },
-        "additionalProperties": False,
-        "required": [],
-    }
-)
+        "view": {
+            "type": "string",
+            "description": "The view to use for the recording. The supported views are 'speaker_view', 'gallery_view' and 'speaker_view_no_sidebar'.",
+        },
+        "resolution": {
+            "type": "string",
+            "description": "The resolution to use for the recording. The supported resolutions are '1080p' and '720p'. Defaults to '1080p'.",
+            "enum": RecordingResolutions.values,
+        },
+        "record_chat_messages_when_paused": {
+            "type": "boolean",
+            "description": "Whether to record chat messages even when the recording is paused. Defaults to false.",
+            "default": False,
+        },
+        "record_async_transcription_audio_chunks": {
+            "type": "boolean",
+            "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
+            "default": False,
+        },
+        "record_participant_speech_start_stop_events": {
+            "type": "boolean",
+            "description": "Whether to record participant speech start and stop events. Defaults to false.",
+            "default": False,
+        },
+        "reserve_additional_storage": {
+            "type": "boolean",
+            "description": "Whether to reserve extra space to store the recording. Only needed when the bot will record video for longer than 6 hours. Defaults to false.",
+            "default": False,
+        },
+    },
+    "additionalProperties": False,
+    "required": [],
+}
+
+
+@extend_schema_field(BOT_RECORDING_SETTINGS_SCHEMA)
 class RecordingSettingsJSONField(serializers.JSONField):
     pass
 
@@ -636,20 +724,27 @@ class GoogleMeetSettingsJSONField(serializers.JSONField):
     pass
 
 
-@extend_schema_field(
-    {
-        "type": "object",
-        "properties": {
-            "use_login": {
-                "type": "boolean",
-                "description": "Whether to use Teams bot login credentials to sign in before joining the meeting. Requires Teams bot login credentials to be set for the project.",
-                "default": False,
-            },
+TEAMS_SETTINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "use_login": {
+            "type": "boolean",
+            "description": "Whether to use Teams bot login credentials to sign in before joining the meeting. Requires Teams bot login credentials to be set for the project.",
+            "default": False,
         },
-        "required": [],
-        "additionalProperties": False,
-    }
-)
+        "login_mode": {
+            "type": "string",
+            "enum": ["always", "only_if_required"],
+            "description": "The mode to use for the Teams bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
+            "default": "always",
+        },
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+@extend_schema_field(TEAMS_SETTINGS_SCHEMA)
 class TeamsSettingsJSONField(serializers.JSONField):
     pass
 
@@ -678,6 +773,15 @@ class TeamsSettingsJSONField(serializers.JSONField):
                 "required": [],
                 "additionalProperties": False,
                 "description": "Settings for various aspects of the Zoom Meeting. To use these settings, the bot must have host privileges.",
+            },
+            "onbehalf_token": {
+                "type": "object",
+                "properties": {
+                    "zoom_oauth_connection_user_id": {"type": "string"},
+                },
+                "required": ["zoom_oauth_connection_user_id"],
+                "additionalProperties": False,
+                "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
         },
         "required": [],
@@ -719,7 +823,23 @@ class ZoomSettingsJSONField(serializers.JSONField):
             },
             "max_uptime_seconds": {
                 "type": "integer",
-                "description": "Maximum number of seconds that the bot should be running before automatically leaving (infinity)",
+                "description": "Maximum number of seconds that the bot should be running before automatically leaving (infinity by default)",
+                "default": None,
+            },
+            "enable_closed_captions_timeout_seconds": {
+                "type": "integer",
+                "description": "Number of seconds to wait before leaving if bot could not enable closed captions (infinity by default). Only relevant if the bot is transcribing via closed captions. Currently only supports leaving immediately.",
+                "default": None,
+            },
+            "authorized_user_not_in_meeting_timeout_seconds": {
+                "type": "integer",
+                "description": "Number of seconds to wait before leaving if the authorized user is not in the meeting. Only relevant if this is a Zoom bot using the on behalf of token.",
+                "default": 600,
+            },
+            "bot_keywords": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of keywords to identify bot participants. A participant is considered a bot if any word in their name matches a keyword. Words are found by splitting on spaces, hyphens, and underscores, and the comparison is case-insensitive. Bot participants are excluded when determining if the bot is the only participant in the meeting.",
                 "default": None,
             },
         },
@@ -824,6 +944,33 @@ class BotChatMessageRequestSerializer(serializers.Serializer):
         return value
 
 
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            "Video output request",
+            value={"url": "https://example.com/video.mp4", "loop": True},
+            description="Example of a looping mp4 video output request. Set loop to false or omit for a non-looping request.",
+        ),
+    ]
+)
+class OutputVideoRequestSerializer(serializers.Serializer):
+    url = serializers.URLField(
+        help_text="URL of the video to output. Must be a valid URL to an mp4 file and start with https://.",
+    )
+    loop = serializers.BooleanField(
+        required=False,
+        default=False,
+        help_text="Whether to loop the video. Defaults to false.",
+    )
+
+    def validate_url(self, value: str) -> str:
+        if not value.startswith("https://"):
+            raise serializers.ValidationError("URL must start with https://")
+        if not value.endswith(".mp4"):
+            raise serializers.ValidationError("URL must end with .mp4")
+        return value
+
+
 @extend_schema_field(
     {
         "type": "object",
@@ -860,7 +1007,7 @@ class WebsocketSettingsJSONField(serializers.JSONField):
         "properties": {
             "zoom_tokens_url": {
                 "type": "string",
-                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}.',
+                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}.',
             },
         },
         "required": [],
@@ -936,6 +1083,9 @@ class CreateAsyncTranscriptionSerializer(serializers.Serializer):
 
         if value.get("deepgram", {}).get("callback"):
             raise serializers.ValidationError({"transcription_settings": "Deepgram callback is not available for async transcription."})
+
+        if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
+            raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
 
         if not value:
             raise serializers.ValidationError({"transcription_settings": "Please specify a transcription provider."})
@@ -1163,6 +1313,9 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if value.get("deepgram", {}).get("callback") and value.get("deepgram", {}).get("detect_language"):
             raise serializers.ValidationError({"transcription_settings": "Language detection is not supported for streaming transcription. Please pass language='multi' instead of detect_language=true."})
 
+        if "custom_async" in value and not os.getenv("CUSTOM_ASYNC_TRANSCRIPTION_URL"):
+            raise serializers.ValidationError({"transcription_settings": "CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable is not set. Please set the CUSTOM_ASYNC_TRANSCRIPTION_URL environment variable to the URL of your custom async transcription service."})
+
         return value
 
     websocket_settings = WebsocketSettingsJSONField(help_text="The websocket settings for the bot, e.g. {'audio': {'url': 'wss://example.com/audio', 'sample_rate': 16000}}", required=False, default=None)
@@ -1247,59 +1400,8 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     recording_settings = RecordingSettingsJSONField(
         help_text="The settings for the bot's recording.",
         required=False,
-        default={"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False, "record_async_transcription_audio_chunks": False, "reserve_additional_storage": False},
+        default=BOT_RECORDING_SETTINGS_DEFAULT_VALUES,
     )
-
-    RECORDING_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "format": {"type": "string"},
-            "view": {"type": "string"},
-            "resolution": {
-                "type": "string",
-                "enum": list(RecordingResolutions.values),
-            },
-            "record_chat_messages_when_paused": {"type": "boolean"},
-            "record_async_transcription_audio_chunks": {"type": "boolean"},
-            "reserve_additional_storage": {"type": "boolean"},
-        },
-        "additionalProperties": False,
-        "required": [],
-    }
-
-    def validate_recording_settings(self, value):
-        if value is None:
-            return value
-
-        # Define defaults
-        defaults = {"format": RecordingFormats.MP4, "view": RecordingViews.SPEAKER_VIEW, "resolution": RecordingResolutions.HD_1080P, "record_chat_messages_when_paused": False}
-
-        try:
-            jsonschema.validate(instance=value, schema=self.RECORDING_SETTINGS_SCHEMA)
-        except jsonschema.exceptions.ValidationError as e:
-            raise serializers.ValidationError(e.message)
-
-        # If at least one attribute is provided, apply defaults for any missing attributes
-        if value:
-            for key, default_value in defaults.items():
-                if key not in value:
-                    value[key] = default_value
-
-        # Validate format if provided
-        format = value.get("format")
-        if format not in [RecordingFormats.MP4, RecordingFormats.MP3, RecordingFormats.NONE, None]:
-            raise serializers.ValidationError({"format": "Format must be mp4 or mp3 or 'none'"})
-
-        # Validate view if provided
-        view = value.get("view")
-        if view not in [RecordingViews.SPEAKER_VIEW, RecordingViews.GALLERY_VIEW, RecordingViews.SPEAKER_VIEW_NO_SIDEBAR, None]:
-            raise serializers.ValidationError({"view": "View must be speaker_view or gallery_view or speaker_view_no_sidebar"})
-
-        # You can only reserve additional storage if you're using Kubernetes to launch the bot
-        if value.get("reserve_additional_storage") and os.getenv("LAUNCH_BOT_METHOD") != "kubernetes":
-            raise serializers.ValidationError({"reserve_additional_storage": "Not supported unless using Kubernetes"})
-
-        return value
 
     google_meet_settings = GoogleMeetSettingsJSONField(
         help_text="The Google Meet-specific settings for the bot.",
@@ -1330,27 +1432,18 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     teams_settings = TeamsSettingsJSONField(
         help_text="The Microsoft Teams-specific settings for the bot.",
         required=False,
-        default={"use_login": False},
+        default={"use_login": False, "login_mode": "always"},
     )
-
-    TEAMS_SETTINGS_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "use_login": {"type": "boolean"},
-        },
-        "required": [],
-        "additionalProperties": False,
-    }
 
     def validate_teams_settings(self, value):
         if value is None:
             return value
 
         # Define defaults
-        defaults = {"use_login": False}
+        defaults = {"use_login": False, "login_mode": "always"}
 
         try:
-            jsonschema.validate(instance=value, schema=self.TEAMS_SETTINGS_SCHEMA)
+            jsonschema.validate(instance=value, schema=TEAMS_SETTINGS_SCHEMA)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
@@ -1385,6 +1478,15 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 },
                 "required": [],
                 "additionalProperties": False,
+            },
+            "onbehalf_token": {
+                "type": "object",
+                "properties": {
+                    "zoom_oauth_connection_user_id": {"type": "string"},
+                },
+                "required": ["zoom_oauth_connection_user_id"],
+                "additionalProperties": False,
+                "description": "The user ID of the Zoom OAuth Connection to use for the onbehalf token.",
             },
         },
         "required": [],
@@ -1451,9 +1553,17 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             if key not in defaults.keys():
                 raise serializers.ValidationError(f"Unexpected attribute: {key}")
 
-        # Validate that all values are positive integers
+        # Validate bot_keywords separately (it's a list, not an int)
+        if "bot_keywords" in value and value["bot_keywords"] is not None:
+            if not isinstance(value["bot_keywords"], list):
+                raise serializers.ValidationError("bot_keywords must be a list of strings or null")
+            if not all(isinstance(k, str) for k in value["bot_keywords"]):
+                raise serializers.ValidationError("Each keyword in bot_keywords must be a string")
+
+        # Validate that all other values are positive integers
+        non_integer_parameters = ["bot_keywords"]
         for param, default in defaults.items():
-            if param in value and (not isinstance(value[param], int) or value[param] <= 0):
+            if param in value and param not in non_integer_parameters and (not isinstance(value[param], int) or value[param] <= 0):
                 raise serializers.ValidationError(f"{param} must be a positive integer")
             # Set default if not provided
             if param not in value:
@@ -1499,13 +1609,6 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if not fetch_bot_pod_spec(bot_pod_spec_type):
             raise serializers.ValidationError(f"Invalid bot pod spec type: {bot_pod_spec_type}. Bot pod spec type not found in environment variables.")
 
-        return value
-
-    def validate_bot_name(self, value):
-        """Validate that the bot name only contains characters in the Basic Multilingual Plane (BMP)."""
-        for char in value:
-            if ord(char) > 0xFFFF:
-                raise serializers.ValidationError("Bot name cannot contain emojis or rare script characters.")
         return value
 
     def validate(self, data):
@@ -1832,13 +1935,28 @@ class PatchBotTranscriptionSettingsSerializer(serializers.Serializer):
                 "join_at": "2025-06-13T12:00:00Z",
             },
             description="Example of updating the join_at time for a scheduled bot",
-        )
+        ),
+        OpenApiExample(
+            "Update name and image",
+            value={
+                "bot_name": "My Updated Bot",
+                "bot_image": {"type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
+            },
+            description="Example of updating the bot name and/or image",
+        ),
     ]
 )
 class PatchBotSerializer(BotValidationMixin, serializers.Serializer):
     join_at = serializers.DateTimeField(help_text="The time the bot should join the meeting. ISO 8601 format, e.g. 2025-06-13T12:00:00Z", required=False)
     meeting_url = serializers.CharField(help_text="The URL of the meeting to join, e.g. https://zoom.us/j/123?pwd=456", required=False)
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the bot", required=False)
+    bot_name = serializers.CharField(help_text="The name of the bot, e.g. 'My Bot'", required=False, allow_blank=False)
+    bot_image = BotImageSerializer(help_text="The image for the bot", required=False, default=None)
+    recording_settings = RecordingSettingsJSONField(
+        help_text="The settings for the bot's recording. The settings specified here will completely replace the existing settings.",
+        required=False,
+        default=None,
+    )
 
     def validate_metadata(self, value):
         return _validate_metadata_attribute(value)
@@ -2076,9 +2194,11 @@ class AsyncTranscriptionSerializer(serializers.ModelSerializer):
 
 
 class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
-    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for")
+    zoom_oauth_app_id = serializers.CharField(help_text="The Zoom Oauth App the connection is for", required=False, default=None)
     authorization_code = serializers.CharField(help_text="The authorization code received from Zoom during the OAuth flow")
     redirect_uri = serializers.CharField(help_text="The redirect URI used to obtain the authorization code")
+    is_local_recording_token_supported = serializers.BooleanField(help_text="Whether the Zoom OAuth Connection supports generating local recording tokens", required=False, default=True)
+    is_onbehalf_token_supported = serializers.BooleanField(help_text="Whether the Zoom OAuth Connection supports generating onbehalf tokens", required=False, default=False)
 
     metadata = serializers.JSONField(help_text="JSON object containing metadata to associate with the Zoom OAuth Connection", required=False, default=None)
 
@@ -2099,6 +2219,9 @@ class CreateZoomOAuthConnectionSerializer(serializers.Serializer):
         if unexpected_fields:
             raise serializers.ValidationError(f"Unexpected field(s): {', '.join(sorted(unexpected_fields))}. Allowed fields are: {', '.join(sorted(expected_fields))}")
 
+        if not data.get("is_local_recording_token_supported") and not data.get("is_onbehalf_token_supported"):
+            raise serializers.ValidationError("At least one of is_local_recording_token_supported or is_onbehalf_token_supported must be true")
+
         return data
 
 
@@ -2107,6 +2230,8 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
     state = serializers.SerializerMethodField()
     metadata = serializers.SerializerMethodField()
     zoom_oauth_app_id = serializers.CharField(source="zoom_oauth_app.object_id")
+    is_local_recording_token_supported = serializers.BooleanField()
+    is_onbehalf_token_supported = serializers.BooleanField()
 
     @extend_schema_field(
         {
@@ -2135,6 +2260,8 @@ class ZoomOAuthConnectionSerializer(serializers.ModelSerializer):
             "account_id",
             "state",
             "metadata",
+            "is_local_recording_token_supported",
+            "is_onbehalf_token_supported",
             "connection_failure_data",
             "created_at",
             "updated_at",

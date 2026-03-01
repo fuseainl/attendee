@@ -194,7 +194,7 @@ class BotPodCreator:
         return client.V1Container(
                 name="webpage-streamer",
                 image=self.image,
-                image_pull_policy="Always",
+                image_pull_policy=os.getenv("WEBPAGE_STREAMER_POD_IMAGE_PULL_POLICY", "Always"),
                 args=args,
                 resources=client.V1ResourceRequirements(
                     requests={
@@ -225,7 +225,7 @@ class BotPodCreator:
         return client.V1Container(
                         name="bot-proc",
                         image=self.image,
-                        image_pull_policy="Always",
+                        image_pull_policy=os.getenv("BOT_POD_IMAGE_PULL_POLICY", "Always"),
                         args=args,
                         resources=client.V1ResourceRequirements(
                             requests={
@@ -251,7 +251,10 @@ class BotPodCreator:
                                 )
                             )
                         ],
-                        env=[],
+                        env=[
+                            # Env var so that the bot pod can know that it is a bot pod
+                            client.V1EnvVar(name="IS_A_BOT_POD", value="true"),
+                        ],
                         security_context = self.get_bot_container_security_context(),
                         volume_mounts=self.get_bot_container_volume_mounts(),
                     )
@@ -323,6 +326,7 @@ class BotPodCreator:
             "app.kubernetes.io/instance": self.app_instance,
             "app.kubernetes.io/version": self.app_version,
             "app.kubernetes.io/managed-by": "cuber",
+            "app.kubernetes.io/component": "bot-proc",
             "app": "bot-proc",
             "bot-pod-spec-type": bot_pod_spec_type,
         }
