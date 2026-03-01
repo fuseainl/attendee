@@ -777,12 +777,15 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         max_ram_usage = 0
         max_cpu_usage = 0
         max_db_connection_count = 0
+        max_redis_connection_count = 0
+        network_stats = None
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
                 ram_usage = data.get("ram_usage_megabytes") or 0
                 cpu_usage = data.get("cpu_usage_millicores") or 0
                 db_connection_count = data.get("db_connection_count") or 0
+                redis_connection_count = data.get("redis_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
@@ -790,6 +793,30 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     max_cpu_usage = cpu_usage
                 if db_connection_count > max_db_connection_count:
                     max_db_connection_count = db_connection_count
+                if redis_connection_count > max_redis_connection_count:
+                    max_redis_connection_count = redis_connection_count
+
+                network = data.get("network")
+                if network:
+                    if network_stats is None:
+                        network_stats = {
+                            "max_rx_bytes_per_sec": 0,
+                            "max_tx_bytes_per_sec": 0,
+                            "max_rx_packets_per_sec": 0,
+                            "max_tx_packets_per_sec": 0,
+                            "total_rx_dropped": 0,
+                            "total_tx_dropped": 0,
+                            "total_rx_errors": 0,
+                            "total_tx_errors": 0,
+                        }
+                    network_stats["max_rx_bytes_per_sec"] = max(network_stats["max_rx_bytes_per_sec"], network.get("rx_bytes_per_sec") or 0)
+                    network_stats["max_tx_bytes_per_sec"] = max(network_stats["max_tx_bytes_per_sec"], network.get("tx_bytes_per_sec") or 0)
+                    network_stats["max_rx_packets_per_sec"] = max(network_stats["max_rx_packets_per_sec"], network.get("rx_packets_per_sec") or 0)
+                    network_stats["max_tx_packets_per_sec"] = max(network_stats["max_tx_packets_per_sec"], network.get("tx_packets_per_sec") or 0)
+                    network_stats["total_rx_dropped"] += network.get("rx_dropped_delta") or 0
+                    network_stats["total_tx_dropped"] += network.get("tx_dropped_delta") or 0
+                    network_stats["total_rx_errors"] += network.get("rx_errors_delta") or 0
+                    network_stats["total_tx_errors"] += network.get("tx_errors_delta") or 0
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -807,6 +834,8 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,
                 "max_db_connection_count": max_db_connection_count,
+                "max_redis_connection_count": max_redis_connection_count,
+                "network_stats": network_stats,
             }
         )
 
