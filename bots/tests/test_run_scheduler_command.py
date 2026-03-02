@@ -1,5 +1,7 @@
+import base64
+import json
 import signal
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 from django.utils import timezone as django_timezone
@@ -7,6 +9,14 @@ from django.utils import timezone as django_timezone
 from accounts.models import Organization
 from bots.management.commands.run_scheduler import CALENDAR_SYNC_THRESHOLD_HOURS, Command
 from bots.models import Bot, BotStates, Calendar, CalendarPlatform, CalendarStates, Project, ZoomOAuthApp, ZoomOAuthConnection, ZoomOAuthConnectionStates
+
+
+def _build_celery_unacked_entry(bot_id, join_at_iso):
+    """Build a mock Redis unacked hash entry matching the Celery message format."""
+    body = json.dumps([[bot_id, join_at_iso]])
+    encoded_body = base64.b64encode(body.encode()).decode()
+    message = [{"body": encoded_body, "headers": {"task": "bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot"}}]
+    return json.dumps(message).encode()
 
 
 class RunSchedulerCommandTestCase(TestCase):
@@ -304,13 +314,15 @@ class RunSchedulerCommandTestCase(TestCase):
         )
 
         command = Command()
+        mock_redis = MagicMock()
+        mock_redis.hscan_iter.return_value = iter([])
+        command._redis_client = mock_redis
 
         with patch.dict("os.environ", {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end)}):
             with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
                 with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.apply_async") as mock_apply_async:
                     with patch("django.utils.timezone.now", return_value=self.now):
-                        with patch.object(command, "_get_args_for_pending_launch_scheduled_bot_tasks", return_value=set()):
-                            command._run_scheduled_bots_with_jitter()
+                        command._run_scheduled_bots_with_jitter()
 
                     mock_delay.assert_called_once_with(bot.id, bot.join_at.isoformat())
                     mock_apply_async.assert_not_called()
@@ -331,14 +343,16 @@ class RunSchedulerCommandTestCase(TestCase):
         )
 
         command = Command()
+        mock_redis = MagicMock()
+        mock_redis.hscan_iter.return_value = iter([])
+        command._redis_client = mock_redis
 
         with patch.dict("os.environ", {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end)}):
             with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
                 with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.apply_async") as mock_apply_async:
                     with patch("django.utils.timezone.now", return_value=self.now):
                         with patch("random.randint", return_value=42) as mock_randint:
-                            with patch.object(command, "_get_args_for_pending_launch_scheduled_bot_tasks", return_value=set()):
-                                command._run_scheduled_bots_with_jitter()
+                            command._run_scheduled_bots_with_jitter()
 
                     mock_delay.assert_not_called()
                     mock_apply_async.assert_called_once_with(args=[bot.id, bot_join_at.isoformat()], countdown=42)
@@ -358,16 +372,20 @@ class RunSchedulerCommandTestCase(TestCase):
             join_at=self.now + django_timezone.timedelta(seconds=60),
         )
 
-        pending_args = {(bot.id, bot.join_at.isoformat())}
-
         command = Command()
+        mock_redis = MagicMock()
+        mock_redis.hscan_iter.return_value = iter(
+            [
+                (b"delivery-tag-1", _build_celery_unacked_entry(bot.id, bot.join_at.isoformat())),
+            ]
+        )
+        command._redis_client = mock_redis
 
         with patch.dict("os.environ", {"SCHEDULED_BOT_JITTER_START_SECONDS": str(jitter_start), "SCHEDULED_BOT_JITTER_END_SECONDS": str(jitter_end)}):
             with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.delay") as mock_delay:
                 with patch("bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot.apply_async") as mock_apply_async:
                     with patch("django.utils.timezone.now", return_value=self.now):
-                        with patch.object(command, "_get_args_for_pending_launch_scheduled_bot_tasks", return_value=pending_args):
-                            command._run_scheduled_bots_with_jitter()
+                        command._run_scheduled_bots_with_jitter()
 
                     mock_delay.assert_not_called()
                     mock_apply_async.assert_not_called()
