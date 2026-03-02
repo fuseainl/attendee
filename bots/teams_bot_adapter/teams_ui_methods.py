@@ -58,7 +58,10 @@ class TeamsUIMethods:
         logger.info("Waiting for the microphone button...")
         microphone_button = self.locate_element(step="turn_off_microphone_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="toggle-mute"]')), wait_time_seconds=60)
         logger.info("Clicking the microphone button...")
-        self.click_element(microphone_button, "turn_off_microphone_button")
+        if microphone_button.get_attribute("aria-checked") == "true" or microphone_button.get_attribute("checked") == "true":
+            self.click_element(microphone_button, "turn_off_microphone_button")
+        else:
+            logger.info("Microphone button is already off, not clicking it")
 
         logger.info("Waiting for the camera button...")
         camera_button = self.locate_element(step="turn_off_camera_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="toggle-video"]')), wait_time_seconds=6)
@@ -76,7 +79,7 @@ class TeamsUIMethods:
         return False
 
     def fill_out_name_input(self):
-        num_attempts = 30
+        num_attempts = 60
         logger.info("Waiting for the name input field...")
         for attempt_index in range(num_attempts):
             try:

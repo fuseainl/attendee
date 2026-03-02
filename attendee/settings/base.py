@@ -195,6 +195,13 @@ CELERY_TASK_ROUTES = {
         "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
     },
 }
+if os.getenv("IS_A_BOT_POD", "false") == "true" and os.getenv("CONSERVE_BOT_POD_REDIS_CONNECTIONS", "false") == "true":
+    # Setting this to 1 means that bot pods keep one celery broker pool connection alive for the duration of the bot.
+    # Note: this results in 2 underlying Redis connections (one for commands, one for pub/sub).
+    # Setting this to 0 means that no dedicated redis connection is created.
+    # Instead bot pods will create and close a redis connection each time they need to execute a celery task.
+    CELERY_BROKER_POOL_LIMIT = int(os.getenv("BOT_POD_CELERY_BROKER_POOL_LIMIT", 1))
+    CELERY_TASK_IGNORE_RESULT = True
 
 REST_FRAMEWORK = {
     # YOUR SETTINGS
@@ -295,3 +302,4 @@ MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
 MASK_TRANSCRIPT_IN_LOGS = os.getenv("MASK_TRANSCRIPT_IN_LOGS", "false") == "true"
 ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME", "false") == "true"
+CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
