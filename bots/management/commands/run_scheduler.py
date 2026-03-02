@@ -173,8 +173,8 @@ class Command(BaseCommand):
         jitter_start_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_START_SECONDS", 300))
         jitter_end_seconds = int(os.getenv("SCHEDULED_BOT_JITTER_END_SECONDS", 600))
 
-        pending_bot_ids = self._get_bot_ids_for_pending_launch_scheduled_bot_tasks()
-        log.info(f"Found {len(pending_bot_ids)} pending launch scheduled bots")
+        pending_scheduled_bot_task_args = self._get_args_for_pending_launch_scheduled_bot_tasks()
+        log.info(f"Found {len(pending_scheduled_bot_task_args)} pending launch scheduled bot tasks")
 
         join_at_upper_threshold = timezone.now() + timezone.timedelta(seconds=jitter_end_seconds)
         # If we miss a scheduled bot by more than 5 minutes, don't bother launching it, it's a failure and it'll be cleaned up
@@ -188,8 +188,9 @@ class Command(BaseCommand):
 
             num_bots_launched = 0
             for bot in bots_to_launch:
-                if bot.id in pending_bot_ids:
+                if (bot.id, bot.join_at.isoformat()) in pending_scheduled_bot_task_args:
                     # The bot is already being launched, so we can skip it
+                    log.info(f"Skipping scheduled bot {bot.id} with join_at {bot.join_at.isoformat()} because task is already scheduled")
                     continue
 
                 if bot.join_at > join_at_jitter_threshold:
@@ -206,21 +207,21 @@ class Command(BaseCommand):
 
             log.info("Launched %s bots", num_bots_launched)
 
-    def _get_bot_ids_for_pending_launch_scheduled_bot_tasks(self):
+    def _get_args_for_pending_launch_scheduled_bot_tasks(self):
         try:
-            bot_ids = set()
+            scheduled_bot_task_args = set()
             for delivery_tag, raw in self._get_redis_client().hscan_iter("unacked", match="*"):
                 # Filter for this string being in the raw message: bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot
                 if b"bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot" not in raw:
                     continue
-                # Parse the raw message as JSON. First argument is bot id
+                # Parse the raw message as JSON. First argument is bot id, second argument is join_at
                 message = json.loads(raw)
                 body = json.loads(base64.b64decode(message[0]["body"]))
-                bot_ids.add(body[0][0])
+                scheduled_bot_task_args.add((body[0][0], body[0][1]))
 
-            return bot_ids
+            return scheduled_bot_task_args
         except Exception:
-            log.exception("Failed to get bot ids for pending launch scheduled bot tasks")
+            log.exception("Failed to get args for pending launch scheduled bot tasks")
             return set()
 
     # -----------------------------------------------------------
