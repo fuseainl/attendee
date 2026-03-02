@@ -190,7 +190,6 @@ class Command(BaseCommand):
             for bot in bots_to_launch:
                 if (bot.id, bot.join_at.isoformat()) in pending_scheduled_bot_task_args:
                     # The bot is already being launched, so we can skip it
-                    log.info(f"Skipping scheduled bot {bot.id} with join_at {bot.join_at.isoformat()} because task is already scheduled")
                     continue
 
                 if bot.join_at > join_at_jitter_threshold:
