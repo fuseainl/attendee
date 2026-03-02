@@ -53,7 +53,8 @@ def fetch_bot_pod_spec(bot_pod_spec_type: str) -> str:
         raise ValueError(f"bot_pod_spec_type must be purely alphabetical and all uppercase: {bot_pod_spec_type}")
     # Make sure it is in the BotPodSpecType enum or the custom allowlist.
     if bot_pod_spec_type not in BotPodSpecType.__members__ and bot_pod_spec_type not in settings.CUSTOM_BOT_POD_SPEC_TYPES:
-        raise ValueError(f"bot_pod_spec_type must be in the BotPodSpecType enum or the custom allowlist: {bot_pod_spec_type}")
+        logger.warning(f"fetch_bot_pod_spec is returning None because bot_pod_spec_type {bot_pod_spec_type} was not found in the BotPodSpecType enum or the custom allowlist: {settings.CUSTOM_BOT_POD_SPEC_TYPES}")
+        return None
     return os.getenv(f"BOT_POD_SPEC_{bot_pod_spec_type}")
 
 class BotPodCreator:
