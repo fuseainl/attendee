@@ -161,8 +161,8 @@ def _get_local_recording_token(meeting_id: str, access_token: str) -> str:
     return response_data.get("token")
 
 
-def _get_onbehalf_token(access_token: str) -> str:
-    base_url = "https://api.zoom.us/v2/users/me/token?type=onbehalf"
+def _get_onbehalf_token(meeting_id: str, access_token: str) -> str:
+    base_url = f"https://api.zoom.us/v2/users/me/token?type=onbehalf&meeting_id={meeting_id}"
     response_data = _make_zoom_api_request(base_url, access_token, {})
     return response_data.get("token")
 
@@ -302,9 +302,16 @@ def get_onbehalf_token_via_zoom_oauth_app(bot: Bot) -> str | None:
         logger.info(f"Zoom oauth connection {zoom_oauth_connection.object_id} does not support onbehalf tokens, skipping")
         return None
 
+    meeting_url = bot.meeting_url
+
+    meeting_id, password = parse_zoom_join_url(meeting_url)
+    if not meeting_id:
+        logger.info(f"No meeting id found in join url {meeting_url}")
+        return None
+
     try:
         access_token = _get_access_token(zoom_oauth_connection)
-        onbehalf_token = _get_onbehalf_token(access_token)
+        onbehalf_token = _get_onbehalf_token(meeting_id, access_token)
         return onbehalf_token
 
     except ZoomAPIAuthenticationError as e:
