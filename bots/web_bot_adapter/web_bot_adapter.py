@@ -367,10 +367,8 @@ class WebBotAdapter(BotAdapter):
                                 user["active"] = user["humanized_status"] == "in_meeting"
                                 self.handle_participant_update(user)
 
-                                if user["humanized_status"] == "removed_from_meeting" and user["fullName"] == self.display_name:
-                                    # if this is the only participant with that name in the meeting, then we can assume that it was us who was removed
-                                    if len([x for x in self.participants_info.values() if x["fullName"] == self.display_name]) == 1:
-                                        self.handle_removed_from_meeting()
+                                if user["humanized_status"] == "removed_from_meeting" and user["isCurrentUser"]:
+                                    self.handle_removed_from_meeting()
 
                             self.update_only_one_participant_in_meeting_at()
 
