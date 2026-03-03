@@ -277,7 +277,7 @@ class WebBotAdapter(BotAdapter):
             else:
                 other_bots_in_meeting_names.append(participant["fullName"])
 
-        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["fullName"] == self.display_name:
+        if len(all_participants_in_meeting_excluding_other_bots) == 1 and all_participants_in_meeting_excluding_other_bots[0]["isCurrentUser"]:
             if self.only_one_participant_in_meeting_at is None:
                 self.only_one_participant_in_meeting_at = time.time()
                 logger.info(f"only_one_participant_in_meeting_at set to {self.only_one_participant_in_meeting_at}. Ignoring other bots in meeting: {other_bots_in_meeting_names}")
@@ -367,10 +367,8 @@ class WebBotAdapter(BotAdapter):
                                 user["active"] = user["humanized_status"] == "in_meeting"
                                 self.handle_participant_update(user)
 
-                                if user["humanized_status"] == "removed_from_meeting" and user["fullName"] == self.display_name:
-                                    # if this is the only participant with that name in the meeting, then we can assume that it was us who was removed
-                                    if len([x for x in self.participants_info.values() if x["fullName"] == self.display_name]) == 1:
-                                        self.handle_removed_from_meeting()
+                                if user["humanized_status"] == "removed_from_meeting" and user["isCurrentUser"]:
+                                    self.handle_removed_from_meeting()
 
                             self.update_only_one_participant_in_meeting_at()
 
