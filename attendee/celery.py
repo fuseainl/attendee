@@ -4,13 +4,8 @@ import ssl
 
 from celery import Celery
 
-from attendee.sentry import init_sentry
-
 # Set the default Django settings module
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "attendee.settings")
-
-# Initialize Sentry for Celery workers (only if SENTRY_DSN is set)
-init_sentry()
 
 sslCertRequirements = None
 if os.getenv("DISABLE_REDIS_SSL"):
