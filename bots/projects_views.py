@@ -543,6 +543,25 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         if search_query:
             queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
 
+        # Apply ended_at date filters if provided
+        ended_at_start = self.request.GET.get("ended_at_start")
+        ended_at_end = self.request.GET.get("ended_at_end")
+
+        if ended_at_start or ended_at_end:
+            ended_at_filters = {"bot_events__new_state__in": [BotStates.ENDED, BotStates.FATAL_ERROR]}
+            if ended_at_start:
+                ended_at_filters["bot_events__created_at__gte"] = ended_at_start
+            if ended_at_end:
+                from datetime import datetime, timedelta
+
+                try:
+                    ended_at_end_obj = datetime.strptime(ended_at_end, "%Y-%m-%d")
+                    ended_at_end_obj = ended_at_end_obj + timedelta(days=1)
+                    ended_at_filters["bot_events__created_at__lt"] = ended_at_end_obj
+                except (ValueError, TypeError):
+                    pass
+            queryset = queryset.filter(**ended_at_filters).distinct()
+
         # Apply joined meeting filter if provided
         joined_meeting = self.request.GET.get("joined_meeting", "").strip()
         if joined_meeting == "yes":
@@ -580,7 +599,7 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", "")}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
