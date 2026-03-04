@@ -165,11 +165,13 @@
                     <div class="col-md-10 filter-item">
                         <div class="state-checkboxes">
                             {% for state_value, state_label in BotStates.choices %}
+                            {% if state_value < 100 and session_type == SessionTypes.BOT or state_value >= 100 and session_type == SessionTypes.APP_SESSION %}
                             <div class="state-checkbox">
                                 <input type="checkbox" class="btn-check" id="state_{{ state_value }}" name="states" value="{{ state_value }}"
                                        {% if state_value|stringformat:"i" in filter_params.states %}checked{% endif %}>
                                 <label class="btn btn-outline-secondary btn-sm" for="state_{{ state_value }}">{{ state_label }}</label>
                             </div>
+                            {% endif %}
                             {% endfor %}
                         </div>
                     </div>
