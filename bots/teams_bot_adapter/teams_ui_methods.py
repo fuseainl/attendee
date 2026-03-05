@@ -135,6 +135,11 @@ class TeamsUIMethods:
         if waiting_room_timeout_exceeded:
             # If there is more than one participant in the meeting, then the bot was just let in and we should not timeout
             if len(self.participants_info) > 1:
+                waiting_room_timeout_exceeded_by_more_than_three_minutes = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds + 180
+                if waiting_room_timeout_exceeded_by_more_than_three_minutes:
+                    logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected, throwing exception.")
+                    raise UiCouldNotLocateElementException("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected.", step)
+
                 logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
 
