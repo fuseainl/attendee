@@ -812,9 +812,12 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         max_db_connection_count = 0
         max_redis_connection_count = 0
         network_stats = None
+        public_ip = None
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
+                if public_ip is None:
+                    public_ip = data.get("public_ip")
                 ram_usage = data.get("ram_usage_megabytes") or 0
                 cpu_usage = data.get("cpu_usage_millicores") or 0
                 db_connection_count = data.get("db_connection_count") or 0
@@ -869,6 +872,7 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "max_db_connection_count": max_db_connection_count,
                 "max_redis_connection_count": max_redis_connection_count,
                 "network_stats": network_stats,
+                "public_ip": public_ip,
             }
         )
 
