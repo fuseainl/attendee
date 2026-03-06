@@ -8,7 +8,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from bots.models import RecordingViews
-from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableExpectedException
+from bots.web_bot_adapter.ui_methods import UiBlockedByCaptchaException, UiCouldNotClickElementException, UiCouldNotJoinMeetingWaitingRoomTimeoutException, UiCouldNotLocateElementException, UiLoginAttemptFailedException, UiLoginRequiredException, UiMeetingNotFoundException, UiRequestToJoinDeniedException, UiRetryableException, UiRetryableExpectedException
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,11 @@ class UiTeamsBlockingUsException(UiRetryableExpectedException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
 
+
 class UiWaitingRoomTransitionFailedException(UiRetryableException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
+
 
 class TeamsUIMethods:
     def __init__(self, driver, meeting_url, display_name):
