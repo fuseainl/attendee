@@ -17,6 +17,9 @@ class UiTeamsBlockingUsException(UiRetryableExpectedException):
     def __init__(self, message, step=None, inner_exception=None):
         super().__init__(message, step, inner_exception)
 
+class UiWaitingRoomTransitionFailedException(UiRetryableException):
+    def __init__(self, message, step=None, inner_exception=None):
+        super().__init__(message, step, inner_exception)
 
 class TeamsUIMethods:
     def __init__(self, driver, meeting_url, display_name):
@@ -145,7 +148,7 @@ class TeamsUIMethods:
                 waiting_room_timeout_exceeded_by_more_than_three_minutes = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds + 180
                 if waiting_room_timeout_exceeded_by_more_than_three_minutes:
                     logger.warning("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected, throwing exception.")
-                    raise UiCouldNotLocateElementException("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected.", step)
+                    raise UiWaitingRoomTransitionFailedException("Waiting room timeout exceeded, but there is more than one participant in the meeting. More than three minutes have passed since the timeout started. This is unexpected.", step)
 
                 logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
