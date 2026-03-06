@@ -79,20 +79,10 @@ class TeamsUIMethods:
             return True
         return False
 
-    def sleep_for_random_amount_of_time_if_teams_page_never_loaded(self):
-        try:
-            page_html = self.driver.page_source
-            length_of_page_html = len(page_html)
-            logger.info(f"sleep_for_random_amount_of_time_if_teams_page_never_loaded - Length of page HTML: {length_of_page_html}")
-            if length_of_page_html > 2000:
-                return
-
-            time_to_sleep_for = int(random.uniform(1, 90))
-            logger.info(f"sleep_for_random_amount_of_time_if_teams_page_never_loaded - Detected that teams never loaded. Sleeping for {time_to_sleep_for} seconds. Page HTML = {page_html[:200]}")
-            time.sleep(time_to_sleep_for)
-
-        except Exception as e:
-            logger.warning(f"Error in sleep_for_random_amount_of_time_if_teams_page_never_loaded - Error: {e}. Continuing execution.")
+    def sleep_for_random_amount_of_time(self):
+        time_to_sleep_for = int(random.uniform(1, 90))
+        logger.info(f"Sleeping for {time_to_sleep_for} seconds.")
+        time.sleep(time_to_sleep_for)
 
     def fill_out_name_input(self):
         num_attempts = 60
@@ -113,7 +103,7 @@ class TeamsUIMethods:
                 last_check_timed_out = attempt_index == num_attempts - 1
                 if last_check_timed_out:
                     logger.info("Could not find name input. Timed out. Raising UiCouldNotLocateElementException")
-                    self.sleep_for_random_amount_of_time_if_teams_page_never_loaded()
+                    self.sleep_for_random_amount_of_time()
                     raise UiCouldNotLocateElementException("Could not find name input. Timed out.", "name_input", e)
             except Exception as e:
                 logger.info(f"Could not find name input. Unknown error {e} of type {type(e)}. Raising UiCouldNotLocateElementException")
