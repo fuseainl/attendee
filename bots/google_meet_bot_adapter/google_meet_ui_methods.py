@@ -161,7 +161,7 @@ class GoogleMeetUIMethods:
                 self.locate_element(
                     step="wait_for_microphone_to_be_off",
                     condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_ON_SELECTOR)),
-                    wait_time_seconds=1,
+                    wait_time_seconds=2,
                 )
                 break
             except:
@@ -182,7 +182,7 @@ class GoogleMeetUIMethods:
                 self.locate_element(
                     step="wait_for_camera_to_be_off",
                     condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_ON_SELECTOR)),
-                    wait_time_seconds=1,
+                    wait_time_seconds=2,
                 )
                 break
             except:
