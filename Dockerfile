@@ -93,6 +93,8 @@ FROM deps AS build
 WORKDIR $cwd
 COPY . .
 
+RUN python manage.py migrate
+
 COPY entrypoint.sh /opt/bin/entrypoint.sh
 RUN chmod +x /opt/bin/entrypoint.sh
 RUN adduser root pulse-access
