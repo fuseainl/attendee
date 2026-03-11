@@ -543,6 +543,39 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         if search_query:
             queryset = queryset.filter(models.Q(object_id__icontains=search_query) | models.Q(meeting_url__icontains=search_query) | models.Q(name__icontains=search_query))
 
+        # Apply ended_at date filters if provided
+        ended_at_start = self.request.GET.get("ended_at_start")
+        ended_at_end = self.request.GET.get("ended_at_end")
+
+        if ended_at_start or ended_at_end:
+            ended_at_filters = {"bot_events__new_state__in": [BotStates.ENDED, BotStates.FATAL_ERROR]}
+            if ended_at_start:
+                ended_at_filters["bot_events__created_at__gte"] = ended_at_start
+            if ended_at_end:
+                from datetime import datetime, timedelta
+
+                try:
+                    ended_at_end_obj = datetime.strptime(ended_at_end, "%Y-%m-%d")
+                    ended_at_end_obj = ended_at_end_obj + timedelta(days=1)
+                    ended_at_filters["bot_events__created_at__lt"] = ended_at_end_obj
+                except (ValueError, TypeError):
+                    pass
+            queryset = queryset.filter(**ended_at_filters).distinct()
+
+        # Apply joined meeting filter if provided
+        joined_meeting = self.request.GET.get("joined_meeting", "").strip()
+        if joined_meeting == "yes":
+            queryset = queryset.filter(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).distinct()
+        elif joined_meeting == "no":
+            queryset = queryset.exclude(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING)
+
+        # Apply unexpected error filter if provided
+        unexpected_error = self.request.GET.get("unexpected_error", "").strip()
+        if unexpected_error == "yes":
+            queryset = queryset.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR).distinct()
+        elif unexpected_error == "no":
+            queryset = queryset.exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR)
+
         # Get the latest bot event type and subtype for each bot using subquery annotations
         latest_event_subquery_base = BotEvent.objects.filter(bot=models.OuterRef("pk")).order_by("-created_at")
         latest_event_type = latest_event_subquery_base.values("event_type")[:1]
@@ -550,13 +583,6 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
 
         # Apply annotations and ordering
         queryset = queryset.annotate(last_event_type=models.Subquery(latest_event_type), last_event_sub_type=models.Subquery(latest_event_sub_type)).order_by("-created_at")
-
-        # Add display names for the event types
-        for bot in queryset:
-            if bot.last_event_type:
-                bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
-            if bot.last_event_sub_type:
-                bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
 
         return queryset
 
@@ -573,13 +599,20 @@ class ProjectBotsView(LoginRequiredMixin, ProjectUrlContextMixin, ListView):
         context["session_type"] = self.get_session_type()
 
         # Add filter parameters to context for maintaining state
-        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", "")}
+        context["filter_params"] = {"start_date": self.request.GET.get("start_date", ""), "end_date": self.request.GET.get("end_date", ""), "join_at_start": self.request.GET.get("join_at_start", ""), "join_at_end": self.request.GET.get("join_at_end", ""), "ended_at_start": self.request.GET.get("ended_at_start", ""), "ended_at_end": self.request.GET.get("ended_at_end", ""), "states": self.request.GET.getlist("states"), "search": self.request.GET.get("search", ""), "joined_meeting": self.request.GET.get("joined_meeting", ""), "unexpected_error": self.request.GET.get("unexpected_error", "")}
 
         # Add flag to detect if create modal should be automatically opened
         context["open_create_modal"] = self.request.GET.get("open_create_modal") == "true"
 
         # Check if any bots in the current page have a join_at value
         context["has_scheduled_bots"] = any(bot.join_at is not None for bot in context["bots"])
+
+        # Only iterates over the paginated page (<= 20)
+        for bot in context["bots"]:
+            if bot.last_event_type:
+                bot.last_event_type_display = dict(BotEventTypes.choices).get(bot.last_event_type, str(bot.last_event_type))
+            if bot.last_event_sub_type:
+                bot.last_event_sub_type_display = dict(BotEventSubTypes.choices).get(bot.last_event_sub_type, str(bot.last_event_sub_type))
 
         return context
 
@@ -777,12 +810,18 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
         max_ram_usage = 0
         max_cpu_usage = 0
         max_db_connection_count = 0
+        max_redis_connection_count = 0
+        network_stats = None
+        public_ip = None
         if resource_snapshots.exists():
             for snapshot in resource_snapshots:
                 data = snapshot.data
+                if public_ip is None:
+                    public_ip = data.get("public_ip")
                 ram_usage = data.get("ram_usage_megabytes") or 0
                 cpu_usage = data.get("cpu_usage_millicores") or 0
                 db_connection_count = data.get("db_connection_count") or 0
+                redis_connection_count = data.get("redis_connection_count") or 0
 
                 if ram_usage > max_ram_usage:
                     max_ram_usage = ram_usage
@@ -790,6 +829,30 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                     max_cpu_usage = cpu_usage
                 if db_connection_count > max_db_connection_count:
                     max_db_connection_count = db_connection_count
+                if redis_connection_count > max_redis_connection_count:
+                    max_redis_connection_count = redis_connection_count
+
+                network = data.get("network")
+                if network:
+                    if network_stats is None:
+                        network_stats = {
+                            "max_rx_bytes_per_sec": 0,
+                            "max_tx_bytes_per_sec": 0,
+                            "max_rx_packets_per_sec": 0,
+                            "max_tx_packets_per_sec": 0,
+                            "total_rx_dropped": 0,
+                            "total_tx_dropped": 0,
+                            "total_rx_errors": 0,
+                            "total_tx_errors": 0,
+                        }
+                    network_stats["max_rx_bytes_per_sec"] = max(network_stats["max_rx_bytes_per_sec"], network.get("rx_bytes_per_sec") or 0)
+                    network_stats["max_tx_bytes_per_sec"] = max(network_stats["max_tx_bytes_per_sec"], network.get("tx_bytes_per_sec") or 0)
+                    network_stats["max_rx_packets_per_sec"] = max(network_stats["max_rx_packets_per_sec"], network.get("rx_packets_per_sec") or 0)
+                    network_stats["max_tx_packets_per_sec"] = max(network_stats["max_tx_packets_per_sec"], network.get("tx_packets_per_sec") or 0)
+                    network_stats["total_rx_dropped"] += network.get("rx_dropped_delta") or 0
+                    network_stats["total_tx_dropped"] += network.get("tx_dropped_delta") or 0
+                    network_stats["total_rx_errors"] += network.get("rx_errors_delta") or 0
+                    network_stats["total_tx_errors"] += network.get("tx_errors_delta") or 0
 
         context = self.get_project_context(object_id, project)
         context.update(
@@ -807,6 +870,9 @@ class ProjectBotDetailView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 "max_ram_usage": max_ram_usage,
                 "max_cpu_usage": max_cpu_usage,
                 "max_db_connection_count": max_db_connection_count,
+                "max_redis_connection_count": max_redis_connection_count,
+                "network_stats": network_stats,
+                "public_ip": public_ip,
             }
         )
 

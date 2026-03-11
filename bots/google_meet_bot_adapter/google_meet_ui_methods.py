@@ -30,7 +30,7 @@ class GoogleMeetUIMethods:
             return element
         except Exception as e:
             # Take screenshot when any exception occurs
-            logger.warning(f"Exception raised in locate_element for {step}")
+            logger.warning(f"Exception raised in locate_element for {step}. Exception type = {type(e)}")
             raise UiCouldNotLocateElementException(f"Exception raised in locate_element for {step}", step, e)
 
     def find_element_by_selector(self, selector_type, selector):
@@ -142,23 +142,51 @@ class GoogleMeetUIMethods:
     def turn_off_media_inputs(self):
         logger.info("Waiting for the microphone button...")
         MICROPHONE_BUTTON_SELECTOR = 'div[aria-label="Turn off microphone"], button[aria-label="Turn off microphone"]'
-        microphone_button = self.locate_element(
-            step="turn_off_microphone_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
-            wait_time_seconds=6,
-        )
-        logger.info("Clicking the microphone button...")
-        self.click_element(microphone_button, "turn_off_microphone_button")
+        MICROPHONE_BUTTON_ON_SELECTOR = 'div[aria-label="Turn on microphone"], button[aria-label="Turn on microphone"]'
 
-        logger.info("Waiting for the camera button...")
         CAMERA_BUTTON_SELECTOR = 'div[aria-label="Turn off camera"], button[aria-label="Turn off camera"]'
-        camera_button = self.locate_element(
-            step="turn_off_camera_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
-            wait_time_seconds=6,
-        )
-        logger.info("Clicking the camera button...")
-        self.click_element(camera_button, "turn_off_camera_button")
+        CAMERA_BUTTON_ON_SELECTOR = 'div[aria-label="Turn on camera"], button[aria-label="Turn on camera"]'
+
+        for attempt in range(5):
+            microphone_button = self.locate_element(
+                step="turn_off_microphone_button",
+                condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_SELECTOR)),
+                wait_time_seconds=6,
+            )
+            logger.info("Clicking the microphone button...")
+            self.click_element(microphone_button, "turn_off_microphone_button")
+
+            # Wait for confirmation that microphone is off
+            try:
+                self.locate_element(
+                    step="wait_for_microphone_to_be_off",
+                    condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MICROPHONE_BUTTON_ON_SELECTOR)),
+                    wait_time_seconds=2,
+                )
+                break
+            except:
+                logger.warning("Microphone button did not seem to be turned off. Retrying...")
+
+        for attempt in range(5):
+            logger.info("Waiting for the camera button...")
+            camera_button = self.locate_element(
+                step="turn_off_camera_button",
+                condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_SELECTOR)),
+                wait_time_seconds=6,
+            )
+            logger.info("Clicking the camera button...")
+            self.click_element(camera_button, "turn_off_camera_button")
+
+            # Wait for confirmation that camera is off
+            try:
+                self.locate_element(
+                    step="wait_for_camera_to_be_off",
+                    condition=EC.element_to_be_clickable((By.CSS_SELECTOR, CAMERA_BUTTON_ON_SELECTOR)),
+                    wait_time_seconds=2,
+                )
+                break
+            except:
+                logger.warning("Camera button did not seem to be turned off. Retrying...")
 
     def join_now_button_selector(self):
         return '//button[.//span[text()="Ask to join" or text()="Join now" or text()="Join the call now"]]'
@@ -399,6 +427,36 @@ class GoogleMeetUIMethods:
                     raise e
                 logger.warning(f"Error setting layout: {e}. Retrying. Attempt #{attempt_index}...")
 
+                self.reset_attempt_to_set_layout()
+
+    def reset_attempt_to_set_layout(self):
+        # Check if there is a modal with a close button. If so click it.
+
+        logger.info("Looking for a modal with a close button")
+        close_button_selector = '[aria-modal="true"] button[aria-label="Close"]'
+        for attempt in range(5):
+            try:
+                close_button = WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, close_button_selector)))
+                logger.info("Found it. Clicking the close button")
+                close_button.click()
+                break
+            except ElementNotInteractableException as e:
+                logger.warning(f"Modal close button not interactable (attempt {attempt + 1}/5): {e}. Retrying...")
+            except Exception as e:
+                logger.warning(f"No modal with a close button found: {e}. Continuing...")
+                break
+
+        logger.info("Sending a click to the body element to close any menus")
+        try:
+            body_element = self.locate_element(
+                step="body_element",
+                condition=EC.presence_of_element_located((By.TAG_NAME, "body")),
+                wait_time_seconds=1,
+            )
+            self.click_element(body_element, "body_element")
+        except Exception as e:
+            logger.warning(f"Error sending a click to the body element to close any menus: {e}. Continuing...")
+
     def attempt_to_set_layout(self, layout_to_select):
         logger.info("Begin setting layout. Waiting for the more options button...")
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
@@ -433,7 +491,7 @@ class GoogleMeetUIMethods:
             logger.info("Waiting for the 'Sidebar' label element")
             sidebar_label = self.locate_element(
                 step="sidebar_label",
-                condition=EC.presence_of_element_located((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
+                condition=EC.element_to_be_clickable((By.XPATH, '//label[.//span[text()="Sidebar"]]')),
                 wait_time_seconds=6,
             )
             logger.info("Clicking the 'Sidebar' label element")
