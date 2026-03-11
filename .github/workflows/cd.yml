@@ -39,9 +39,31 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare CI Dockerfile
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("Dockerfile").read_text()
+
+          source = source.replace(
+              "FROM --platform=linux/amd64 ubuntu:22.04 AS base",
+              "ARG TARGETPLATFORM\nFROM --platform=$TARGETPLATFORM ubuntu:22.04 AS base",
+              1,
+          )
+
+          source = source.replace(
+              "RUN wget -q http://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_134.0.6998.88-1_amd64.deb\nRUN apt-get install -y ./google-chrome-stable_134.0.6998.88-1_amd64.deb",
+              "RUN wget -q https://storage.googleapis.com/chrome-for-testing-public/134.0.6998.88/linux64/chrome-linux64.zip \\\n    && unzip chrome-linux64.zip \\\n    && mv chrome-linux64 /opt/chrome-linux64 \\\n    && ln -sf /opt/chrome-linux64/chrome /usr/local/bin/google-chrome \\\n    && ln -sf /opt/chrome-linux64/chrome /usr/local/bin/google-chrome-stable \\\n    && rm -rf chrome-linux64.zip",
+              1,
+          )
+
+          Path("Dockerfile.ci").write_text(source)
+          PY
+
       - name: Build Docker image
         run: |
-          docker build --no-cache --platform linux/amd64 -t attendee:latest -f ./Dockerfile .
+          docker build --no-cache --platform linux/amd64 -t attendee:latest -f ./Dockerfile.ci .
 
       - name: Tag Docker image
         run: |
