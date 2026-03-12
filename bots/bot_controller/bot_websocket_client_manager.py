@@ -20,13 +20,6 @@ class BotWebsocketClientManager:
         per_participant_audio_url: str | None,
         on_message_callback: Callable[[dict], None],
     ):
-        def get_or_create_client(url: str | None) -> BotWebsocketClient | None:
-            if not url:
-                return None
-            if url not in client_by_url:
-                client_by_url[url] = BotWebsocketClient(url=url, on_message_callback=on_message_callback)
-            return client_by_url[url]
-
         def add_purpose(url: str, purpose: str):
             if not url:
                 return
@@ -34,13 +27,19 @@ class BotWebsocketClientManager:
                 self._url_to_purposes[url] = []
             self._url_to_purposes[url].append(purpose)
 
+        def get_or_create_client(url: str | None, purpose: str) -> BotWebsocketClient | None:
+            if not url:
+                return None
+            if url not in client_by_url:
+                client_by_url[url] = BotWebsocketClient(url=url, on_message_callback=on_message_callback)
+            add_purpose(url, purpose)
+            return client_by_url[url]
+
         client_by_url: dict[str, BotWebsocketClient] = {}
-        self._mixed_audio_client = get_or_create_client(mixed_audio_url)
-        self._per_participant_audio_client = get_or_create_client(per_participant_audio_url)
-        self._clients = list(client_by_url.values())
         self._url_to_purposes: dict[str, list[str]] = {}
-        add_purpose(mixed_audio_url, "mixed_audio")
-        add_purpose(per_participant_audio_url, "per_participant_audio")
+        self._mixed_audio_client = get_or_create_client(mixed_audio_url, "mixed_audio")
+        self._per_participant_audio_client = get_or_create_client(per_participant_audio_url, "per_participant_audio")
+        self._clients = list(client_by_url.values())
 
     def _ensure_started(self, client: BotWebsocketClient):
         if not client.started():
