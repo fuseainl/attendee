@@ -119,6 +119,25 @@ class BotController:
     def should_modify_dom_for_video_recording_for_web_bots(self):
         return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
 
+    # Constructs the callback we'll use to receive per-participant audio chunks
+    # For most cases, we'll feed them to the per-participant audio input manager which will transcribe them and store the audio chunks for post-meeting transcription
+    # If per participant audio is being streamed via websocket, we'll send them to the websocket client
+    def get_per_participant_audio_chunk_callback(self):
+        pass_to_per_participant_audio_input_manager = self.should_capture_audio_chunks()
+        pass_to_websocket_client = self.pipeline_configuration.websocket_stream_per_participant_audio
+
+        if pass_to_per_participant_audio_input_manager and pass_to_websocket_client:
+            def send_to_both_per_participant_audio_input_manager_and_websocket_client(chunk: bytes):
+                self.per_participant_audio_input_manager().add_chunk(chunk)
+                self.add_per_participant_audio_chunk_callback(chunk)
+            return send_to_both_per_participant_audio_input_manager_and_websocket_client
+        elif pass_to_per_participant_audio_input_manager:
+            return self.per_participant_audio_input_manager().add_chunk
+        elif pass_to_websocket_client:
+            return self.send_per_participant_audio_chunk_to_websocket_client
+
+        return None
+
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
             return None
@@ -143,15 +162,10 @@ class BotController:
     def get_google_meet_bot_adapter(self):
         from bots.google_meet_bot_adapter import GoogleMeetBotAdapter
 
-        if self.should_capture_audio_chunks():
-            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
-        else:
-            add_audio_chunk_callback = None
-
         return GoogleMeetBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=add_audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
@@ -179,17 +193,12 @@ class BotController:
     def get_teams_bot_adapter(self):
         from bots.teams_bot_adapter import TeamsBotAdapter
 
-        if self.should_capture_audio_chunks():
-            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
-        else:
-            add_audio_chunk_callback = None
-
         teams_bot_login_credentials = self.bot_in_db.project.credentials.filter(credential_type=Credentials.CredentialTypes.TEAMS_BOT_LOGIN).first()
 
         return TeamsBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=add_audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
@@ -249,17 +258,12 @@ class BotController:
     def get_zoom_web_bot_adapter(self):
         from bots.zoom_web_bot_adapter import ZoomWebBotAdapter
 
-        if self.should_capture_audio_chunks():
-            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
-        else:
-            add_audio_chunk_callback = None
-
         zoom_tokens = self.get_zoom_tokens()
 
         return ZoomWebBotAdapter(
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=add_audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             meeting_url=self.bot_in_db.meeting_url,
             add_video_frame_callback=None,
             wants_any_video_frames_callback=None,
@@ -286,8 +290,6 @@ class BotController:
     def get_zoom_bot_adapter(self):
         from bots.zoom_bot_adapter import ZoomBotAdapter
 
-        add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
-
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomBotAdapter(
@@ -296,7 +298,7 @@ class BotController:
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             display_name=self.bot_in_db.name,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=add_audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
             meeting_url=self.bot_in_db.meeting_url,
@@ -318,17 +320,12 @@ class BotController:
 
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
-        if self.should_capture_audio_chunks():
-            add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
-        else:
-            add_audio_chunk_callback = None
-
         return ZoomRTMSAdapter(
             use_one_way_audio=self.pipeline_configuration.transcribe_audio or self.pipeline_configuration.websocket_stream_per_participant_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             send_message_callback=self.on_message_from_adapter,
-            add_audio_chunk_callback=add_audio_chunk_callback,
+            add_audio_chunk_callback=self.get_per_participant_audio_chunk_callback(),
             upsert_caption_callback=self.closed_caption_manager.upsert_caption,
             zoom_client_id=zoom_oauth_credentials["client_id"],
             zoom_client_secret=zoom_oauth_credentials["client_secret"],
