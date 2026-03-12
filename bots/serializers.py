@@ -1344,7 +1344,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
 
         # Set default sample rates before validation
         for audio_type in ["audio", "per_participant_audio"]:
-            if audio_type in value and value.get(audio_type):
+            if audio_type in value and value.get(audio_type) and isinstance(value[audio_type], dict):
                 if "sample_rate" not in value[audio_type]:
                     value[audio_type]["sample_rate"] = 16000
 
