@@ -17,7 +17,7 @@ from django.utils import timezone
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.bot_adapter import BotAdapter
-from bots.bot_controller.bot_websocket_client import BotWebsocketClient
+from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
 from bots.bot_sso_utils import create_google_meet_sign_in_session
 from bots.bots_api_utils import BotCreationSource
 from bots.external_callback_utils import get_zoom_tokens
@@ -58,7 +58,7 @@ from bots.models import (
 )
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
-from bots.websocket_payloads import mixed_audio_websocket_payload
+from bots.websocket_payloads import mixed_audio_websocket_payload, per_participant_audio_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
@@ -127,16 +127,32 @@ class BotController:
         pass_to_websocket_client = self.pipeline_configuration.websocket_stream_per_participant_audio
 
         if pass_to_per_participant_audio_input_manager and pass_to_websocket_client:
-            def send_to_both_per_participant_audio_input_manager_and_websocket_client(chunk: bytes):
-                self.per_participant_audio_input_manager().add_chunk(chunk)
-                self.add_per_participant_audio_chunk_callback(chunk)
-            return send_to_both_per_participant_audio_input_manager_and_websocket_client
+
+            def send_to_both(speaker_id, chunk_time, chunk_bytes):
+                self.per_participant_audio_input_manager().add_chunk(speaker_id, chunk_time, chunk_bytes)
+                self.send_per_participant_audio_chunk_to_websocket_client(speaker_id, chunk_time, chunk_bytes)
+
+            return send_to_both
         elif pass_to_per_participant_audio_input_manager:
             return self.per_participant_audio_input_manager().add_chunk
         elif pass_to_websocket_client:
             return self.send_per_participant_audio_chunk_to_websocket_client
 
         return None
+
+    def send_per_participant_audio_chunk_to_websocket_client(self, speaker_id, chunk_time, chunk_bytes):
+        if not self.websocket_client_manager:
+            return
+
+        payload = per_participant_audio_websocket_payload(
+            participant_uuid=speaker_id,
+            chunk=chunk_bytes,
+            input_sample_rate=self.get_per_participant_audio_sample_rate(),
+            output_sample_rate=self.bot_in_db.websocket_per_participant_audio_sample_rate(),
+            bot_object_id=self.bot_in_db.object_id,
+        )
+
+        self.websocket_client_manager.send_per_participant_audio(payload)
 
     def create_google_meet_bot_login_session(self):
         if not self.bot_in_db.google_meet_use_bot_login():
@@ -342,12 +358,8 @@ class BotController:
         if self.gstreamer_pipeline:
             self.gstreamer_pipeline.on_mixed_audio_raw_data_received_callback(chunk)
 
-        if not self.websocket_audio_client:
+        if not self.websocket_client_manager:
             return
-
-        if not self.websocket_audio_client.started():
-            logger.info("Starting websocket audio client...")
-            self.websocket_audio_client.start()
 
         payload = mixed_audio_websocket_payload(
             chunk=chunk,
@@ -356,7 +368,7 @@ class BotController:
             bot_object_id=self.bot_in_db.object_id,
         )
 
-        self.websocket_audio_client.send_async(payload)
+        self.websocket_client_manager.send_mixed_audio(payload)
 
     def is_using_rtms(self):
         return self.bot_in_db.zoom_rtms_stream_id is not None
@@ -582,9 +594,9 @@ class BotController:
             logger.info("Telling webpage streamer manager to cleanup...")
             self.webpage_streamer_manager.cleanup()
 
-        if self.websocket_audio_client:
-            logger.info("Telling websocket audio client to cleanup...")
-            self.websocket_audio_client.cleanup()
+        if self.websocket_client_manager:
+            logger.info("Telling websocket client manager to cleanup...")
+            self.websocket_client_manager.cleanup()
 
         if self.get_recording_file_location():
             self.upload_recording_to_external_media_storage_if_enabled()
@@ -728,8 +740,8 @@ class BotController:
         elif meeting_type == MeetingTypes.TEAMS:
             return False
 
-    def should_create_websocket_client(self):
-        return self.pipeline_configuration.websocket_stream_audio
+    def should_create_websocket_client_manager(self):
+        return self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.websocket_stream_per_participant_audio
 
     def should_create_screen_and_audio_recorder(self):
         # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a screen and audio recorder
@@ -828,10 +840,11 @@ class BotController:
                 audio_only=not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video),
             )
 
-        self.websocket_audio_client = None
-        if self.should_create_websocket_client():
-            self.websocket_audio_client = BotWebsocketClient(
-                url=self.bot_in_db.websocket_audio_url(),
+        self.websocket_client_manager = None
+        if self.should_create_websocket_client_manager():
+            self.websocket_client_manager = BotWebsocketClientManager(
+                mixed_audio_url=self.bot_in_db.websocket_audio_url() if self.pipeline_configuration.websocket_stream_audio else None,
+                per_participant_audio_url=self.bot_in_db.websocket_per_participant_audio_url() if self.pipeline_configuration.websocket_stream_per_participant_audio else None,
                 on_message_callback=self.on_message_from_websocket_audio,
             )
 
