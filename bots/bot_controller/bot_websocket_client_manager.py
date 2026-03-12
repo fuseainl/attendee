@@ -27,14 +27,24 @@ class BotWebsocketClientManager:
                 client_by_url[url] = BotWebsocketClient(url=url, on_message_callback=on_message_callback)
             return client_by_url[url]
 
+        def add_purpose(url: str, purpose: str):
+            if not url:
+                return
+            if url not in self._url_to_purposes:
+                self._url_to_purposes[url] = []
+            self._url_to_purposes[url].append(purpose)
+
         client_by_url: dict[str, BotWebsocketClient] = {}
         self._mixed_audio_client = get_or_create_client(mixed_audio_url)
         self._per_participant_audio_client = get_or_create_client(per_participant_audio_url)
         self._clients = list(client_by_url.values())
+        self._url_to_purposes: dict[str, list[str]] = {}
+        add_purpose(mixed_audio_url, "mixed_audio")
+        add_purpose(per_participant_audio_url, "per_participant_audio")
 
     def _ensure_started(self, client: BotWebsocketClient):
         if not client.started():
-            logger.info("Starting websocket client for %s...", client.websocket_url)
+            logger.info("Starting websocket client for %s...", ", ".join(self._url_to_purposes[client.websocket_url]))
             client.start()
 
     def send_mixed_audio(self, payload: dict):
