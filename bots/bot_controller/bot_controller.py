@@ -291,7 +291,7 @@ class BotController:
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
         return ZoomBotAdapter(
-            use_one_way_audio=self.pipeline_configuration.transcribe_audio,
+            use_one_way_audio=self.pipeline_configuration.transcribe_audio or self.pipeline_configuration.websocket_stream_per_participant_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             display_name=self.bot_in_db.name,
@@ -318,13 +318,13 @@ class BotController:
 
         zoom_oauth_credentials, zoom_tokens = self.get_zoom_oauth_credentials_and_tokens()
 
-        if self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM:
-            add_audio_chunk_callback = None
-        else:
+        if self.should_capture_audio_chunks():
             add_audio_chunk_callback = self.per_participant_audio_input_manager().add_chunk
+        else:
+            add_audio_chunk_callback = None
 
         return ZoomRTMSAdapter(
-            use_one_way_audio=self.pipeline_configuration.transcribe_audio,
+            use_one_way_audio=self.pipeline_configuration.transcribe_audio or self.pipeline_configuration.websocket_stream_per_participant_audio,
             use_mixed_audio=self.pipeline_configuration.record_audio or self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.websocket_stream_audio,
             use_video=self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video,
             send_message_callback=self.on_message_from_adapter,
@@ -652,19 +652,31 @@ class BotController:
             return PipelineConfiguration.rtmp_streaming_bot()
 
         if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
-            if self.bot_in_db.websocket_audio_url():
+            if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_audio_url():
+                return PipelineConfiguration.audio_recorder_bot_with_websocket_audio_and_websocket_per_participant_audio()
+            elif self.bot_in_db.websocket_audio_url():
                 return PipelineConfiguration.audio_recorder_bot_with_websocket_audio()
+            elif self.bot_in_db.websocket_per_participant_audio_url():
+                return PipelineConfiguration.audio_recorder_bot_with_websocket_per_participant_audio()
             else:
                 return PipelineConfiguration.audio_recorder_bot()
 
         if self.bot_in_db.recording_type() == RecordingTypes.NO_RECORDING:
-            if self.bot_in_db.websocket_audio_url():
+            if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_audio_url():
+                return PipelineConfiguration.pure_transcription_bot_with_websocket_audio_and_websocket_per_participant_audio()
+            elif self.bot_in_db.websocket_audio_url():
                 return PipelineConfiguration.pure_transcription_bot_with_websocket_audio()
+            elif self.bot_in_db.websocket_per_participant_audio_url():
+                return PipelineConfiguration.pure_transcription_bot_with_websocket_per_participant_audio()
             else:
                 return PipelineConfiguration.pure_transcription_bot()
 
-        if self.bot_in_db.websocket_audio_url():
+        if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_audio_url():
+            return PipelineConfiguration.recorder_bot_with_websocket_audio_and_websocket_per_participant_audio()
+        elif self.bot_in_db.websocket_audio_url():
             return PipelineConfiguration.recorder_bot_with_websocket_audio()
+        elif self.bot_in_db.websocket_per_participant_audio_url():
+            return PipelineConfiguration.recorder_bot_with_websocket_per_participant_audio()
 
         return PipelineConfiguration.recorder_bot()
 
