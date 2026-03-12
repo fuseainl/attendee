@@ -843,8 +843,8 @@ class BotController:
         self.websocket_client_manager = None
         if self.should_create_websocket_client_manager():
             self.websocket_client_manager = BotWebsocketClientManager(
-                mixed_audio_url=self.bot_in_db.websocket_audio_url() if self.pipeline_configuration.websocket_stream_audio else None,
-                per_participant_audio_url=self.bot_in_db.websocket_per_participant_audio_url() if self.pipeline_configuration.websocket_stream_per_participant_audio else None,
+                mixed_audio_url=self.bot_in_db.websocket_audio_url(),
+                per_participant_audio_url=self.bot_in_db.websocket_per_participant_audio_url(),
                 on_message_callback=self.on_message_from_websocket_audio,
             )
 
