@@ -59,7 +59,7 @@ def per_participant_audio_websocket_payload(participant_uuid: str, chunk: bytes,
         "trigger": RealtimeTriggerTypes.type_to_api_code(RealtimeTriggerTypes.PER_PARTICIPANT_AUDIO_CHUNK),
         "bot_id": bot_object_id,
         "data": {
-            "participant_uuid": participant_uuid,
+            "participant_uuid": str(participant_uuid),
             "chunk": b64encode(chunk_downsampled).decode("ascii"),
             "timestamp_ms": int(time.time() * 1000),
             "sample_rate": output_sample_rate,
