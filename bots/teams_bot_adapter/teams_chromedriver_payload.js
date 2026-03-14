@@ -60,6 +60,36 @@ class StyleManager {
         }
     }
 
+    fakeUserActivity() {
+        const targets = [window, document, document.body].filter(Boolean);
+      
+        for (const target of targets) {
+          target.dispatchEvent(new MouseEvent("mousemove", {
+            bubbles: true,
+            clientX: Math.random() * 500,
+            clientY: Math.random() * 500,
+          }));
+      
+          target.dispatchEvent(new MouseEvent("click", {
+            bubbles: true,
+            clientX: Math.random() * 500,
+            clientY: Math.random() * 500,
+          }));
+      
+          target.dispatchEvent(new KeyboardEvent("keydown", {
+            bubbles: true,
+            key: "a",
+          }));
+      
+          target.dispatchEvent(new Event("scroll", { bubbles: true }));
+        }
+      
+        window.ws.sendJson({
+            type: 'UserActivity',
+            activity: 'fake_user_activity'
+        });
+    }
+
     checkNeededInteractions() {
         // Check if bot has been removed from the meeting
         const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
@@ -81,6 +111,8 @@ class StyleManager {
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
         }
+
+        this.fakeUserActivity();
     }
 
     waitForChatInputAndSendReadyMessage() {
