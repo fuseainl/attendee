@@ -60,6 +60,7 @@ class StyleManager {
         }
     }
 
+    // Prevents Teams from going into mode where it stops receiving chat messages
     fakeUserActivity() {
         document.body.dispatchEvent(new MouseEvent("mousemove", {
             bubbles: true,
