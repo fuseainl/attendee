@@ -953,6 +953,16 @@ class ChatMessageManager {
                 return;
             if (!chatMessage.originalArrivalTime)
                 return;
+            // messageTypes we care about are: RichText, RichText/Html, Text, RichText/Sms
+            const allowedMessageTypes = ['RichText', 'RichText/Html', 'Text', 'RichText/Sms'];
+            if (!allowedMessageTypes.includes(chatMessage.messageType))
+            {
+                window.ws.sendJson({
+                    type: 'chatMessageHadWrongMessageTypeError',
+                    chatMessage: chatMessage,
+                });
+                return;
+            }
             if (!this.isNewOrUpdatedChatMessage(chatMessage))
                 return;
 
