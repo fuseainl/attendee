@@ -67,8 +67,6 @@ class StyleManager {
             clientX: Math.random() * 500,
             clientY: Math.random() * 500,
           }));
-      
-        document.body.dispatchEvent(new Event("scroll", { bubbles: true }));
     }
 
     checkNeededInteractions() {
