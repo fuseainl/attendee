@@ -63,11 +63,17 @@ class StyleManager {
 
     // Prevents Teams from going into mode where it stops receiving chat messages
     fakeUserActivity() {
+        const clientX = Math.random() * 500;
+        const clientY = Math.random() * 500;
         document.body.dispatchEvent(new MouseEvent("mousemove", {
             bubbles: true,
-            clientX: Math.random() * 500,
-            clientY: Math.random() * 500,
+            clientX: clientX,
+            clientY: clientY,
           }));
+        window.ws?.sendJson({
+            type: 'FakeUserActivity',
+            activity: `mousemove: ${clientX}, ${clientY}`
+        });
     }
 
     checkNeededInteractions() {
@@ -992,6 +998,10 @@ class ChatMessageManager {
         }
         catch (error) {
             console.error('Error in handleChatMessage', error);
+            this.ws?.sendJson({
+                type: 'ErrorInHandleChatMessage',
+                message: error.message
+            });
         }
     }
 }
@@ -2763,7 +2773,7 @@ window.botOutputManager = botOutputManager;
         const bound = _bind.apply(this, [thisArg, ...args]);
         return function (...callArgs) {
           const eventData = callArgs[0];
-          const batchEvents = eventData?.data?.chatServiceBatchEvent || [];
+          const batchEvents = Array.isArray(eventData?.data?.chatServiceBatchEvent) ? eventData.data.chatServiceBatchEvent : [];
           for (const event of batchEvents) {
             if (event?.message)
             {
