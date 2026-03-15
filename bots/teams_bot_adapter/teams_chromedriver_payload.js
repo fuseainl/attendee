@@ -2769,24 +2769,31 @@ window.botOutputManager = botOutputManager;
 (function () {
     const _bind = Function.prototype.bind;
     Function.prototype.bind = function (thisArg, ...args) {
-      if (this.name === 'onMessageReceived') {
-        const bound = _bind.apply(this, [thisArg, ...args]);
-        return function (...callArgs) {
-          const eventData = callArgs[0];
-          const batchEvents = Array.isArray(eventData?.data?.chatServiceBatchEvent) ? eventData.data.chatServiceBatchEvent : [];
-          for (const event of batchEvents) {
-            if (event?.message)
-            {
-                realConsole?.log('chatMessage', event.message);
-                window.chatMessageManager?.handleChatMessage(event.message);
-            }
-          }
-          return bound.apply(this, callArgs);
-        };
-      }
-      return _bind.apply(this, [thisArg, ...args]);
+        if (this.name === 'onMessageReceived') {
+            const bound = _bind.apply(this, [thisArg, ...args]);
+            return function (...callArgs) {
+                const eventData = callArgs[0];
+                if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
+                {
+                    const batchEvents = eventData.data.chatServiceBatchEvent;
+                    if (Array.isArray(batchEvents))
+                    {
+                        for (const event of batchEvents) 
+                        {
+                            if (event?.message)
+                            {
+                                realConsole?.log('chatMessage', event.message);
+                                window.chatMessageManager?.handleChatMessage(event.message);
+                            }
+                        }
+                    }
+                }
+                return bound.apply(this, callArgs);
+            };
+        }
+        return _bind.apply(this, [thisArg, ...args]);
     };
-  })();
+})();
 
 class CallManager {
     constructor() {
