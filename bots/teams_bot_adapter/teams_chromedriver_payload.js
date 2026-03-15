@@ -61,28 +61,13 @@ class StyleManager {
     }
 
     fakeUserActivity() {
-        const targets = [window, document, document.body].filter(Boolean);
-      
-        for (const target of targets) {
-          target.dispatchEvent(new MouseEvent("mousemove", {
+        document.body.dispatchEvent(new MouseEvent("mousemove", {
             bubbles: true,
             clientX: Math.random() * 500,
             clientY: Math.random() * 500,
           }));
       
-          target.dispatchEvent(new MouseEvent("click", {
-            bubbles: true,
-            clientX: Math.random() * 500,
-            clientY: Math.random() * 500,
-          }));
-      
-          target.dispatchEvent(new KeyboardEvent("keydown", {
-            bubbles: true,
-            key: "a",
-          }));
-      
-          target.dispatchEvent(new Event("scroll", { bubbles: true }));
-        }
+        document.body.dispatchEvent(new Event("scroll", { bubbles: true }));
       
         window.ws.sendJson({
             type: 'UserActivity',
