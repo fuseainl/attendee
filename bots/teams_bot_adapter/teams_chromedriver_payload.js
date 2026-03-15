@@ -60,6 +60,15 @@ class StyleManager {
         }
     }
 
+    // Prevents Teams from going into mode where it stops receiving chat messages
+    fakeUserActivity() {
+        document.body.dispatchEvent(new MouseEvent("mousemove", {
+            bubbles: true,
+            clientX: Math.random() * 500,
+            clientY: Math.random() * 500,
+          }));
+    }
+
     checkNeededInteractions() {
         // Check if bot has been removed from the meeting
         const removedFromMeetingElement = document.getElementById('calling-retry-screen-title');
@@ -81,6 +90,8 @@ class StyleManager {
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
         }
+
+        this.fakeUserActivity();
     }
 
     waitForChatInputAndSendReadyMessage() {
