@@ -23,6 +23,7 @@ class StyleManager {
         this.frameStyleElement = null;
         this.frameAdjustInterval = null;
         this.neededInteractionsInterval = null;
+        this.fakeUserActivityInterval = null;
 
         // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
@@ -90,8 +91,6 @@ class StyleManager {
             // Wait until the chat input element appears in the DOM
             this.waitForChatInputAndSendReadyMessage();
         }
-
-        this.fakeUserActivity();
     }
 
     waitForChatInputAndSendReadyMessage() {
@@ -157,6 +156,10 @@ class StyleManager {
             clearInterval(this.neededInteractionsInterval);
         }
                 
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+        }
+
         // Check for audio activity every second
         this.silenceCheckInterval = setInterval(() => {
             this.checkAudioActivity();
@@ -166,6 +169,11 @@ class StyleManager {
         this.neededInteractionsInterval = setInterval(() => {
             this.checkNeededInteractions();
         }, 5000);
+
+        // Perform fake user activity every 300 seconds
+        this.fakeUserActivityInterval = setInterval(() => {
+            this.fakeUserActivity();
+        }, 300000);
 
         this.meetingAudioStream = destination.stream;
     }
@@ -374,6 +382,11 @@ class StyleManager {
         if (this.neededInteractionsInterval) {
             clearInterval(this.neededInteractionsInterval);
             this.neededInteractionsInterval = null;
+        }
+        
+        if (this.fakeUserActivityInterval) {
+            clearInterval(this.fakeUserActivityInterval);
+            this.fakeUserActivityInterval = null;
         }
         
         // Restore original frame layout
