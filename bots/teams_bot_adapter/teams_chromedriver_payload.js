@@ -2740,11 +2740,13 @@ window.botOutputManager = botOutputManager;
         const bound = _bind.apply(this, [thisArg, ...args]);
         return function (...callArgs) {
           const eventData = callArgs[0];
-          if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
-          {
-            const message = eventData.data.chatServiceBatchEvent[0].message;
-            realConsole?.log('chatMessage', message);
-            window.chatMessageManager?.handleChatMessage(message);
+          const batchEvents = eventData?.data?.chatServiceBatchEvent || [];
+          for (const event of batchEvents) {
+            if (event?.message)
+            {
+                realConsole?.log('chatMessage', event.message);
+                window.chatMessageManager?.handleChatMessage(event.message);
+            }
           }
           return bound.apply(this, callArgs);
         };
