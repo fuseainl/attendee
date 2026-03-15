@@ -68,11 +68,6 @@ class StyleManager {
           }));
       
         document.body.dispatchEvent(new Event("scroll", { bubbles: true }));
-      
-        window.ws.sendJson({
-            type: 'UserActivity',
-            activity: 'fake_user_activity'
-        });
     }
 
     checkNeededInteractions() {
