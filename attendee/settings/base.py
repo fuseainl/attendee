@@ -198,7 +198,7 @@ CELERY_TASK_ROUTES = {
     },
 }
 
-if os.getenv("BOT_LAUNCH_METHOD") != "kubernetes" and os.getenv("BOT_LAUNCH_METHOD") != "docker-compose-multi-host":
+if os.getenv("LAUNCH_BOT_METHOD") != "kubernetes" and os.getenv("LAUNCH_BOT_METHOD") != "docker-compose-multi-host":
     # This setting means that each celery worker process will be recreated after each task.
     # Needed because latest Zoom SDK has segfault issue unless we recreate the process after each bot.
     CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
