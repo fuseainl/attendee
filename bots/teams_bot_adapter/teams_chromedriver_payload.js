@@ -176,10 +176,10 @@ class StyleManager {
             this.checkNeededInteractions();
         }, 5000);
 
-        // Perform fake user activity every 300 seconds
+        // Perform fake user activity every 4 minutes
         this.fakeUserActivityInterval = setInterval(() => {
             this.fakeUserActivity();
-        }, 300000);
+        }, 240000);
 
         this.meetingAudioStream = destination.stream;
     }
@@ -2773,7 +2773,7 @@ window.botOutputManager = botOutputManager;
             const bound = _bind.apply(this, [thisArg, ...args]);
             return function (...callArgs) {
                 const eventData = callArgs[0];
-                if (eventData?.data?.chatServiceBatchEvent?.[0]?.message)
+                if (eventData?.data?.chatServiceBatchEvent)
                 {
                     const batchEvents = eventData.data.chatServiceBatchEvent;
                     if (Array.isArray(batchEvents))
