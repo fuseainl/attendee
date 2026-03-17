@@ -1,13 +1,32 @@
 import logging
+import random
+import time
 
+import redis
 import requests
 from celery import shared_task
+from django.conf import settings
 from django.utils import timezone
 
 from bots.models import SessionTypes, WebhookDeliveryAttempt, WebhookDeliveryAttemptStatus, WebhookTriggerTypes
 from bots.webhook_utils import sign_payload
 
 logger = logging.getLogger(__name__)
+
+
+def is_global_webhook_rate_limit_reached():
+    if not settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT:
+        return False
+
+    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+    rate_limit_key = f"global_webhook_rate_limit:{int(time.time())}"
+
+    with redis_client.pipeline() as pipe:
+        pipe.incr(rate_limit_key)
+        pipe.expire(rate_limit_key, 2, nx=True)
+        current_count, _ = pipe.execute()
+
+    return current_count > settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT
 
 
 @shared_task(
@@ -71,6 +90,22 @@ def deliver_webhook(self, delivery_id):
     # Sign the payload
     active_secret = subscription.project.webhook_secrets.filter().order_by("-created_at").first()
     signature = sign_payload(webhook_data, active_secret.get_secret())
+
+    # Check if the global webhook rate limit has been reached before delivering.
+    if is_global_webhook_rate_limit_reached():
+        random_delay = random.randint(1, 10)
+        logger.warning(
+            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s with %s second delay",
+            settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT,
+            delivery.id,
+            random_delay,
+        )
+        # Launch another task with some random delay to avoid thundering herd.
+        deliver_webhook.apply_async(
+            args=[delivery_id],
+            countdown=random_delay,
+        )
+        return
 
     # Increment attempt counter
     delivery.attempt_count += 1
