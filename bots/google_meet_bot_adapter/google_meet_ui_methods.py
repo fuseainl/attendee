@@ -87,15 +87,21 @@ class GoogleMeetUIMethods:
 
     def look_for_blocked_element(self, step):
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
+
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
             element_text = cannot_join_element.text
 
+            # We need to track how many times this has happened so far.
+            self.number_of_times_blocked_by_google += 1
+
             # If we have the ability to login, but we aren't using it, then we should raise an error that login is required.
             # Logging in will get us unblocked.
             if self.google_meet_bot_login_is_available and not self.google_meet_bot_login_should_be_used:
-                logger.warning("Google is blocking us for whatever reason and we have the ability to login but we aren't using it, so we should raise a UiLoginRequiredException. Logging in will get us unblocked.")
-                raise UiLoginRequiredException("Login required to get around blocking", step)
+                if self.number_of_times_blocked_by_google > 1:
+                    logger.warning("Google is blocking us for whatever reason and we have the ability to login but we aren't using it, so we should raise a UiLoginRequiredException. Logging in will get us unblocked.")
+                    raise UiLoginRequiredException("Login required to get around blocking", step)
+                logger.warning(f"Google is blocking us for whatever reason and we have the ability to login. So far it has only happened {self.number_of_times_blocked_by_google} times, so we will simply retry.")
 
             logger.warning(f"Google is blocking us for whatever reason, but we can retry. Element text: '{element_text}'. Raising UiGoogleBlockingUsException")
             raise UiGoogleBlockingUsException("You can't join this video call", step)
@@ -216,6 +222,7 @@ class GoogleMeetUIMethods:
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
         logger.info("Waiting for the name input field...")
+
         for attempt_to_look_for_name_input_index in range(num_attempts_to_look_for_name_input):
             try:
                 name_input = self.retrieve_name_input_element()
