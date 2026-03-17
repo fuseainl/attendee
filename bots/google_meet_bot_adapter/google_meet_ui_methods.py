@@ -87,7 +87,6 @@ class GoogleMeetUIMethods:
 
     def look_for_blocked_element(self, step):
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
-
         if cannot_join_element:
             # This means google is blocking us for whatever reason, but we can retry
             element_text = cannot_join_element.text
@@ -222,7 +221,6 @@ class GoogleMeetUIMethods:
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
         logger.info("Waiting for the name input field...")
-
         for attempt_to_look_for_name_input_index in range(num_attempts_to_look_for_name_input):
             try:
                 name_input = self.retrieve_name_input_element()
