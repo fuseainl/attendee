@@ -477,7 +477,7 @@ class WebhookDeliveryTest(TransactionTestCase):
             deliver_webhook.apply(args=[attempt.id]).get()
 
         self.assertIn("global webhook rate limit", str(ctx.exception))
-        self.assertEqual(ctx.exception.when, 42)
+        self.assertEqual(ctx.exception.when, 3)
 
         attempt.refresh_from_db()
 
