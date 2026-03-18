@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import time
 
 import redis
@@ -111,12 +112,20 @@ def deliver_webhook(self, delivery_id):
 
     # Check if the global webhook rate limit has been reached before delivering.
     if is_global_webhook_rate_limit_reached():
+        retry_delay = random.randint(
+            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RANDOM_RETRY_DELAY_MIN", 1)),
+            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RANDOM_RETRY_DELAY_MAX", 3)),
+        )
         logger.warning(
-            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s",
+            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s in %s seconds",
             settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT,
             delivery.id,
+            retry_delay,
         )
-        raise Exception("Retry due to global webhook rate limit")
+        raise self.retry(
+            exc=Exception("Retry due to global webhook rate limit"),
+            countdown=retry_delay,
+        )
 
     # Increment attempt counter
     delivery.attempt_count += 1
