@@ -43,7 +43,7 @@ def is_global_webhook_rate_limit_reached():
 MAX_WEBHOOK_DELIVERY_ATTEMPTS = 3
 # This is how many times the task can be retried before giving up.
 # This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
-# reasons other than delivery failures (e.g., rate limiting or unexpected exceptions).
+# reasons other than delivery failures (e.g., rate limiting enforced by Attendee via GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT or unexpected exceptions).
 DELIVER_WEBHOOK_TASK_MAX_RETRIES = int(os.getenv("DELIVER_WEBHOOK_TASK_MAX_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
 
 
