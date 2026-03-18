@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import time
 
 import redis
@@ -40,7 +41,7 @@ def is_global_webhook_rate_limit_reached():
 
 
 # This is how many times we will try to deliver the webhook before giving up.
-MAX_WEBHOOK_DELIVERY_ATTEMPTS = 3
+MAX_WEBHOOK_DELIVERY_ATTEMPTS = int(os.getenv("MAX_WEBHOOK_DELIVERY_ATTEMPTS", 3))
 # This is how many times the task can be retried before giving up.
 # This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
 # reasons other than delivery failures (e.g., rate limiting enforced by Attendee via GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT or unexpected exceptions).
@@ -111,12 +112,20 @@ def deliver_webhook(self, delivery_id):
 
     # Check if the global webhook rate limit has been reached before delivering.
     if is_global_webhook_rate_limit_reached():
+        retry_delay = random.randint(
+            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_MIN_SECONDS", 1)),
+            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_MAX_SECONDS", 3)),
+        )
         logger.warning(
-            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s",
+            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s in %s seconds",
             settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT,
             delivery.id,
+            retry_delay,
         )
-        raise Exception("Retry due to global webhook rate limit")
+        raise self.retry(
+            exc=Exception("Retry due to global webhook rate limit"),
+            countdown=retry_delay,
+        )
 
     # Increment attempt counter
     delivery.attempt_count += 1
