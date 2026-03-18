@@ -13,12 +13,22 @@ from bots.webhook_utils import sign_payload
 
 logger = logging.getLogger(__name__)
 
+_deliver_webhook_task_redis_client = None
+
+
+# Create a singleton Redis client instance that will share connections across all tasks in the same process.
+def get_deliver_webhook_task_redis_client():
+    global _deliver_webhook_task_redis_client
+    if _deliver_webhook_task_redis_client is None:
+        _deliver_webhook_task_redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+    return _deliver_webhook_task_redis_client
+
 
 def is_global_webhook_rate_limit_reached():
     if not settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT:
         return False
 
-    redis_client = redis.from_url(settings.REDIS_URL_WITH_PARAMS)
+    redis_client = get_deliver_webhook_task_redis_client()
     rate_limit_key = f"global_webhook_rate_limit:{int(time.time())}"
 
     with redis_client.pipeline() as pipe:
