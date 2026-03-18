@@ -34,13 +34,13 @@ MAX_WEBHOOK_DELIVERY_ATTEMPTS = 3
 # This is how many times the task can be retried before giving up.
 # This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
 # reasons other than delivery failures (e.g., rate limiting or unexpected exceptions).
-MAX_WEBHOOK_TASK_RETRIES = int(os.getenv("MAX_WEBHOOK_TASK_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
+DELIVER_WEBHOOK_TASK_MAX_RETRIES = int(os.getenv("DELIVER_WEBHOOK_TASK_MAX_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
 
 
 @shared_task(
     bind=True,
     retry_backoff=True,  # Enable exponential backoff
-    max_retries=MAX_WEBHOOK_TASK_RETRIES,
+    max_retries=DELIVER_WEBHOOK_TASK_MAX_RETRIES,
     autoretry_for=(Exception,),
 )
 def deliver_webhook(self, delivery_id):
