@@ -4,7 +4,6 @@ from unittest.mock import Mock, call, patch
 from bots.bot_controller.bot_websocket_client import BotWebsocketClient
 from bots.bot_controller.bot_websocket_client_manager import BotWebsocketClientManager
 
-
 MIXED_URL = "wss://mixed.example.com/audio"
 PER_PARTICIPANT_URL = "wss://per-participant.example.com/audio"
 SHARED_URL = "wss://shared.example.com/audio"
