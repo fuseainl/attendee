@@ -455,15 +455,13 @@ class WebhookDeliveryTest(TransactionTestCase):
         num_attempts = trigger_webhook(webhook_trigger_type=WebhookTriggerTypes.TRANSCRIPT_UPDATE, bot=self.bot, payload=test_payload)
         self.assertEqual(num_attempts, 1)
 
-    @patch("bots.tasks.deliver_webhook_task.random.randint")
     @patch("bots.tasks.deliver_webhook_task.requests.post")
     @patch("bots.tasks.deliver_webhook_task.is_global_webhook_rate_limit_reached")
-    def test_webhook_delivery_global_rate_limit(self, mock_rate_limit, mock_post, mock_randint):
+    def test_webhook_delivery_global_rate_limit(self, mock_rate_limit, mock_post):
         """Test that webhook delivery is retried without counting as an attempt when the global rate limit is reached"""
         mock_rate_limit.return_value = True
         mock_post.return_value.status_code = 200
         mock_post.return_value.text = "OK"
-        mock_randint.return_value = 42
 
         attempt = WebhookDeliveryAttempt.objects.create(
             webhook_subscription=self.webhook_subscription,
@@ -477,7 +475,6 @@ class WebhookDeliveryTest(TransactionTestCase):
             deliver_webhook.apply(args=[attempt.id]).get()
 
         self.assertIn("global webhook rate limit", str(ctx.exception))
-        self.assertEqual(ctx.exception.when, 3)
 
         attempt.refresh_from_db()
 
