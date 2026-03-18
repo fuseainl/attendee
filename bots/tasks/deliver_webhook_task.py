@@ -1,7 +1,7 @@
 import logging
-import random
-import time
 import os
+import time
+
 import redis
 import requests
 from celery import shared_task
@@ -28,12 +28,14 @@ def is_global_webhook_rate_limit_reached():
 
     return current_count > settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT
 
+
 # This is how many times we will try to deliver the webhook before giving up.
 MAX_WEBHOOK_DELIVERY_ATTEMPTS = 3
 # This is how many times the task can be retried before giving up.
 # This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
 # reasons other than delivery failures (e.g., rate limiting or unexpected exceptions).
 MAX_WEBHOOK_TASK_RETRIES = int(os.getenv("MAX_WEBHOOK_TASK_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
+
 
 @shared_task(
     bind=True,
