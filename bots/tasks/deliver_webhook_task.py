@@ -113,8 +113,8 @@ def deliver_webhook(self, delivery_id):
     # Check if the global webhook rate limit has been reached before delivering.
     if is_global_webhook_rate_limit_reached():
         retry_delay = random.randint(
-            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RANDOM_RETRY_DELAY_MIN", 1)),
-            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RANDOM_RETRY_DELAY_MAX", 3)),
+            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_MIN_SECONDS", 1)),
+            int(os.getenv("GLOBAL_WEBHOOK_RATE_LIMIT_RETRY_DELAY_MAX_SECONDS", 3)),
         )
         logger.warning(
             "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s in %s seconds",
