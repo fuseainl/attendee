@@ -1,7 +1,7 @@
 import logging
 import random
 import time
-
+import os
 import redis
 import requests
 from celery import shared_task
@@ -28,11 +28,17 @@ def is_global_webhook_rate_limit_reached():
 
     return current_count > settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT
 
+# This is how many times we will try to deliver the webhook before giving up.
+MAX_WEBHOOK_DELIVERY_ATTEMPTS = 3
+# This is how many times the task can be retried before giving up.
+# This is distinct from MAX_WEBHOOK_DELIVERY_ATTEMPTS because the task can also be retried for
+# reasons other than delivery failures (e.g., rate limiting or unexpected exceptions).
+MAX_WEBHOOK_TASK_RETRIES = int(os.getenv("MAX_WEBHOOK_TASK_RETRIES", MAX_WEBHOOK_DELIVERY_ATTEMPTS))
 
 @shared_task(
     bind=True,
     retry_backoff=True,  # Enable exponential backoff
-    max_retries=3,
+    max_retries=MAX_WEBHOOK_TASK_RETRIES,
     autoretry_for=(Exception,),
 )
 def deliver_webhook(self, delivery_id):
@@ -93,19 +99,12 @@ def deliver_webhook(self, delivery_id):
 
     # Check if the global webhook rate limit has been reached before delivering.
     if is_global_webhook_rate_limit_reached():
-        random_delay = random.randint(1, 10)
         logger.warning(
-            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s with %s second delay",
+            "Global webhook deliveries per second rate limit of %s reached; retrying webhook delivery %s",
             settings.GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT,
             delivery.id,
-            random_delay,
         )
-        # Launch another task with some random delay to avoid thundering herd.
-        deliver_webhook.apply_async(
-            args=[delivery_id],
-            countdown=random_delay,
-        )
-        return
+        raise Exception("Retry due to global webhook rate limit")
 
     # Increment attempt counter
     delivery.attempt_count += 1
@@ -156,8 +155,8 @@ def deliver_webhook(self, delivery_id):
 
     if delivery.status == WebhookDeliveryAttemptStatus.FAILURE:
         # Check if this was the last retry attempt
-        if delivery.attempt_count >= self.max_retries:
+        if delivery.attempt_count >= MAX_WEBHOOK_DELIVERY_ATTEMPTS:
             logger.error(f"Webhook delivery failed after {delivery.attempt_count} attempts. " + f"Webhook ID: {delivery.id}, URL: {subscription.url}, " + f"Event: {delivery.webhook_trigger_type}, Status: {delivery.status}")
         else:
-            logger.info(f"Retrying webhook delivery {delivery.id} (attempt {delivery.attempt_count}/{self.max_retries})")
+            logger.info(f"Retrying webhook delivery {delivery.id} (attempt {delivery.attempt_count}/{MAX_WEBHOOK_DELIVERY_ATTEMPTS})")
             raise Exception("Retry due to failure")
