@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, call, patch
 import numpy as np
 from django.db import connection
 from django.db.backends.signals import connection_created
+from django.test import tag
 from django.test.testcases import TransactionTestCase
 from selenium.common.exceptions import TimeoutException
 from websockets.sync.client import connect as ws_connect
@@ -74,6 +75,7 @@ def assert_only_threads_created_connections(testcase, events, allowed_thread_ide
         [],
         f"DB connections created from disallowed threads: {offenders}",
     )
+
 
 @tag("google_meet_tests")
 class TestGoogleMeetBot(TransactionTestCase):

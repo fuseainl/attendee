@@ -5,7 +5,7 @@ import time
 from unittest.mock import MagicMock, mock_open, patch
 
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, tag
 
 from bots.bot_controller.bot_controller import BotController
 from bots.bots_api_views import send_sync_command
@@ -28,6 +28,7 @@ def create_mock_teams_driver():
     mock_driver = MagicMock()
     mock_driver.execute_script.return_value = "test_result"
     return mock_driver
+
 
 @tag("teams_tests")
 class TestTeamsBot(TransactionTestCase):

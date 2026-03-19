@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, tag
 from selenium.common.exceptions import NoSuchElementException
 
 from bots.bot_adapter import BotAdapter
