@@ -75,7 +75,7 @@ def assert_only_threads_created_connections(testcase, events, allowed_thread_ide
         f"DB connections created from disallowed threads: {offenders}",
     )
 
-
+@tag("google_meet_tests")
 class TestGoogleMeetBot(TransactionTestCase):
     @classmethod
     def setUpClass(cls):

@@ -20,8 +20,12 @@ jobs:
         include:
           - test_suite: zoom
             test_args: "--tag zoom_tests"
-          - test_suite: non-zoom
-            test_args: "--exclude-tag zoom_tests"
+          - test_suite: google_meet
+            test_args: "--tag google_meet_tests"
+          - test_suite: teams
+            test_args: "--tag teams_tests"
+          - test_suite: others
+            test_args: "--exclude-tag zoom_tests --exclude-tag google_meet_tests --exclude-tag teams_tests"
 
     services:
       postgres:

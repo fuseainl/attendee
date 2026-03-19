@@ -31,6 +31,7 @@ def create_mock_zoom_web_driver():
     return mock_driver
 
 
+@tag("zoom_tests")
 class TestZoomWebBot(TransactionTestCase):
     def setUp(self):
         # Recreate organization and project for each test

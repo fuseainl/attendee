@@ -29,7 +29,7 @@ def create_mock_teams_driver():
     mock_driver.execute_script.return_value = "test_result"
     return mock_driver
 
-
+@tag("teams_tests")
 class TestTeamsBot(TransactionTestCase):
     def setUp(self):
         # Recreate organization and project for each test

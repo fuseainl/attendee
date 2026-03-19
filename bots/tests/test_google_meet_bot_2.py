@@ -79,6 +79,7 @@ from bots.web_bot_adapter.ui_methods import UiLoginRequiredException, UiRetryabl
         "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
     },
 )
+@tag("google_meet_tests")
 class TestGoogleMeetBot2(TransactionTestCase):
     @classmethod
     def setUpClass(cls):
