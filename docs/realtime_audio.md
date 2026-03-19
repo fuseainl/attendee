@@ -103,6 +103,7 @@ The websocket message payload is identical to the mixed audio payload, except th
     "timestamp_ms": 1703123456789
   }
 }
+```
 
 ## Retries on Websocket Connections
 
