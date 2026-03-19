@@ -127,6 +127,7 @@ class BotController:
         pass_to_websocket_client = self.pipeline_configuration.websocket_stream_per_participant_audio
 
         if pass_to_per_participant_audio_input_manager and pass_to_websocket_client:
+            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to both per-participant audio input manager and websocket client")
             per_participant_audio_input_manager = self.per_participant_audio_input_manager()
 
             def send_to_both(speaker_id, chunk_time, chunk_bytes):
@@ -135,8 +136,10 @@ class BotController:
 
             return send_to_both
         elif pass_to_per_participant_audio_input_manager:
+            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to per-participant audio input manager")
             return self.per_participant_audio_input_manager().add_chunk
         elif pass_to_websocket_client:
+            logger.info("In get_per_participant_audio_chunk_callback, passing per-participant audio chunk to websocket client")
             return self.send_per_participant_audio_chunk_to_websocket_client
 
         return None
