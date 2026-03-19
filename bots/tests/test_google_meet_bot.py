@@ -1057,7 +1057,7 @@ class TestGoogleMeetBot(TransactionTestCase):
     @patch("bots.bot_controller.bot_controller.S3FileUploader")
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.check_if_meeting_is_found", return_value=None)
     @patch("bots.google_meet_bot_adapter.google_meet_ui_methods.GoogleMeetUIMethods.wait_for_host_if_needed", return_value=None)
-    @patch("bots.bot_controller.bot_controller.BotWebsocketClient")
+    @patch("bots.bot_controller.bot_websocket_client_manager.BotWebsocketClient")
     @patch("time.time")
     def test_bot_bidirectional_audio_streaming_via_websockets(
         self,
