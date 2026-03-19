@@ -911,8 +911,8 @@ class TestGoogleMeetBot(TransactionTestCase):
             controller.cleanup()
             bot_thread.join(timeout=5)
 
-        # Close the database connection since we're in a thread
-        connection.close()
+            # Close the database connection since we're in a thread
+            connection.close()
 
     @patch("bots.models.Bot.create_debug_recording", return_value=False)
     @patch("bots.web_bot_adapter.web_bot_adapter.Display")
