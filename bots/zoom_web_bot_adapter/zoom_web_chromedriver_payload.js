@@ -275,7 +275,11 @@ class StyleManager {
         }
 
         if (initialData.sendPerParticipantAudio)
-            handleAudioTrack({track: this.meetingAudioStream.getAudioTracks()[0]});  
+            handleAudioTrack({track: this.meetingAudioStream.getAudioTracks()[0]});
+
+        if (window.zoomInitialData.modifyDomForVideoRecording) {
+            this.makeMainVideoFillFrame();
+        }
     }
     
     getMeetingAudioStream() {
@@ -284,6 +288,113 @@ class StyleManager {
 
     async stop() {
         console.log('StyleManager stop');
+
+        this.restoreOriginalFrame();
+    }
+
+    makeMainVideoFillFrame() {
+        /* ── 0.  Cleanup from earlier runs ─────────────────────────────── */
+        if (this.blanket?.isConnected) this.blanket.remove();
+        if (this.frameStyleElement?.isConnected) this.frameStyleElement.remove();
+        if (this.frameAdjustInterval) {
+            cancelAnimationFrame(this.frameAdjustInterval);   // ← was clearInterval
+            this.frameAdjustInterval = null;
+        }
+
+        /* ── 1a.  Get the video frame element ─────────────────────────────── */
+        const video_frame_element = document.querySelector('.speaker-active-container__video-frame')
+        if (!video_frame_element) {
+            console.error('No video frame element found');
+            return;
+        }
+    
+        /* ── 1b.  Inject the blanket ────────────────────────────────────── */
+        const blanket = document.createElement("div");
+        blanket.id = "attendee-blanket";
+        Object.assign(blanket.style, {
+            position: "fixed",
+            inset: "0",
+            background: "#fff",
+            zIndex: 1998,              // below the video we’ll promote
+            pointerEvents: "none"      // lets events fall through
+        });
+        const video_frame_element_parent = video_frame_element.parentElement;
+        video_frame_element_parent.appendChild(blanket)
+        this.blanket = blanket;
+    
+        /* ── 2.  Promote the central video and its descendants ─────────── */
+        const style = document.createElement("style");
+        style.textContent = `
+            /* central pane fills the viewport, highest z‑index */
+            .speaker-active-container__video-frame {
+                position: fixed !important;
+                inset: 0 !important;
+                width: 100vw !important;
+                height: 100vh !important;
+                z-index: 1999 !important;   /* > blanket */
+            }
+            /* make sure its children inherit size & events normally */
+            .speaker-active-container__video-frame, 
+            .speaker-active-container__video-frame * {
+                pointer-events: auto !important;
+            }
+        `;
+        document.head.appendChild(style);
+        this.frameStyleElement = style;
+    
+        /* ── 3.  Keep the central element the right size ───────────────── */
+        const adjust = () => {
+            this.adjustCentralElement?.();
+            this.frameAdjustInterval = requestAnimationFrame(adjust);  // ← RAF loop
+        };
+        adjust();  // kick it off
+    }
+    
+    adjustCentralElement = function() {
+        // Get the central element
+        const centralElement = document.querySelector('.speaker-active-container__video-frame');
+        
+        // Function to resize the central element
+        function adjustCentralElementSize(element) {
+            if (element?.style) {
+                element.style.width  = `${window.initialData.videoFrameWidth}px`;
+                element.style.height = `${window.initialData.videoFrameHeight}px`;
+                element.style.position = 'fixed';
+            }
+        }
+    
+        function adjustChildElement(element) {
+            if (element?.style) {
+                element.style.position = 'fixed';
+                element.style.width  = '100%';
+                element.style.height = '100%';
+                element.style.top  = '0';
+                element.style.left = '0';
+            }
+        }
+        
+        if (centralElement) {
+            //adjustChildElement(centralElement?.children[0]?.children[0]?.children[0]?.children[0]?.children[0]);
+            //adjustChildElement(centralElement?.children[0]?.children[0]?.children[0]?.children[0]);
+            //adjustChildElement(centralElement?.children[0]?.children[0]?.children[0]);
+            adjustChildElement(centralElement?.children[0]);
+            adjustCentralElementSize(centralElement);
+        }
+    }
+
+    restoreOriginalFrame() {
+        // If we have a reference to the style element, remove it
+        if (this.frameStyleElement) {
+            this.frameStyleElement.remove();
+            this.frameStyleElement = null;
+            console.log('Removed video frame style element');
+        }
+        
+        // Cancel the RAF loop if it exists
+        if (this.frameAdjustInterval) {
+            cancelAnimationFrame(this.frameAdjustInterval);   // ← was clearInterval
+            this.frameAdjustInterval = null;
+        }
     }
 }
 

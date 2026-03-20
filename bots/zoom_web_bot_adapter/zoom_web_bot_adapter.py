@@ -69,9 +69,11 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
         zoom_closed_captions_language: str | None,
         should_ask_for_recording_permission: bool,
         zoom_tokens: dict,
+        modify_dom_for_video_recording: bool,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.modify_dom_for_video_recording = modify_dom_for_video_recording
         self.meeting_id, self.meeting_password = parse_zoom_join_url(self.meeting_url)
         self.zoom_oauth_credentials_callback = zoom_oauth_credentials_callback
 
@@ -122,6 +124,7 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 joinToken: {json.dumps(self.zoom_tokens.get("join_token", ""))},
                 appPrivilegeToken: {json.dumps(self.zoom_tokens.get("app_privilege_token", ""))},
                 onBehalfToken: {json.dumps(self.zoom_tokens.get("onbehalf_token", ""))},
+                modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
             }}
         """
 
