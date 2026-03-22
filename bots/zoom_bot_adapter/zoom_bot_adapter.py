@@ -138,12 +138,12 @@ class ZoomBotAdapter(BotAdapter):
         self.automatic_leave_configuration = automatic_leave_configuration
 
         self.only_one_participant_in_meeting_at = None
-        self.is_webinar = False
         self.last_audio_received_at = None
         self.silence_detection_activated = False
         self.cleaned_up = False
         self.requested_leave = False
         self.joined_at = None
+        self.is_webinar = False
 
         if self.use_video:
             self.video_input_manager = VideoInputManager(
@@ -619,10 +619,14 @@ class ZoomBotAdapter(BotAdapter):
         # See here for more details: https://devforum.zoom.us/t/cant-record-audio-with-linux-meetingsdk-after-6-3-5-6495-error-code-32/130689/5
         self.audio_ctrl.JoinVoip()
 
+        # Check if the bot is in a webinar and if it is an attendee. If it is, the user must promote the bot to panelist to record.
         meeting_info = self.meeting_service.GetMeetingInfo()
         meeting_type = meeting_info.GetMeetingType()
         if meeting_type == zoom.MeetingType.MEETING_TYPE_WEBINAR:
             self.is_webinar = True
+            if self.participants_ctrl.GetMySelfUser().GetUserRole() == zoom.UserRole.USERROLE_ATTENDEE:
+                logger.info("Bot is an attendee in a webinar, which has no recording privileges. Need to promote to panelist to record.")
+                self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)
 
         if self.use_raw_recording:
             self.recording_ctrl = self.meeting_service.GetMeetingRecordingController()
@@ -658,9 +662,8 @@ class ZoomBotAdapter(BotAdapter):
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
-                else:
-                    self.recording_ctrl.RequestLocalRecordingPrivilege()
-                    logger.info("Requesting recording privilege.")
+                self.recording_ctrl.RequestLocalRecordingPrivilege()
+                logger.info("Requesting recording privilege.")
             else:
                 self.handle_recording_permission_granted()
 
@@ -1054,9 +1057,11 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.BOT_PUT_IN_WAITING_ROOM})
             GLib.timeout_add_seconds(self.automatic_leave_configuration.waiting_room_timeout_seconds, self.leave_meeting_if_still_in_waiting_room)
 
+        if status == zoom.MEETING_STATUS_WEBINAR_PROMOTE:
+            self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
+
         if status == zoom.MEETING_STATUS_INMEETING:
-            if not self.joined_at:
-                self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
+            self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
             if self.should_retry_after_meeting_ends:
