@@ -585,6 +585,7 @@ class ZoomBotAdapter(BotAdapter):
         self.participants_ctrl_event = zoom.MeetingParticipantsCtrlEventCallbacks(onUserJoinCallback=self.on_user_join_callback, onUserLeftCallback=self.on_user_left_callback)
         self.participants_ctrl.SetEvent(self.participants_ctrl_event)
         self.my_participant_id = self.participants_ctrl.GetMySelfUser().GetUserID()
+        self.my_participant_role = self.participants_ctrl.GetMySelfUser().GetUserRole()
         participant_ids_list = self.participants_ctrl.GetParticipantsList()
         for participant_id in participant_ids_list:
             self.get_participant(participant_id)
@@ -662,12 +663,8 @@ class ZoomBotAdapter(BotAdapter):
                 # This means the host is using a zoom client that is incapable of displaying the popup to allow recording (Only known client where this happens is Zoom Rooms)
                 if is_support_request_local_recording_privilege_result == zoom.SDKERR_MEETING_DONT_SUPPORT_FEATURE:
                     self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.HOST_CLIENT_CANNOT_GRANT_PERMISSION)
-                elif self.is_webinar and is_support_request_local_recording_privilege_result == zoom.SDKERR_WRONG_USAGE:
-                    # SDKERR_WRONG_USAGE from IsSupportRequestLocalRecordingPrivilege in a webinar means the bot is an attendee and needs to be promoted to panelist
-                    self.handle_recording_permission_denied(reason=BotAdapter.BOT_RECORDING_PERMISSION_DENIED_REASON.WEBINAR_ATTENDEE_NEEDS_PANELIST_PROMOTION)
-                else:
-                    self.recording_ctrl.RequestLocalRecordingPrivilege()
-                    logger.info("Requesting recording privilege.")
+                self.recording_ctrl.RequestLocalRecordingPrivilege()
+                logger.info("Requesting recording privilege.")
             else:
                 self.handle_recording_permission_granted()
 
@@ -1065,10 +1062,11 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
 
         if status == zoom.MEETING_STATUS_INMEETING:
-            if not self.joined_at:
-                self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
-            elif self.is_webinar:
+            if self.joined_as_webinar_attendee:
+                # Bot log entry for webinar join. This flag is only set if the bot previously joined as an attendee.
                 self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
+                self.joined_as_webinar_attendee = False
+            self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
             if self.should_retry_after_meeting_ends:
