@@ -585,7 +585,6 @@ class ZoomBotAdapter(BotAdapter):
         self.participants_ctrl_event = zoom.MeetingParticipantsCtrlEventCallbacks(onUserJoinCallback=self.on_user_join_callback, onUserLeftCallback=self.on_user_left_callback)
         self.participants_ctrl.SetEvent(self.participants_ctrl_event)
         self.my_participant_id = self.participants_ctrl.GetMySelfUser().GetUserID()
-        self.my_participant_role = self.participants_ctrl.GetMySelfUser().GetUserRole()
         participant_ids_list = self.participants_ctrl.GetParticipantsList()
         for participant_id in participant_ids_list:
             self.get_participant(participant_id)
@@ -1062,10 +1061,6 @@ class ZoomBotAdapter(BotAdapter):
             self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
 
         if status == zoom.MEETING_STATUS_INMEETING:
-            if self.joined_as_webinar_attendee:
-                # Bot log entry for webinar join. This flag is only set if the bot previously joined as an attendee.
-                self.send_message_callback({"message": self.Messages.WEBINAR_BOT_PROMOTED_TO_PANELIST})
-                self.joined_as_webinar_attendee = False
             self.send_message_callback({"message": self.Messages.BOT_JOINED_MEETING})
 
         if status == zoom.MEETING_STATUS_ENDED:
