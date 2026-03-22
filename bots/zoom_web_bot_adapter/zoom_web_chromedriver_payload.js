@@ -1,4 +1,61 @@
+class ParticipantSpeechStartStopManager {
+    constructor() {
+        // Only one active speaker at a time
+        this.activeSpeaker = null;
+    }
 
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId.toString(),
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
+    addActiveSpeaker(speakerId) {
+        if (this.activeSpeaker === speakerId) {
+            return;
+        }
+        if (this.activeSpeaker) {
+            this.sendSpeechStartStopEvent(this.activeSpeaker, false, Date.now());
+        }
+        this.activeSpeaker = speakerId;
+        this.sendSpeechStartStopEvent(this.activeSpeaker, true, Date.now());
+    }
+}
+
+class DominantSpeakerManager {
+    constructor() {
+        this.dominantSpeakerStreamId = null;
+        this.captionAudioTimes = [];
+    }
+
+    getLastSpeakerIdForTimestampMs(timestampMs) {
+        // Find the caption audio times that are before timestampMs
+        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
+        if (captionAudioTimesBeforeTimestampMs.length === 0) {
+            return null;
+        }
+        // Return the caption audio time with the highest timestampMs
+        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    }
+
+    addCaptionAudioTime(timestampMs, speakerId) {
+        this.captionAudioTimes.push({
+            timestampMs: timestampMs,
+            speakerId: speakerId
+        });
+    }
+
+    setDominantSpeakerStreamId(dominantSpeakerStreamId) {
+        this.dominantSpeakerStreamId = dominantSpeakerStreamId.toString();
+    }
+
+    getDominantSpeaker() {
+        return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
 
 const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
@@ -205,65 +262,6 @@ new RTCInterceptor({
         });
     },
 });
-
-class ParticipantSpeechStartStopManager {
-    constructor() {
-        // Only one active speaker at a time
-        this.activeSpeaker = null;
-    }
-
-    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
-        window.ws?.sendJson({
-            type: 'ParticipantSpeechStartStopEvent',
-            participantId: participantId.toString(),
-            isSpeechStart: isSpeechStart,
-            timestamp: timestamp
-        });
-    }
-
-    addActiveSpeaker(speakerId) {
-        if (this.activeSpeaker === speakerId) {
-            return;
-        }
-        if (this.activeSpeaker) {
-            this.sendSpeechStartStopEvent(this.activeSpeaker, false, Date.now());
-        }
-        this.activeSpeaker = speakerId;
-        this.sendSpeechStartStopEvent(this.activeSpeaker, true, Date.now());
-    }
-}
-
-class DominantSpeakerManager {
-    constructor() {
-        this.dominantSpeakerStreamId = null;
-        this.captionAudioTimes = [];
-    }
-
-    getLastSpeakerIdForTimestampMs(timestampMs) {
-        // Find the caption audio times that are before timestampMs
-        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
-        if (captionAudioTimesBeforeTimestampMs.length === 0) {
-            return null;
-        }
-        // Return the caption audio time with the highest timestampMs
-        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
-    }
-
-    addCaptionAudioTime(timestampMs, speakerId) {
-        this.captionAudioTimes.push({
-            timestampMs: timestampMs,
-            speakerId: speakerId
-        });
-    }
-
-    setDominantSpeakerStreamId(dominantSpeakerStreamId) {
-        this.dominantSpeakerStreamId = dominantSpeakerStreamId.toString();
-    }
-
-    getDominantSpeaker() {
-        return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
-    }
-}
 
 // Style manager
 class StyleManager {
