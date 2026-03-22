@@ -1,96 +1,7 @@
-class ParticipantSpeechStartStopManager {
-    constructor() {
-        // Only one active speaker at a time
-        this.activeSpeaker = null;
-    }
 
-    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
-        window.ws?.sendJson({
-            type: 'ParticipantSpeechStartStopEvent',
-            participantId: participantId.toString(),
-            isSpeechStart: isSpeechStart,
-            timestamp: timestamp
-        });
-    }
-
-    addActiveSpeaker(speakerId) {
-        if (this.activeSpeaker === speakerId) {
-            return;
-        }
-        if (this.activeSpeaker) {
-            this.sendSpeechStartStopEvent(this.activeSpeaker, false, Date.now());
-        }
-        this.activeSpeaker = speakerId;
-        this.sendSpeechStartStopEvent(this.activeSpeaker, true, Date.now());
-    }
-}
-
-class DominantSpeakerManager {
-    constructor() {
-        this.dominantSpeakerStreamId = null;
-        this.captionAudioTimes = [];
-    }
-
-    getLastSpeakerIdForTimestampMs(timestampMs) {
-        // Find the caption audio times that are before timestampMs
-        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
-        if (captionAudioTimesBeforeTimestampMs.length === 0) {
-            return null;
-        }
-        // Return the caption audio time with the highest timestampMs
-        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
-    }
-
-    addCaptionAudioTime(timestampMs, speakerId) {
-        this.captionAudioTimes.push({
-            timestampMs: timestampMs,
-            speakerId: speakerId
-        });
-    }
-
-    setDominantSpeakerStreamId(dominantSpeakerStreamId) {
-        this.dominantSpeakerStreamId = dominantSpeakerStreamId.toString();
-    }
-
-    getDominantSpeaker() {
-        return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
-    }
-}
 
 const handleAudioTrack = async (event) => {
     let lastAudioFormat = null;  // Track last seen format
-    const audioDataQueue = [];
-    const ACTIVE_SPEAKER_LATENCY_MS = 2000;
-    
-    // Start continuous background processing of the audio queue
-    const processAudioQueue = () => {
-        while (audioDataQueue.length > 0 && 
-            Date.now() - audioDataQueue[0].audioArrivalTime >= ACTIVE_SPEAKER_LATENCY_MS) {
-            const { audioData, audioArrivalTime } = audioDataQueue.shift();
-
-            // Get the dominant speaker and assume that's who the participant speaking is
-            const dominantSpeakerId = dominantSpeakerManager.getLastSpeakerIdForTimestampMs(audioArrivalTime);
-
-            // Send audio data through websocket
-            if (dominantSpeakerId) {
-                ws.sendPerParticipantAudio(dominantSpeakerId, audioData);
-            }
-        }
-    };
-
-    // Set up background processing every 100ms
-    const queueProcessingInterval = setInterval(processAudioQueue, 100);
-    
-    // Clean up interval when track ends
-    event.track.addEventListener('ended', () => {
-        clearInterval(queueProcessingInterval);
-        console.log('Audio track ended, cleared queue processing interval');
-    });
-
-    window.ws.sendJson({
-        type: 'AudioTrackStarted',
-        trackId: event.track.id
-    });
     
     try {
       // Create processor to get raw frames
@@ -101,6 +12,17 @@ const handleAudioTrack = async (event) => {
       const readable = processor.readable;
       const writable = generator.writable;
   
+      const firstStreamId = event.streams[0]?.id;
+      if (!firstStreamId) {
+        window.ws?.sendJson({
+            type: 'AudioTrackError',
+            message: 'No stream ID found for audio track'
+        });
+        return;
+      }
+      var userIdForStreamId = null;
+      
+        
       // Transform stream to intercept frames
       const transformStream = new TransformStream({
           async transform(frame, controller) {
@@ -166,18 +88,29 @@ const handleAudioTrack = async (event) => {
                       });
                   }
   
-                  // If the audioData buffer is all zeros, we still want to send it. It's only one mixed audio stream.
-                  // It seems to help with the transcription.
-                  //if (audioData.every(value => value === 0)) {
-                  //    return;
-                  //}
-
-                  // Add to queue with timestamp - the background thread will process it
-                  audioDataQueue.push({
-                    audioArrivalTime: Date.now(),
-                    audioData: audioData
-                  });
-
+                  // If the audioData buffer is all zeros, then we don't want to send it
+                  if (audioData.every(value => value === 0)) {
+                      return;
+                  }
+  
+                  if (!userIdForStreamId) {
+                    userIdForStreamId = window.userManager?.getUserIdFromStreamId(firstStreamId);
+                    if (userIdForStreamId) {
+                        window.ws?.sendJson({
+                                type: 'AudioTrackMappedToUserId',
+                                trackId: event.track.id,
+                                streamId: firstStreamId,
+                                userId: userIdForStreamId
+                        });
+                    }
+                  }
+                  if (userIdForStreamId)
+                    ws.sendPerParticipantAudio(userIdForStreamId, audioData);
+  
+                  //console.log('contributingSources', contributingSources);
+                  //console.log('deviceOutputMap', userManager.deviceOutputMap);
+                  //console.log('usersForContributingSources', usersForContributingSources);
+                    
                   // Pass through the original frame
                   controller.enqueue(frame);
               } catch (error) {
@@ -187,8 +120,6 @@ const handleAudioTrack = async (event) => {
           },
           flush() {
               console.log('Transform stream flush called');
-              // Clear the interval when the stream ends
-              clearInterval(queueProcessingInterval);
           }
       });
   
@@ -206,22 +137,133 @@ const handleAudioTrack = async (event) => {
                   if (error.name !== 'AbortError') {
                       console.error('Pipeline error:', error);
                   }
-                  // Clear the interval on error
-                  clearInterval(queueProcessingInterval);
               });
       } catch (error) {
           console.error('Stream pipeline error:', error);
           abortController.abort();
-          // Clear the interval on error
-          clearInterval(queueProcessingInterval);
       }
   
     } catch (error) {
         console.error('Error setting up audio interceptor:', error);
-        // Clear the interval on error
-        clearInterval(queueProcessingInterval);
     }
   };
+  
+
+class RTCInterceptor {
+    constructor(callbacks) {
+        // Store the original RTCPeerConnection
+        const originalRTCPeerConnection = window.RTCPeerConnection;
+        
+        // Store callbacks
+        const onPeerConnectionCreate = callbacks.onPeerConnectionCreate || (() => {});
+        const onDataChannelCreate = callbacks.onDataChannelCreate || (() => {});
+        
+        // Override the RTCPeerConnection constructor
+        window.RTCPeerConnection = function(...args) {
+            // Create instance using the original constructor
+            const peerConnection = Reflect.construct(
+                originalRTCPeerConnection, 
+                args
+            );
+            
+            // Notify about the creation
+            onPeerConnectionCreate(peerConnection);
+            
+            // Override createDataChannel
+            const originalCreateDataChannel = peerConnection.createDataChannel.bind(peerConnection);
+            peerConnection.createDataChannel = (label, options) => {
+                const dataChannel = originalCreateDataChannel(label, options);
+                onDataChannelCreate(dataChannel, peerConnection);
+                return dataChannel;
+            };
+            
+            return peerConnection;
+        };
+    }
+}
+
+new RTCInterceptor({
+    onPeerConnectionCreate: (peerConnection) => {
+        console.log('New RTCPeerConnection created:', peerConnection);
+
+        peerConnection.addEventListener('track', (event) => {
+            console.log('New track:', {
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams,
+            });
+
+            // We need to capture every audio track in the meeting,
+            // but we don't need to do anything with the video tracks
+            if (event.track.kind === 'audio') {
+                // TODO handle combined stream
+                //window.styleManager.addAudioTrack(event.track);
+                if (window.initialData.sendPerParticipantAudio) {
+                    handleAudioTrack(event);
+                }
+            }
+        });
+    },
+});
+
+class ParticipantSpeechStartStopManager {
+    constructor() {
+        // Only one active speaker at a time
+        this.activeSpeaker = null;
+    }
+
+    sendSpeechStartStopEvent(participantId, isSpeechStart, timestamp) {
+        window.ws?.sendJson({
+            type: 'ParticipantSpeechStartStopEvent',
+            participantId: participantId.toString(),
+            isSpeechStart: isSpeechStart,
+            timestamp: timestamp
+        });
+    }
+
+    addActiveSpeaker(speakerId) {
+        if (this.activeSpeaker === speakerId) {
+            return;
+        }
+        if (this.activeSpeaker) {
+            this.sendSpeechStartStopEvent(this.activeSpeaker, false, Date.now());
+        }
+        this.activeSpeaker = speakerId;
+        this.sendSpeechStartStopEvent(this.activeSpeaker, true, Date.now());
+    }
+}
+
+class DominantSpeakerManager {
+    constructor() {
+        this.dominantSpeakerStreamId = null;
+        this.captionAudioTimes = [];
+    }
+
+    getLastSpeakerIdForTimestampMs(timestampMs) {
+        // Find the caption audio times that are before timestampMs
+        const captionAudioTimesBeforeTimestampMs = this.captionAudioTimes.filter(captionAudioTime => captionAudioTime.timestampMs <= timestampMs);
+        if (captionAudioTimesBeforeTimestampMs.length === 0) {
+            return null;
+        }
+        // Return the caption audio time with the highest timestampMs
+        return captionAudioTimesBeforeTimestampMs.reduce((max, captionAudioTime) => captionAudioTime.timestampMs > max.timestampMs ? captionAudioTime : max).speakerId;
+    }
+
+    addCaptionAudioTime(timestampMs, speakerId) {
+        this.captionAudioTimes.push({
+            timestampMs: timestampMs,
+            speakerId: speakerId
+        });
+    }
+
+    setDominantSpeakerStreamId(dominantSpeakerStreamId) {
+        this.dominantSpeakerStreamId = dominantSpeakerStreamId.toString();
+    }
+
+    getDominantSpeaker() {
+        return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
 
 // Style manager
 class StyleManager {
@@ -273,9 +315,6 @@ class StyleManager {
             console.log("this.meetingAudioStream.getAudioTracks() had length 0")
             return;
         }
-
-        if (initialData.sendPerParticipantAudio)
-            handleAudioTrack({track: this.meetingAudioStream.getAudioTracks()[0]});
 
         if (window.zoomInitialData.modifyDomForVideoRecording) {
             this.makeMainVideoFillFrame();
@@ -574,6 +613,16 @@ class UserManager {
         this.deviceOutputMap = new Map();
 
         this.ws = ws;
+    }
+
+    getUserIdFromStreamId(streamId) {
+        const decoded = decodeURIComponent(streamId);
+        const match = decoded.match(/^(\d+)\+/);
+        if (match) {
+            const rawId = Number(match[1]);
+            const participantId = rawId >> 10 << 10;
+            return participantId.toString();
+        }
     }
 
     getUserByDeviceId(deviceId) {
