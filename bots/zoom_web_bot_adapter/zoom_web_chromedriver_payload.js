@@ -263,7 +263,7 @@ new RTCInterceptor({
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
                 // TODO handle combined stream
-                //window.styleManager.addAudioTrack(event.track);
+                window.styleManager.addAudioTrack(event.track);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
@@ -276,52 +276,51 @@ new RTCInterceptor({
 class StyleManager {
     constructor() {
         this.meetingAudioStream = null;
-        this.audioStreams = []
+        this.audioTracks = [];
+        this.audioSources = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
     }
 
     addAudioStream(audioStream) {
-        this.audioStreams.push(audioStream);
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
+        }
+    }
+
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
+        }
+        this.seenTrackIds.add(track.id);
+        this.audioTracks.push(track);
+
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.audioSources.push(source);
+        }
     }
 
     async start() {
         console.log('StyleManager start');
 
-        // This code is just grabbing a unified audio stream
-
-        // Retrieve all <audio> elements on the page
         const audioElements = document.querySelectorAll('audio');
 
         this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
 
-        // Combine the audioStreams we've accumulated with anything from audioElements in the DOM.
-        const audioStreamTracks = this.audioStreams.map(stream => {
-            return stream.getAudioTracks()[0];
-        })
-        const audioElementTracks = Array.from(audioElements).map(audioElement => {
-            return audioElement.srcObject.getAudioTracks()[0];
-        });
-        this.audioTracks = audioStreamTracks.concat(audioElementTracks);
+        const audioElementTracks = Array.from(audioElements)
+            .map(audioElement => audioElement.srcObject?.getAudioTracks?.()[0])
+            .filter(Boolean);
 
-        this.audioSources = this.audioTracks.map(track => {
-            const mediaStream = new MediaStream([track]);
-            return this.audioContext.createMediaStreamSource(mediaStream);
-        });
+        audioElementTracks.forEach(track => this.addAudioTrack(track));
 
-        // Create a destination node
-        const destination = this.audioContext.createMediaStreamDestination();
-
-        // Connect all sources to the destination
-        this.audioSources.forEach(source => {
-            source.connect(destination);
-        });
-
-        this.meetingAudioStream = destination.stream;
-
-        if (this.meetingAudioStream.getAudioTracks().length == 0)
-        {
-            console.log("this.meetingAudioStream.getAudioTracks() had length 0")
-            return;
-        }
+        this.meetingAudioStream = this.destination.stream;
 
         if (window.zoomInitialData.modifyDomForVideoRecording) {
             this.makeMainVideoFillFrame();
