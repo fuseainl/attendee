@@ -78,6 +78,7 @@ const handleAudioTrack = async (event) => {
         return;
       }
       var userIdForStreamId = null;
+      var numAttemptsToMapToUserId = 0;
       
         
       // Transform stream to intercept frames
@@ -158,6 +159,14 @@ const handleAudioTrack = async (event) => {
                                 trackId: event.track.id,
                                 streamId: firstStreamId,
                                 userId: userIdForStreamId
+                        });
+                    }
+                    numAttemptsToMapToUserId++;
+                    if (numAttemptsToMapToUserId === 1000 && !userIdForStreamId) {
+                        window.ws?.sendJson({
+                            type: 'AudioTrackMappedToUserIdTimedOut',
+                            trackId: event.track.id,
+                            streamId: firstStreamId,
                         });
                     }
                   }
@@ -619,8 +628,13 @@ class UserManager {
         if (match) {
             const rawId = Number(match[1]);
             const participantId = rawId >> 10 << 10;
-            return participantId.toString();
+            // Check if this exists in the current users map
+            if (this.currentUsersMap.has(participantId.toString())) {
+                return participantId.toString();
+            }
+            return null;
         }
+        return null;
     }
 
     getUserByDeviceId(deviceId) {
