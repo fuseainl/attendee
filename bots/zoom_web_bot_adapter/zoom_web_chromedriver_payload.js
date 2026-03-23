@@ -263,7 +263,7 @@ new RTCInterceptor({
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
                 // TODO handle combined stream
-                window.styleManager.addAudioTrack(event.track);
+                window.styleManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
@@ -287,6 +287,17 @@ class StyleManager {
         if (track) {
             this.addAudioTrack(track);
         }
+    }
+
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
     }
 
     addAudioTrack(track) {
