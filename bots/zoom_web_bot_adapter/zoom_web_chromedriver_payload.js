@@ -350,6 +350,7 @@ class MixedAudioStreamManager {
 
         window.ws?.sendJson({
             type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
         });
     }
 
