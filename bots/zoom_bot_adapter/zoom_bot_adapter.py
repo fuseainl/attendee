@@ -1088,6 +1088,14 @@ class ZoomBotAdapter(BotAdapter):
                         "zoom_result_code": iResult,
                     }
                 )
+            # This error happens when ZAK / OBF token is required to join a meeting but was not provided.
+            elif iResult == zoom.MeetingFailCode.MEETING_FAIL_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING:
+                self.send_message_callback(
+                    {
+                        "message": self.Messages.ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING,
+                        "zoom_result_code": iResult,
+                    }
+                )
             elif iResult == zoom.MeetingFailCode.MEETING_FAIL_ENFORCE_LOGIN:
                 self.send_message_callback(
                     {

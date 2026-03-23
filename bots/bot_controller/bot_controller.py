@@ -1872,6 +1872,17 @@ class BotController:
             self.cleanup()
             return
 
+        if message.get("message") == BotAdapter.Messages.ZOOM_MEETING_STATUS_FAILED_APP_CAN_NOT_ANONYMOUS_JOIN_MEETING:
+            logger.info(f"Received message that meeting status failed app can not anonymous join meeting with zoom_result_code={message.get('zoom_result_code')}")
+            BotEventManager.create_event(
+                bot=self.bot_in_db,
+                event_type=BotEventTypes.COULD_NOT_JOIN,
+                event_sub_type=BotEventSubTypes.COULD_NOT_JOIN_MEETING_ZOOM_APP_CANNOT_JOIN_ANONYMOUSLY,
+                event_metadata={"zoom_result_code": str(message.get("zoom_result_code"))},
+            )
+            self.cleanup()
+            return
+
         if message.get("message") == BotAdapter.Messages.ZOOM_MEETING_STATUS_FAILED:
             logger.info(f"Received message that meeting status failed with zoom_result_code={message.get('zoom_result_code')}")
             BotEventManager.create_event(
