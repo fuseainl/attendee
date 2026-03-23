@@ -259,10 +259,16 @@ new RTCInterceptor({
                 streams: event.streams,
             });
 
+            window.ws?.sendJson({
+                type: 'WebRTCTrackStarted',
+                trackId: event.track.id,
+                trackKind: event.track.kind,
+                streams: event.streams?.map(stream => stream?.id),
+            });
+
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
-                // TODO handle combined stream
                 window.styleManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
