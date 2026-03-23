@@ -292,6 +292,16 @@ class StyleManager {
     addAudioTrackFromTrackEvent(trackEvent) {
         if (!trackEvent.track)
             return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain +CS+ in it, which means it's from Zoom, not from a voice agent.
+        if (!firstStreamId.includes('+CS+')) {
+            window.ws?.sendJson({
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
+            });
+            return;
+        }
         window.ws?.sendJson({
             type: 'AudioTrackAddedToMeetingAudioStream',
             trackId: trackEvent.track.id,
