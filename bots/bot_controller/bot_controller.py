@@ -396,8 +396,6 @@ class BotController:
         meeting_type = self.get_meeting_type()
         if meeting_type == MeetingTypes.TEAMS:
             return 2000
-        if meeting_type == MeetingTypes.ZOOM and self.bot_in_db.use_zoom_web_adapter():
-            return 2000
         return 0
 
     def get_per_participant_audio_sample_rate(self):
