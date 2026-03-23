@@ -347,6 +347,10 @@ class MixedAudioStreamManager {
         // Create a source from the destination's stream and connect it to the analyzer
         const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
         mixedSource.connect(this.analyser);
+
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+        });
     }
 
     getMeetingAudioStream() {
