@@ -276,8 +276,7 @@ new RTCInterceptor({
 class StyleManager {
     constructor() {
         this.meetingAudioStream = null;
-        this.audioTracks = [];
-        this.audioSources = [];
+        this.audioTracksToBeAdded = [];
         this.audioContext = null;
         this.destination = null;
         this.seenTrackIds = new Set();
@@ -294,33 +293,32 @@ class StyleManager {
         if (!track || this.seenTrackIds.has(track.id)) {
             return;
         }
-        this.seenTrackIds.add(track.id);
-        this.audioTracks.push(track);
 
         // If start() already ran, patch the new track into the existing mix.
         if (this.audioContext && this.destination) {
             const mediaStream = new MediaStream([track]);
             const source = this.audioContext.createMediaStreamSource(mediaStream);
             source.connect(this.destination);
-            this.audioSources.push(source);
+            this.seenTrackIds.add(track.id);
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
         }
     }
 
     async start() {
         console.log('StyleManager start');
 
-        const audioElements = document.querySelectorAll('audio');
-
         this.audioContext = new AudioContext({ sampleRate: 48000 });
         this.destination = this.audioContext.createMediaStreamDestination();
 
-        const audioElementTracks = Array.from(audioElements)
-            .map(audioElement => audioElement.srcObject?.getAudioTracks?.()[0])
-            .filter(Boolean);
-
-        audioElementTracks.forEach(track => this.addAudioTrack(track));
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
 
         this.meetingAudioStream = this.destination.stream;
+
+         // Create a source from the destination's stream and connect it to the analyzer
+         const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
+         mixedSource.connect(this.analyser);
 
         if (window.zoomInitialData.modifyDomForVideoRecording) {
             this.makeMainVideoFillFrame();
