@@ -278,15 +278,16 @@ new RTCInterceptor({
     },
 });
 
-// Style manager
-class StyleManager {
+class MixedAudioStreamManager {
     constructor() {
+        this.audioTracks = [];
         this.meetingAudioStream = null;
         this.audioTracksToBeAdded = [];
         this.audioContext = null;
         this.destination = null;
         this.seenTrackIds = new Set();
     }
+
 
     addAudioStream(audioStream) {
         const track = audioStream.getAudioTracks()[0];
@@ -333,9 +334,9 @@ class StyleManager {
         }
     }
 
-    async start() {
-        console.log('StyleManager start');
-
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
         this.audioContext = new AudioContext({ sampleRate: 48000 });
         this.destination = this.audioContext.createMediaStreamDestination();
 
@@ -343,9 +344,27 @@ class StyleManager {
 
         this.meetingAudioStream = this.destination.stream;
 
-         // Create a source from the destination's stream and connect it to the analyzer
-         const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
-         mixedSource.connect(this.analyser);
+        // Create a source from the destination's stream and connect it to the analyzer
+        const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
+        mixedSource.connect(this.analyser);
+    }
+
+    getMeetingAudioStream() {
+        this.createStream();
+        return this.meetingAudioStream;
+    }
+}
+
+// Style manager
+class StyleManager {
+    constructor() {
+        this.started = false;
+    }
+
+    async start() {
+        console.log('StyleManager start');
+
+        this.started = true;
 
         if (window.zoomInitialData.modifyDomForVideoRecording) {
             this.makeMainVideoFillFrame();
@@ -353,7 +372,9 @@ class StyleManager {
     }
     
     getMeetingAudioStream() {
-        return this.meetingAudioStream;
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
 
     async stop() {
@@ -816,7 +837,8 @@ const userManager = new UserManager(ws);
 window.userManager = userManager;
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
-
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
 
 const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"
