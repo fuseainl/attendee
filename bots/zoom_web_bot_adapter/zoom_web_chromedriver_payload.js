@@ -269,7 +269,7 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track.kind === 'audio') {
-                window.styleManager?.addAudioTrackFromTrackEvent(event);
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
@@ -812,7 +812,7 @@ class UserManager {
           ctx.__captureTee = { tee, tap };
           const capturedStream = tap.stream;
           if (capturedStream)
-            window.styleManager.addAudioStream(capturedStream);
+            window.mixedAudioStreamManager.addAudioStream(capturedStream);
         }
         catch (error) {
             console.error('Error in AudioNodeInterceptor:', error);
