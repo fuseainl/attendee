@@ -172,11 +172,7 @@ const handleAudioTrack = async (event) => {
                   }
                   if (userIdForStreamId)
                     ws.sendPerParticipantAudio(userIdForStreamId, audioData);
-  
-                  //console.log('contributingSources', contributingSources);
-                  //console.log('deviceOutputMap', userManager.deviceOutputMap);
-                  //console.log('usersForContributingSources', usersForContributingSources);
-                    
+                      
                   // Pass through the original frame
                   controller.enqueue(frame);
               } catch (error) {
@@ -301,7 +297,7 @@ class MixedAudioStreamManager {
             return;
         const firstStreamId = trackEvent.streams[0]?.id;
         // streamId must contain +CS+ in it, which means it's from Zoom, not from a voice agent.
-        if (!firstStreamId.includes('+CS+')) {
+        if (!firstStreamId?.includes('+CS+')) {
             window.ws?.sendJson({
                 type: 'AudioTrackNotAddedToMeetingAudioStream',
                 trackId: trackEvent.track.id,
