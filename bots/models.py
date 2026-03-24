@@ -587,6 +587,9 @@ class TranscriptionSettings:
     def assemblyai_speech_model(self):
         return self._settings.get("assembly_ai", {}).get("speech_model", None)
 
+    def assemblyai_speech_models(self):
+        return self._settings.get("assembly_ai", {}).get("speech_models", None)
+
     def assemblyai_speaker_labels(self):
         return self._settings.get("assembly_ai", {}).get("speaker_labels", False)
 
