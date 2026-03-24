@@ -409,7 +409,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the Audio only option...")
         audio_only_option = self.locate_element(
             step="audio_only_option",
-            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'li[aria-label="Audio only"]')),
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'li[aria-label="Audio only"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the Audio only option...")
