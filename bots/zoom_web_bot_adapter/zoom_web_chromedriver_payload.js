@@ -371,7 +371,7 @@ class StyleManager {
         this.started = true;
 
         if (window.zoomInitialData.modifyDomForVideoRecording) {
-            this.makeMainVideoFillFrame();
+            this.onlyShowSubsetofZoomUI();
         }
     }
     
@@ -383,113 +383,69 @@ class StyleManager {
 
     async stop() {
         console.log('StyleManager stop');
-
-        this.restoreOriginalFrame();
+        if (window.zoomInitialData.modifyDomForVideoRecording) {
+            this.showAllOfZoomUI();
+        }
     }
 
-    makeMainVideoFillFrame() {
-        /* ── 0.  Cleanup from earlier runs ─────────────────────────────── */
-        if (this.blanket?.isConnected) this.blanket.remove();
-        if (this.frameStyleElement?.isConnected) this.frameStyleElement.remove();
-        if (this.frameAdjustInterval) {
-            cancelAnimationFrame(this.frameAdjustInterval);   // ← was clearInterval
-            this.frameAdjustInterval = null;
-        }
+    onlyShowSubsetofZoomUI() {
+        try {
+            // Find the main element that contains all the video elements
+            this.mainElement = document.querySelector('#video-pip-container');
+            if (!this.mainElement) {
+                console.error('No #video-pip-container element found in the DOM');
+                window.ws.sendJson({
+                    type: 'Error',
+                    message: 'No #video-pip-container element found in the DOM'
+                });
+                return;
+            }
 
-        /* ── 1a.  Get the video frame element ─────────────────────────────── */
-        const video_frame_element = document.querySelector('.speaker-active-container__video-frame')
-        if (!video_frame_element) {
-            console.error('No video frame element found');
-            return;
+            const ancestors = [];
+            let parent = this.mainElement.parentElement;
+            while (parent) {
+                ancestors.push(parent);
+                parent = parent.parentElement;
+            }
+            
+            // Hide all elements except main, its ancestors, and its descendants
+            document.querySelectorAll('body *').forEach(element => {
+                if (element !== this.mainElement && 
+                    !ancestors.includes(element) && 
+                    !this.mainElement.contains(element)) {
+                    element.style.display = 'none';
+                }
+            });
+        } catch (error) {
+            console.error('Error in onlyShowSubsetofZoomUI:', error);
+            window.ws.sendJson({
+                type: 'Error',
+                message: 'Error in onlyShowSubsetofZoomUI: ' + error.message
+            });
         }
-    
-        /* ── 1b.  Inject the blanket ────────────────────────────────────── */
-        const blanket = document.createElement("div");
-        blanket.id = "attendee-blanket";
-        Object.assign(blanket.style, {
-            position: "fixed",
-            inset: "0",
-            background: "#fff",
-            zIndex: 1998,              // below the video we’ll promote
-            pointerEvents: "none"      // lets events fall through
+    }
+
+
+    showAllOfZoomUI() {
+        // Restore all elements that were hidden by onlyShowSubsetofZoomUI
+        document.querySelectorAll('body *').forEach(element => {
+            if (element.style.display === 'none') {
+                // Only reset display property if we set it to 'none'
+                // We can check if the element is a direct child of body or not in main/ancestors
+                const isInMainTree = this.mainElement && 
+                    (this.mainElement === element || 
+                     this.mainElement.contains(element) || 
+                     element.contains(this.mainElement));
+                
+                if (!isInMainTree) {
+                    // Reset the display property to its default or empty string
+                    // This will restore the element's original display value
+                    element.style.display = '';
+                }
+            }
         });
-        const video_frame_element_parent = video_frame_element.parentElement;
-        video_frame_element_parent.appendChild(blanket)
-        this.blanket = blanket;
-    
-        /* ── 2.  Promote the central video and its descendants ─────────── */
-        const style = document.createElement("style");
-        style.textContent = `
-            /* central pane fills the viewport, highest z‑index */
-            .speaker-active-container__video-frame {
-                position: fixed !important;
-                inset: 0 !important;
-                width: 100vw !important;
-                height: 100vh !important;
-                z-index: 1999 !important;   /* > blanket */
-            }
-            /* make sure its children inherit size & events normally */
-            .speaker-active-container__video-frame, 
-            .speaker-active-container__video-frame * {
-                pointer-events: auto !important;
-            }
-        `;
-        document.head.appendChild(style);
-        this.frameStyleElement = style;
-    
-        /* ── 3.  Keep the central element the right size ───────────────── */
-        const adjust = () => {
-            this.adjustCentralElement?.();
-            this.frameAdjustInterval = requestAnimationFrame(adjust);  // ← RAF loop
-        };
-        adjust();  // kick it off
-    }
-    
-    adjustCentralElement = function() {
-        // Get the central element
-        const centralElement = document.querySelector('.speaker-active-container__video-frame');
         
-        // Function to resize the central element
-        function adjustCentralElementSize(element) {
-            if (element?.style) {
-                element.style.width  = `${window.initialData.videoFrameWidth}px`;
-                element.style.height = `${window.initialData.videoFrameHeight}px`;
-                element.style.position = 'fixed';
-            }
-        }
-    
-        function adjustChildElement(element) {
-            if (element?.style) {
-                element.style.position = 'fixed';
-                element.style.width  = '100%';
-                element.style.height = '100%';
-                element.style.top  = '0';
-                element.style.left = '0';
-            }
-        }
-        
-        if (centralElement) {
-            //adjustChildElement(centralElement?.children[0]?.children[0]?.children[0]?.children[0]?.children[0]);
-            //adjustChildElement(centralElement?.children[0]?.children[0]?.children[0]?.children[0]);
-            //adjustChildElement(centralElement?.children[0]?.children[0]?.children[0]);
-            adjustChildElement(centralElement?.children[0]);
-            adjustCentralElementSize(centralElement);
-        }
-    }
-
-    restoreOriginalFrame() {
-        // If we have a reference to the style element, remove it
-        if (this.frameStyleElement) {
-            this.frameStyleElement.remove();
-            this.frameStyleElement = null;
-            console.log('Removed video frame style element');
-        }
-        
-        // Cancel the RAF loop if it exists
-        if (this.frameAdjustInterval) {
-            cancelAnimationFrame(this.frameAdjustInterval);   // ← was clearInterval
-            this.frameAdjustInterval = null;
-        }
+        console.log('Restored all hidden elements to their original display values');
     }
 }
 
