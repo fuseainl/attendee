@@ -381,7 +381,7 @@ class GoogleMeetUIMethods:
         MORE_OPTIONS_BUTTON_SELECTOR = 'button[jsname="NakZHc"][aria-label="More options"]'
         more_options_button = self.locate_element(
             step="more_options_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, MORE_OPTIONS_BUTTON_SELECTOR)),
             wait_time_seconds=6,
         )
         logger.info("Clicking the more options button...")
@@ -390,7 +390,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the settings list item...")
         settings_list_item = self.locate_element(
             step="settings_list_item",
-            condition=EC.presence_of_element_located((By.XPATH, '//li[.//span[text()="Settings"]]')),
+            condition=EC.element_to_be_clickable((By.XPATH, '//li[.//span[text()="Settings"]]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the settings list item...")
@@ -399,7 +399,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the video button...")
         video_button = self.locate_element(
             step="video_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[aria-label="Video"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the video button...")
@@ -419,7 +419,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
