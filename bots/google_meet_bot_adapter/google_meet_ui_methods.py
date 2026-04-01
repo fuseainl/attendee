@@ -216,7 +216,7 @@ class GoogleMeetUIMethods:
         return False
 
     def retrieve_name_input_element(self):
-        return WebDriverWait(self.driver, 1).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
+        return WebDriverWait(self.driver, 1).until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[type="text"][aria-label="Your name"]')))
 
     def fill_out_name_input(self):
         num_attempts_to_look_for_name_input = 30
