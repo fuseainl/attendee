@@ -1,3 +1,259 @@
+class VideoFrameInterceptor {
+    constructor({
+        scanIntervalMs = 2000,
+        fps = 2,
+        targetWidth = 640,      // 360p width
+        targetHeight = 360,     // 360p height
+        jpegQuality = 0.7,      // JPEG quality
+    } = {}) {
+        this.scanIntervalMs = scanIntervalMs;
+        this.captureIntervalMs = 1000 / fps;
+        this.targetWidth = targetWidth;
+        this.targetHeight = targetHeight;
+        this.jpegQuality = jpegQuality;
+
+        // Map<HTMLVideoElement, { participantId, canvas, ctx, stop }>
+        this._videoCapturers = new Map();
+        this._scanTimer = null;
+        this._trackIdToFirstStreamId = new Map();
+    }
+
+    addVideoTrack(trackEvent) {
+        const firstStreamId = trackEvent.streams[0]?.id;
+        const trackId = trackEvent.track?.id;
+        this._trackIdToFirstStreamId.set(trackId, firstStreamId);
+    }
+
+    onFrame(frame) {
+        window.ws?.sendPerParticipantVideo(frame.participantId, frame.isScreenshare, frame.dataUrl);
+    }
+  
+    start() {
+        if (this._scanTimer) return;
+        this._scanTimer = setInterval(
+            () => this._scanForVideos(),
+            this.scanIntervalMs
+        );
+        // Initial scan immediately
+        this._scanForVideos();
+    }
+  
+    stop() {
+        if (this._scanTimer) {
+            clearInterval(this._scanTimer);
+            this._scanTimer = null;
+        }
+        for (const { stop } of this._videoCapturers.values()) {
+            try {
+                stop();
+            } catch (_) {}
+        }
+        this._videoCapturers.clear();
+    }
+  
+    _scanForVideos() {
+        const videos = Array.from(document.querySelectorAll("video"));
+        const seen = new Set();
+
+        for (const video of videos) {
+            const participantId = this._getParticipantIdForVideo(video);
+            if (!participantId) continue;
+
+            seen.add(video);
+
+            if (!this._videoCapturers.has(video)) {
+                this._attachCapturer(video, participantId);
+            }
+        }
+  
+        // Cleanup videos no longer present or without IDs
+        for (const [video, info] of this._videoCapturers.entries()) {
+            if (!seen.has(video) || !document.body.contains(video)) {
+            try {
+                info.stop();
+            } catch (_) {}
+            this._videoCapturers.delete(video);
+            }
+        }
+    }
+  
+    /*
+    _getStreamInfoForVideo(videoEl) {
+        const track = videoEl?.srcObject?.getVideoTracks?.()[0];
+        const trackId = track?.id;
+        if (!trackId) return null;
+
+        const firstStreamId = this._trackIdToFirstStreamId.get(trackId);
+        if (!firstStreamId) return null;
+
+        const virtualStreamId =
+            virtualStreamToPhysicalStreamMappingManager
+                .physicalClientStreamIdToVirtualStreamIdMapping[firstStreamId.toString()];
+        if (!virtualStreamId) return null;
+
+        const virtualStream =
+            virtualStreamToPhysicalStreamMappingManager.virtualStreams.get(
+                virtualStreamId.toString()
+            );
+        if (!virtualStream?.participant?.id) return null;
+
+        return {
+            participantId: virtualStream.participant.id,
+            isScreenshare: !!virtualStream.isScreenShare,
+        };
+    }*/
+
+    _getStreamInfoForVideo(videoEl) {
+        const serverStreamId = videoEl?.srcObject?.id;
+        if (!serverStreamId) return null;
+
+        const mappingManager = virtualStreamToPhysicalStreamMappingManager;
+
+        const physicalStream =
+            mappingManager.physicalStreamsByServerStreamId.get(serverStreamId);
+        const clientStreamId = physicalStream?.clientStreamId;
+        if (!clientStreamId) return null;
+
+        const virtualStreamId =
+            mappingManager.physicalClientStreamIdToVirtualStreamIdMapping[
+                clientStreamId.toString()
+            ];
+        if (!virtualStreamId) return null;
+
+        const virtualStream =
+            mappingManager.virtualStreams.get(virtualStreamId.toString());
+        if (!virtualStream?.participant?.id) return null;
+
+        return {
+            participantId: virtualStream.participant.id,
+            isScreenshare: !!virtualStream.isScreenShare,
+        };
+    }
+
+    _getParticipantIdForVideo(videoEl) {
+        return this._getStreamInfoForVideo(videoEl)?.participantId ?? null;
+    }
+  
+    _attachCapturer(videoEl, participantId) {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+    
+        // Fixed 360p target
+        canvas.width = this.targetWidth;
+        canvas.height = this.targetHeight;
+    
+        // Nice downscaling
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+    
+        let lastCaptureTime = 0;
+        const captureIntervalMs = this.captureIntervalMs;
+    
+        const captureOnce = () => {
+            if (videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+
+            const srcW = videoEl.videoWidth;
+            const srcH = videoEl.videoHeight;
+            if (!srcW || !srcH) return;
+
+            const targetW = this.targetWidth;
+            const targetH = this.targetHeight;
+
+            const srcAspect = srcW / srcH;
+            const targetAspect = targetW / targetH;
+
+            let drawW, drawH;
+
+            // Scale to fit inside 640x360, preserving aspect ratio (letterboxing)
+            if (srcAspect > targetAspect) {
+                // Source is wider than target
+                drawW = targetW;
+                drawH = Math.round(targetW / srcAspect);
+            } else {
+                // Source is taller/narrower than target
+                drawH = targetH;
+                drawW = Math.round(targetH * srcAspect);
+            }
+
+            const offsetX = Math.round((targetW - drawW) / 2);
+            const offsetY = Math.round((targetH - drawH) / 2);
+
+            try {
+                // Clear + black background for letterboxing
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetW, targetH);
+
+                ctx.drawImage(
+                    videoEl,
+                    0,
+                    0,
+                    srcW,
+                    srcH,
+                    offsetX,
+                    offsetY,
+                    drawW,
+                    drawH
+                );
+
+                // JPEG at 0.7 quality instead of PNG
+                const dataUrl = canvas.toDataURL("image/jpeg", this.jpegQuality);
+
+                const streamInfo = this._getStreamInfoForVideo(videoEl);
+                if (!streamInfo) return;
+
+                const { participantId, isScreenshare } = streamInfo;
+
+                this.onFrame({
+                    participantId,
+                    isScreenshare,
+                    timestamp: Date.now(),
+                    dataUrl,
+                });
+            } catch (err) {
+                console.warn("Error capturing frame for participant", participantId, err);
+            }
+        };
+    
+        let stopFn;
+    
+        const loop = () => {
+            if (
+                !this._videoCapturers.has(videoEl) ||
+                !document.body.contains(videoEl)
+            ) {
+                return;
+            }
+
+            const nowMs = performance.now();
+            if (nowMs - lastCaptureTime >= captureIntervalMs) {
+                lastCaptureTime = nowMs;
+                captureOnce();
+            }
+
+            videoEl.requestVideoFrameCallback(loop);
+        };
+
+        videoEl.requestVideoFrameCallback(loop);
+
+        stopFn = () => {
+            this._videoCapturers.delete(videoEl);
+        };
+        
+        this._videoCapturers.set(videoEl, {
+            participantId,
+            canvas,
+            ctx,
+            stop: stopFn,
+        });
+    
+        console.log(
+          "[MeetVideoFrameInterceptor] Attached capturer for participant:",
+          participantId
+        );
+      }
+  }
+
+
 (() => {
     if (globalThis.__realConsole) return;
   
@@ -180,6 +436,10 @@ class StyleManager {
         this.fakeUserActivityInterval = setInterval(() => {
             this.fakeUserActivity();
         }, 240000);
+
+        if (window.initialData.sendPerParticipantVideo) {
+            window.videoFrameInterceptor.start();
+        }
 
         this.meetingAudioStream = destination.stream;
     }
@@ -1164,7 +1424,8 @@ class WebSocketClient {
         VIDEO: 2,  // Reserved for future use
         AUDIO: 3,   // Reserved for future use
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
   
     constructor() {
@@ -1307,6 +1568,50 @@ class WebSocketClient {
             type: 'CaptionUpdate',
             caption: item
         });
+    }
+
+    sendPerParticipantVideo(participantId, isScreenshare, videoData) {
+        if (this.ws.readyState !== originalWebSocket.OPEN) {
+            realConsole?.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+            return;
+        }
+
+        if (!this.mediaSendingEnabled) {
+            return;
+        }
+
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Convert videoData string to UTF-8 bytes
+            const videoDataBytes = new TextEncoder().encode(videoData);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + isScreenshare (1 byte) + video data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (6 for PER_PARTICIPANT_VIDEO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Set isScreenshare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenshare ? 1 : 0);
+            
+            // Copy video data after type, length, participantId, and isScreenshare
+            message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            console.error('Error sending WebSocket video message:', error);
+        }
     }
 
     sendMixedAudio(timestamp, audioData) {
@@ -1817,6 +2122,9 @@ window.styleManager = styleManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
+
+const videoFrameInterceptor = new VideoFrameInterceptor();
+window.videoFrameInterceptor = videoFrameInterceptor;
 
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
@@ -2419,6 +2727,9 @@ new RTCInterceptor({
             }
             if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
+                if (window.initialData.sendPerParticipantVideo) {
+                    window.videoFrameInterceptor.addVideoTrack(event);
+                }
             }
         });
 
