@@ -1201,6 +1201,7 @@ class RealtimeTriggerTypes(models.IntegerChoices):
     MIXED_AUDIO_CHUNK = 101, "Mixed audio chunk"
     BOT_OUTPUT_AUDIO_CHUNK = 102, "Bot output audio chunk"
     PER_PARTICIPANT_AUDIO_CHUNK = 103, "Per participant audio chunk"
+    PER_PARTICIPANT_VIDEO_FRAME = 104, "Per participant video frame"
 
     @classmethod
     def type_to_api_code(cls, value):
@@ -1209,6 +1210,7 @@ class RealtimeTriggerTypes(models.IntegerChoices):
             cls.MIXED_AUDIO_CHUNK: "realtime_audio.mixed",
             cls.BOT_OUTPUT_AUDIO_CHUNK: "realtime_audio.bot_output",
             cls.PER_PARTICIPANT_AUDIO_CHUNK: "realtime_audio.per_participant",
+            cls.PER_PARTICIPANT_VIDEO_FRAME: "realtime_video.per_participant",
         }
         return mapping.get(value)
 
