@@ -58,7 +58,7 @@ from bots.models import (
 )
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
-from bots.websocket_payloads import mixed_audio_websocket_payload, per_participant_audio_websocket_payload
+from bots.websocket_payloads import mixed_audio_websocket_payload, per_participant_audio_websocket_payload, per_participant_video_websocket_payload
 from bots.zoom_oauth_connections_utils import get_zoom_tokens_via_zoom_oauth_app
 from bots.zoom_rtms_adapter.rtms_gstreamer_pipeline import RTMSGstreamerPipeline
 
@@ -363,6 +363,19 @@ class BotController:
             add_participant_event_callback=self.on_new_participant_event,
             video_frame_size=self.bot_in_db.recording_dimensions(),
         )
+
+    def add_per_participant_video_frame_callback(self, frame: bytes, participant_uuid: str, source: str):
+        if not self.websocket_client_manager:
+            return
+
+        payload = per_participant_video_websocket_payload(
+            frame=frame,
+            bot_object_id=self.bot_in_db.object_id,
+            participant_uuid=participant_uuid,
+            source=source,
+        )
+
+        self.websocket_client_manager.send_per_participant_video(payload)
 
     def add_mixed_audio_chunk_callback(self, chunk: bytes):
         if self.gstreamer_pipeline:
@@ -836,6 +849,7 @@ class BotController:
             self.websocket_client_manager = BotWebsocketClientManager(
                 mixed_audio_url=self.bot_in_db.websocket_audio_url(),
                 per_participant_audio_url=self.bot_in_db.websocket_per_participant_audio_url(),
+                per_participant_video_url=self.bot_in_db.websocket_per_participant_video_url(),
                 on_message_callback=self.on_message_from_websocket_audio,
             )
 

@@ -889,6 +889,11 @@ class Bot(models.Model):
         websocket_per_participant_audio_settings = websocket_settings.get("per_participant_audio") or {}
         return websocket_per_participant_audio_settings.get("sample_rate", 16000)
 
+    def websocket_per_participant_video_url(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
+        return websocket_per_participant_video_settings.get("url")
+
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)
