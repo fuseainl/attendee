@@ -663,39 +663,22 @@ class BotController:
         self.pipeline_configuration = self.get_pipeline_configuration()
 
     def get_pipeline_configuration(self):
-        # This is sloppy, we won't be able to rely on these predefined configurations forever, but it will be ok for now
-
         if self.bot_in_db.rtmp_destination_url():
             return PipelineConfiguration.rtmp_streaming_bot()
 
+        websocket_kwargs = dict(
+            websocket_stream_audio=bool(self.bot_in_db.websocket_audio_url()),
+            websocket_stream_per_participant_audio=bool(self.bot_in_db.websocket_per_participant_audio_url()),
+            websocket_stream_per_participant_video=bool(self.bot_in_db.websocket_per_participant_video_url()),
+        )
+
         if self.bot_in_db.recording_type() == RecordingTypes.AUDIO_ONLY:
-            if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_audio_url():
-                return PipelineConfiguration.audio_recorder_bot_with_websocket_audio_and_websocket_per_participant_audio()
-            elif self.bot_in_db.websocket_audio_url():
-                return PipelineConfiguration.audio_recorder_bot_with_websocket_audio()
-            elif self.bot_in_db.websocket_per_participant_audio_url():
-                return PipelineConfiguration.audio_recorder_bot_with_websocket_per_participant_audio()
-            else:
-                return PipelineConfiguration.audio_recorder_bot()
+            return PipelineConfiguration.audio_recorder_bot(**websocket_kwargs)
 
         if self.bot_in_db.recording_type() == RecordingTypes.NO_RECORDING:
-            if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_audio_url():
-                return PipelineConfiguration.pure_transcription_bot_with_websocket_audio_and_websocket_per_participant_audio()
-            elif self.bot_in_db.websocket_audio_url():
-                return PipelineConfiguration.pure_transcription_bot_with_websocket_audio()
-            elif self.bot_in_db.websocket_per_participant_audio_url():
-                return PipelineConfiguration.pure_transcription_bot_with_websocket_per_participant_audio()
-            else:
-                return PipelineConfiguration.pure_transcription_bot()
+            return PipelineConfiguration.pure_transcription_bot(**websocket_kwargs)
 
-        if self.bot_in_db.websocket_audio_url() and self.bot_in_db.websocket_per_participant_audio_url():
-            return PipelineConfiguration.recorder_bot_with_websocket_audio_and_websocket_per_participant_audio()
-        elif self.bot_in_db.websocket_audio_url():
-            return PipelineConfiguration.recorder_bot_with_websocket_audio()
-        elif self.bot_in_db.websocket_per_participant_audio_url():
-            return PipelineConfiguration.recorder_bot_with_websocket_per_participant_audio()
-
-        return PipelineConfiguration.recorder_bot()
+        return PipelineConfiguration.recorder_bot(**websocket_kwargs)
 
     def get_gstreamer_sink_type(self):
         if self.pipeline_configuration.rtmp_stream_audio or self.pipeline_configuration.rtmp_stream_video:
