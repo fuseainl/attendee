@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class RealtimePerParticipantVideoFrameGenerator:
     """
-    Periodically (default: every 10s) inspects all participants in the meeting and
+    Periodically (default: every 4s) inspects all participants in the meeting and
     subscribes to up to `max_subscriptions` video feeds.
 
     For each subscribed participant, it forwards frames at `frames_per_second`
@@ -43,9 +43,10 @@ class RealtimePerParticipantVideoFrameGenerator:
         frame_callback,
         get_participants_ctrl_callback: Callable,
         get_meeting_sharing_controller_callback: Callable,
+        get_recording_is_paused_callback: Callable,
         max_subscriptions: int = 8,
         frames_per_second: float = 2.0,
-        refresh_interval_seconds: int = 10,
+        refresh_interval_seconds: int = 4,
         target_width: int = 640,
         target_height: int = 360,
         jpeg_quality: int = 70,
@@ -58,6 +59,7 @@ class RealtimePerParticipantVideoFrameGenerator:
         self.frame_callback = frame_callback
         self.get_participants_ctrl_callback = get_participants_ctrl_callback
         self.get_meeting_sharing_controller_callback = get_meeting_sharing_controller_callback
+        self.get_recording_is_paused_callback = get_recording_is_paused_callback
         self.max_subscriptions = max_subscriptions
         self.frames_per_second = frames_per_second
         self.refresh_interval_seconds = refresh_interval_seconds
@@ -214,6 +216,8 @@ class RealtimePerParticipantVideoFrameGenerator:
     # ------------------------------------------------------------------
 
     def _emit_frame(self, frame: bytes, participant_id: str, source: str):
+        if self.get_recording_is_paused_callback():
+            return
         """
         Called by _PerParticipantVideoFrameSubscription when it has a JPEG to send.
         Converts JPEG bytes to base64 data URL string to match the web format.

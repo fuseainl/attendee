@@ -329,6 +329,9 @@ class ZoomBotAdapter(BotAdapter):
     def get_meeting_sharing_controller(self):
         return self.meeting_sharing_controller
 
+    def get_recording_is_paused(self):
+        return self.recording_is_paused
+
     def set_video_input_manager_based_on_state(self):
         if not self.raw_recording_active and self.video_input_manager:
             self.video_input_manager.set_mode(
