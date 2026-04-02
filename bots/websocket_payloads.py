@@ -76,7 +76,7 @@ def per_participant_video_websocket_payload(frame: bytes, bot_object_id: str, pa
         "bot_id": bot_object_id,
         "data": {
             "frame": b64encode(frame).decode("ascii"),
-            "participant_uuid": participant_uuid,
+            "participant_uuid": str(participant_uuid),
             "source": source,
         },
     }
