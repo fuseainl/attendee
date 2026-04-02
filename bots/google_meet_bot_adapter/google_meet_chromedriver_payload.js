@@ -1,3 +1,199 @@
+class VideoFrameInterceptor {
+    constructor({
+        scanIntervalMs = 2000,
+        fps = 2,
+        targetWidth = 640,      // 360p width
+        targetHeight = 360,     // 360p height
+        jpegQuality = 0.7,      // JPEG quality
+    } = {}) {
+        this.scanIntervalMs = scanIntervalMs;
+        this.captureIntervalMs = 1000 / fps;
+        this.targetWidth = targetWidth;
+        this.targetHeight = targetHeight;
+        this.jpegQuality = jpegQuality;
+
+        // Map<HTMLVideoElement, { participantId, canvas, ctx, stop }>
+        this._videoCapturers = new Map();
+        this._scanTimer = null;
+    }
+
+    onFrame(frame) {
+        window.ws?.sendPerParticipantVideo(frame.participantId, frame.isScreenshare, frame.dataUrl);
+    }
+  
+    start() {
+        if (this._scanTimer) return;
+        this._scanTimer = setInterval(
+            () => this._scanForVideos(),
+            this.scanIntervalMs
+        );
+        // Initial scan immediately
+        this._scanForVideos();
+    }
+  
+    stop() {
+        if (this._scanTimer) {
+            clearInterval(this._scanTimer);
+            this._scanTimer = null;
+        }
+        for (const { stop } of this._videoCapturers.values()) {
+            try {
+                stop();
+            } catch (_) {}
+        }
+        this._videoCapturers.clear();
+    }
+  
+    _scanForVideos() {
+        const videos = Array.from(document.querySelectorAll("video"));
+        const seen = new Set();
+
+        for (const video of videos) {
+            const participantId = this._getParticipantIdForVideo(video);
+            if (!participantId) continue;
+
+            seen.add(video);
+
+            if (!this._videoCapturers.has(video)) {
+                this._attachCapturer(video, participantId);
+            }
+        }
+  
+        // Cleanup videos no longer present or without IDs
+        for (const [video, info] of this._videoCapturers.entries()) {
+            if (!seen.has(video) || !document.body.contains(video)) {
+            try {
+                info.stop();
+            } catch (_) {}
+            this._videoCapturers.delete(video);
+            }
+        }
+    }
+  
+    _getParticipantIdForVideo(videoEl) {
+        let el = videoEl;
+        while (el && el !== document.body) {
+            if (el.dataset && el.dataset.participantId) {
+                return el.dataset.participantId;
+            }
+            el = el.parentElement;
+        }
+        return null;
+    }
+  
+    _attachCapturer(videoEl, participantId) {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+    
+        // Fixed 360p target
+        canvas.width = this.targetWidth;
+        canvas.height = this.targetHeight;
+    
+        // Nice downscaling
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+    
+        let lastCaptureTime = 0;
+        const captureIntervalMs = this.captureIntervalMs;
+    
+        const captureOnce = () => {
+            if (videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+
+            const srcW = videoEl.videoWidth;
+            const srcH = videoEl.videoHeight;
+            if (!srcW || !srcH) return;
+
+            const targetW = this.targetWidth;
+            const targetH = this.targetHeight;
+
+            const srcAspect = srcW / srcH;
+            const targetAspect = targetW / targetH;
+
+            let drawW, drawH;
+
+            // Scale to fit inside 640x360, preserving aspect ratio (letterboxing)
+            if (srcAspect > targetAspect) {
+                // Source is wider than target
+                drawW = targetW;
+                drawH = Math.round(targetW / srcAspect);
+            } else {
+                // Source is taller/narrower than target
+                drawH = targetH;
+                drawW = Math.round(targetH * srcAspect);
+            }
+
+            const offsetX = Math.round((targetW - drawW) / 2);
+            const offsetY = Math.round((targetH - drawH) / 2);
+
+            try {
+                // Clear + black background for letterboxing
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetW, targetH);
+
+                ctx.drawImage(
+                    videoEl,
+                    0,
+                    0,
+                    srcW,
+                    srcH,
+                    offsetX,
+                    offsetY,
+                    drawW,
+                    drawH
+                );
+
+                // JPEG at 0.7 quality instead of PNG
+                const dataUrl = canvas.toDataURL("image/jpeg", this.jpegQuality);
+
+                this.onFrame({
+                    participantId,
+                    timestamp: Date.now(),
+                    dataUrl,
+                });
+            } catch (err) {
+                console.warn("Error capturing frame for participant", participantId, err);
+            }
+        };
+    
+        let stopFn;
+    
+        const loop = () => {
+            if (
+                !this._videoCapturers.has(videoEl) ||
+                !document.body.contains(videoEl)
+            ) {
+                return;
+            }
+
+            const nowMs = performance.now();
+            if (nowMs - lastCaptureTime >= captureIntervalMs) {
+                lastCaptureTime = nowMs;
+                captureOnce();
+            }
+
+            videoEl.requestVideoFrameCallback(loop);
+        };
+
+        videoEl.requestVideoFrameCallback(loop);
+
+        stopFn = () => {
+            this._videoCapturers.delete(videoEl);
+        };
+        
+        this._videoCapturers.set(videoEl, {
+            participantId,
+            canvas,
+            ctx,
+            stop: stopFn,
+        });
+    
+        console.log(
+          "[MeetVideoFrameInterceptor] Attached capturer for participant:",
+          participantId
+        );
+      }
+  }
+
 function sendChatMessage(text) {
     
     // First try to find the chat input textarea
@@ -674,6 +870,10 @@ class StyleManager {
             window.participantSpeechStartStopManager?.start();
         }
 
+        if (window.initialData.sendPerParticipantVideo) {
+            window.videoFrameInterceptor.start();
+        }
+
         console.log('Started StyleManager');
     }
 
@@ -1027,7 +1227,8 @@ class WebSocketClient {
       VIDEO: 2,
       AUDIO: 3,
       ENCODED_MP4_CHUNK: 4,
-      PER_PARTICIPANT_AUDIO: 5
+      PER_PARTICIPANT_AUDIO: 5,
+      PER_PARTICIPANT_VIDEO: 6,
   };
 
   constructor() {
@@ -1251,6 +1452,50 @@ class WebSocketClient {
         this.ws.send(message.buffer);
     } catch (error) {
         console.error('Error sending WebSocket audio message:', error);
+    }
+  }
+
+  sendPerParticipantVideo(participantId, isScreenshare, videoData) {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+      return;
+    }
+
+    if (!this.mediaSendingEnabled) {
+      return;
+    }
+
+    try {
+        // Convert participantId to UTF-8 bytes
+        const participantIdBytes = new TextEncoder().encode(participantId);
+        
+        // Convert videoData string to UTF-8 bytes
+        const videoDataBytes = new TextEncoder().encode(videoData);
+        
+        // Create final message: type (4 bytes) + participantId length (1 byte) + 
+        // participantId bytes + isScreenshare (1 byte) + video data
+        const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+        const dataView = new DataView(message.buffer);
+        
+        // Set message type (6 for PER_PARTICIPANT_VIDEO)
+        dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+        
+        // Set participantId length as uint8 (1 byte)
+        dataView.setUint8(4, participantIdBytes.length);
+        
+        // Copy participantId bytes
+        message.set(participantIdBytes, 5);
+        
+        // Set isScreenshare byte (0 = webcam, 1 = screenshare)
+        dataView.setUint8(5 + participantIdBytes.length, isScreenshare ? 1 : 0);
+        
+        // Copy video data after type, length, participantId, and isScreenshare
+        message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+        
+        // Send the binary message
+        this.ws.send(message.buffer);
+    } catch (error) {
+        console.error('Error sending WebSocket video message:', error);
     }
   }
 
@@ -1587,6 +1832,7 @@ const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
 const chatMessageManager = new ChatMessageManager(ws);
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
+const videoFrameInterceptor = new VideoFrameInterceptor();
 let rtpReceiverInterceptor = null;
 if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
     rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
@@ -1600,6 +1846,7 @@ window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
+window.videoFrameInterceptor = videoFrameInterceptor;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};

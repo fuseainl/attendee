@@ -269,11 +269,11 @@ class WebBotAdapter(BotAdapter):
             participant_id = message[5 : 5 + participant_id_length].decode("utf-8")
 
             # After the participant ID, the source is the next byte
-            source_raw = message[5 + participant_id_length + 1]
+            source_raw = message[5 + participant_id_length]
             source = "webcam" if source_raw == 0 else "screenshare"
 
             # Get the video frame
-            video_frame = message[5 + participant_id_length + 2 :]
+            video_frame = message[5 + participant_id_length + 1 :]
 
             self.add_per_participant_video_frame_callback(video_frame, participant_id, source)
 
