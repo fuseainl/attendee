@@ -145,8 +145,12 @@ class VideoFrameInterceptor {
                 // JPEG at 0.7 quality instead of PNG
                 const dataUrl = canvas.toDataURL("image/jpeg", this.jpegQuality);
 
+                const user = window.userManager?.getUserByDeviceId(participantId);
+                const isScreenshare = !!user?.parentDeviceId;
+
                 this.onFrame({
-                    participantId,
+                    participantId: isScreenshare ? user.parentDeviceId : participantId,
+                    isScreenshare,
                     timestamp: Date.now(),
                     dataUrl,
                 });
