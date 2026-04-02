@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class RealtimePerParticipantVideoFrameGenerator:
     """
-    Periodically (default: every 60s) inspects all participants in the meeting and
+    Periodically (default: every 10s) inspects all participants in the meeting and
     subscribes to up to `max_subscriptions` video feeds.
 
     For each subscribed participant, it forwards frames at `frames_per_second`
@@ -41,11 +41,11 @@ class RealtimePerParticipantVideoFrameGenerator:
         self,
         *,
         frame_callback,
-        get_participants_ctrl_callback: Callable[[], zoom.MeetingParticipantsCtrl],
-        get_meeting_sharing_controller_callback: Callable[[], zoom.MeetingSharingCtrl],
+        get_participants_ctrl_callback: Callable,
+        get_meeting_sharing_controller_callback: Callable,
         max_subscriptions: int = 8,
         frames_per_second: float = 2.0,
-        refresh_interval_seconds: int = 60,
+        refresh_interval_seconds: int = 10,
         target_width: int = 640,
         target_height: int = 360,
         jpeg_quality: int = 70,
