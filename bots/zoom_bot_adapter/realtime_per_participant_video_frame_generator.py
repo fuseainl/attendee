@@ -32,9 +32,6 @@ class RealtimePerParticipantVideoFrameGenerator:
             frames_per_second=2,
         )
         subscriber.start()
-
-        # later:
-        subscriber.stop()
     """
 
     def __init__(
@@ -72,7 +69,6 @@ class RealtimePerParticipantVideoFrameGenerator:
         self._subscriptions = {}
 
         self._refresh_timer_id = None
-        self._stopped = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -86,8 +82,8 @@ class RealtimePerParticipantVideoFrameGenerator:
         Start periodic subscription management and perform an immediate refresh.
         """
 
-        if self._refresh_timer_id is not None:
-            return
+        # Reset if it was already running
+        self.reset()
 
         logger.info(
             "Starting PeriodicMultiParticipantVideoSubscriber: max_subscriptions=%d, fps=%.2f, refresh_interval=%ds",
@@ -102,14 +98,10 @@ class RealtimePerParticipantVideoFrameGenerator:
         # Periodic refresh
         self._refresh_timer_id = GLib.timeout_add_seconds(self.refresh_interval_seconds, self._refresh_subscriptions)
 
-    def stop(self):
+    def reset(self):
         """
-        Stop periodic refresh and unsubscribe from all participants.
+        Clear periodic refresh and unsubscribe from all participants.
         """
-        if self._stopped:
-            return
-
-        self._stopped = True
 
         if self._refresh_timer_id is not None:
             GLib.source_remove(self._refresh_timer_id)
@@ -117,15 +109,18 @@ class RealtimePerParticipantVideoFrameGenerator:
 
         # Clean up all subscriptions
         for sub in list(self._subscriptions.values()):
-            sub.cleanup()
+            try:
+                sub.cleanup()
+            except Exception:
+                logger.exception("Error cleaning up subscription for participant %s", sub.participant_id)
         self._subscriptions.clear()
 
-        logger.info("Stopped PeriodicMultiParticipantVideoSubscriber")
+        logger.info("Reset PeriodicMultiParticipantVideoSubscriber")
 
     def __del__(self):
         # Best-effort cleanup; ignore errors here
         try:
-            self.stop()
+            self.reset()
         except Exception:
             pass
 
@@ -137,9 +132,6 @@ class RealtimePerParticipantVideoFrameGenerator:
         """
         GLib timeout callback. Must return True to keep running.
         """
-        if self._stopped:
-            self._refresh_timer_id = None
-            return False
 
         try:
             self._do_refresh_subscriptions()
@@ -216,12 +208,12 @@ class RealtimePerParticipantVideoFrameGenerator:
     # ------------------------------------------------------------------
 
     def _emit_frame(self, frame: bytes, participant_id: str, source: str):
-        if self.get_recording_is_paused_callback():
-            return
         """
         Called by _PerParticipantVideoFrameSubscription when it has a JPEG to send.
         Converts JPEG bytes to base64 data URL string to match the web format.
         """
+        if self.get_recording_is_paused_callback():
+            return
         try:
             # Convert JPEG bytes to base64 data URL string (matching JavaScript behavior)
             base64_jpeg = base64.b64encode(frame).decode("ascii")

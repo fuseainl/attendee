@@ -162,6 +162,7 @@ class ZoomBotAdapter(BotAdapter):
                 frame_callback=self.add_per_participant_video_frame_callback,
                 get_participants_ctrl_callback=self.get_participants_ctrl,
                 get_meeting_sharing_controller_callback=self.get_meeting_sharing_controller,
+                get_recording_is_paused_callback=self.get_recording_is_paused,
             )
         else:
             self.realtime_per_participant_video_frame_generator = None
