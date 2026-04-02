@@ -748,7 +748,7 @@ class BotController:
             return False
 
     def should_create_websocket_client_manager(self):
-        return self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.websocket_stream_per_participant_audio
+        return self.pipeline_configuration.websocket_stream_audio or self.pipeline_configuration.websocket_stream_per_participant_audio or self.pipeline_configuration.websocket_stream_per_participant_video
 
     def should_create_screen_and_audio_recorder(self):
         # if we're not recording audio or video and not doing rtmp streaming, then we don't need to create a screen and audio recorder
