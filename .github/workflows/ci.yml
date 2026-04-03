@@ -57,21 +57,21 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
       with:
+        buildkitd-flags: --debug
         driver-opts: |
-          image=moby/buildkit:master
           network=host
 
     - name: Build and cache Docker image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v7
       with:
         context: .
         push: false
         load: true
         tags: attendee-test:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: type=gha,scope=attendee-test
+        cache-to: type=gha,mode=max,scope=attendee-test,ignore-error=true
 
     - name: "Run ${{ matrix.test_suite }} tests"
       env:
