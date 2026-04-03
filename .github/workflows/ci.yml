@@ -29,8 +29,6 @@ jobs:
           push: false
           load: true
           tags: attendee-test:latest
-          cache-from: type=gha,scope=attendee-test
-          cache-to: type=gha,mode=max,scope=attendee-test,ignore-error=true
 
       - name: Export Docker image
         run: docker save attendee-test:latest | gzip > attendee-test.tar.gz
