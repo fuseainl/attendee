@@ -1346,7 +1346,7 @@ class WebSocketClient {
     }
   }
 
-  sendPerParticipantVideo(participantId, isScreenshare, videoData) {
+  sendPerParticipantVideo(participantId, isScreenShare, videoData) {
     if (this.ws.readyState !== WebSocket.OPEN) {
       console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
       return;
@@ -1364,7 +1364,7 @@ class WebSocketClient {
         const videoDataBytes = new TextEncoder().encode(videoData);
         
         // Create final message: type (4 bytes) + participantId length (1 byte) + 
-        // participantId bytes + isScreenshare (1 byte) + video data
+        // participantId bytes + isScreenShare (1 byte) + video data
         const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
         const dataView = new DataView(message.buffer);
         
@@ -1377,10 +1377,10 @@ class WebSocketClient {
         // Copy participantId bytes
         message.set(participantIdBytes, 5);
         
-        // Set isScreenshare byte (0 = webcam, 1 = screenshare)
-        dataView.setUint8(5 + participantIdBytes.length, isScreenshare ? 1 : 0);
+        // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+        dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
         
-        // Copy video data after type, length, participantId, and isScreenshare
+        // Copy video data after type, length, participantId, and isScreenShare
         message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
         
         // Send the binary message
