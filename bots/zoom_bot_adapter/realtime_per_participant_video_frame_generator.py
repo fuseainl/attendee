@@ -210,16 +210,13 @@ class RealtimePerParticipantVideoFrameGenerator:
     def _emit_frame(self, frame: bytes, participant_id: str, source: str):
         """
         Called by _PerParticipantVideoFrameSubscription when it has a JPEG to send.
-        Converts JPEG bytes to base64 data URL string to match the web format.
+        Converts JPEG bytes to base64 string.
         """
         if self.get_recording_is_paused_callback():
             return
         try:
-            # Convert JPEG bytes to base64 data URL string (matching JavaScript behavior)
             base64_jpeg = base64.b64encode(frame).decode("ascii")
-            data_url = f"data:image/jpeg;base64,{base64_jpeg}"
-            # Encode the data URL as UTF-8 bytes (matching web_bot_adapter format)
-            video_data_bytes = data_url.encode("utf-8")
+            video_data_bytes = base64_jpeg.encode("utf-8")
             self.frame_callback(video_data_bytes, participant_id, source)
         except Exception:
             logger.exception("frame_callback raised an exception for participant %s", participant_id)

@@ -75,7 +75,8 @@ def per_participant_video_websocket_payload(frame: bytes, bot_object_id: str, pa
         "trigger": RealtimeTriggerTypes.type_to_api_code(RealtimeTriggerTypes.PER_PARTICIPANT_VIDEO_FRAME),
         "bot_id": bot_object_id,
         "data": {
-            "frame": b64encode(frame).decode("ascii"),
+            "frame": frame.decode("ascii"),
+            "format": "jpeg",
             "participant_uuid": str(participant_uuid),
             "source": source,
         },

@@ -71,8 +71,8 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
                 ctx.fillRect(0, 0, targetWidth, targetHeight);
                 ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
 
-                const dataUrl = canvas.toDataURL("image/jpeg", jpegQuality);
-                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, dataUrl);
+                const base64 = canvas.toDataURL("image/jpeg", jpegQuality).split(",", 2)[1];
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, base64);
 
                 lastSentAt = now;
             } catch (err) {
