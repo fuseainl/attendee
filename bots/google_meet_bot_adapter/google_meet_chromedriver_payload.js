@@ -1,202 +1,93 @@
-class VideoFrameInterceptor {
-    constructor({
-        scanIntervalMs = 2000,
-        fps = 2,
-        targetWidth = 640,      // 360p width
-        targetHeight = 360,     // 360p height
-        jpegQuality = 0.7,      // JPEG quality
-    } = {}) {
-        this.scanIntervalMs = scanIntervalMs;
-        this.captureIntervalMs = 1000 / fps;
-        this.targetWidth = targetWidth;
-        this.targetHeight = targetHeight;
-        this.jpegQuality = jpegQuality;
+const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
+    try {
+        const firstStreamId = streams?.[0]?.id;
 
-        // Map<HTMLVideoElement, { participantId, canvas, ctx, stop }>
-        this._videoCapturers = new Map();
-        this._scanTimer = null;
-    }
+        if (!firstStreamId)
+            return;
 
-    onFrame(frame) {
-        window.ws?.sendPerParticipantVideo(frame.participantId, frame.isScreenshare, frame.dataUrl);
-    }
-  
-    start() {
-        if (this._scanTimer) return;
-        this._scanTimer = setInterval(
-            () => this._scanForVideos(),
-            this.scanIntervalMs
-        );
-        // Initial scan immediately
-        this._scanForVideos();
-    }
-  
-    stop() {
-        if (this._scanTimer) {
-            clearInterval(this._scanTimer);
-            this._scanTimer = null;
-        }
-        for (const { stop } of this._videoCapturers.values()) {
-            try {
-                stop();
-            } catch (_) {}
-        }
-        this._videoCapturers.clear();
-    }
-  
-    _scanForVideos() {
-        const videos = Array.from(document.querySelectorAll("video"));
-        const seen = new Set();
+        const userForTrack = window.userManager?.getUserByStreamId(firstStreamId);
 
-        for (const video of videos) {
-            const participantId = this._getParticipantIdForVideo(video);
-            if (!participantId) continue;
+        if (!userForTrack)
+            return;
 
-            seen.add(video);
+        const isScreenShare = !!userForTrack.parentDeviceId;
+        const participantId = userForTrack.parentDeviceId || userForTrack.deviceId;
 
-            if (!this._videoCapturers.has(video)) {
-                this._attachCapturer(video, participantId);
-            }
-        }
-  
-        // Cleanup videos no longer present or without IDs
-        for (const [video, info] of this._videoCapturers.entries()) {
-            if (!seen.has(video) || !document.body.contains(video)) {
-            try {
-                info.stop();
-            } catch (_) {}
-            this._videoCapturers.delete(video);
-            }
-        }
-    }
-  
-    _getParticipantIdForVideo(videoEl) {
-        let el = videoEl;
-        while (el && el !== document.body) {
-            if (el.dataset && el.dataset.participantId) {
-                return el.dataset.participantId;
-            }
-            el = el.parentElement;
-        }
-        return null;
-    }
-  
-    _attachCapturer(videoEl, participantId) {
+        if (!participantId)
+            return;
+
+        videoTrackManager.upsertVideoTrack(track, firstStreamId, isScreenShare);
+        
+        track.addEventListener("ended", () => {
+            console.log("Video track ended:", track.id);
+            videoTrackManager.deleteVideoTrack(track);
+        });
+
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable.getReader();
+
+        const desiredFPS = 2;
+        const frameIntervalMs = 1000 / desiredFPS;
+        let lastSentAt = 0;
+
+        const targetWidth = 640;
+        const targetHeight = 360;
+        const jpegQuality = 0.7;
         const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext("2d");
-    
-        // Fixed 360p target
-        canvas.width = this.targetWidth;
-        canvas.height = this.targetHeight;
-    
-        // Nice downscaling
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-    
-        let lastCaptureTime = 0;
-        const captureIntervalMs = this.captureIntervalMs;
-    
-        const captureOnce = () => {
-            if (videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
 
-            const srcW = videoEl.videoWidth;
-            const srcH = videoEl.videoHeight;
-            if (!srcW || !srcH) return;
-
-            const targetW = this.targetWidth;
-            const targetH = this.targetHeight;
-
-            const srcAspect = srcW / srcH;
-            const targetAspect = targetW / targetH;
-
-            let drawW, drawH;
-
-            // Scale to fit inside 640x360, preserving aspect ratio (letterboxing)
-            if (srcAspect > targetAspect) {
-                // Source is wider than target
-                drawW = targetW;
-                drawH = Math.round(targetW / srcAspect);
-            } else {
-                // Source is taller/narrower than target
-                drawH = targetH;
-                drawW = Math.round(targetH * srcAspect);
-            }
-
-            const offsetX = Math.round((targetW - drawW) / 2);
-            const offsetY = Math.round((targetH - drawH) / 2);
+        while (true) {
+            const { value: frame, done } = await reader.read();
+            if (done) break;
+            if (!frame) continue;
 
             try {
-                // Clear + black background for letterboxing
+                const now = performance.now();
+                const shouldSend = now - lastSentAt >= frameIntervalMs;
+
+                if (!shouldSend) continue;
+
+                const srcW = frame.displayWidth;
+                const srcH = frame.displayHeight;
+                if (!srcW || !srcH) continue;
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
                 ctx.fillStyle = "black";
-                ctx.fillRect(0, 0, targetW, targetH);
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
 
-                ctx.drawImage(
-                    videoEl,
-                    0,
-                    0,
-                    srcW,
-                    srcH,
-                    offsetX,
-                    offsetY,
-                    drawW,
-                    drawH
-                );
+                const dataUrl = canvas.toDataURL("image/jpeg", jpegQuality);
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, dataUrl);
 
-                // JPEG at 0.7 quality instead of PNG
-                const dataUrl = canvas.toDataURL("image/jpeg", this.jpegQuality);
-
-                const user = window.userManager?.getUserByDeviceId(participantId);
-                const isScreenshare = !!user?.parentDeviceId;
-
-                this.onFrame({
-                    participantId: isScreenshare ? user.parentDeviceId : participantId,
-                    isScreenshare,
-                    timestamp: Date.now(),
-                    dataUrl,
-                });
+                lastSentAt = now;
             } catch (err) {
-                console.warn("Error capturing frame for participant", participantId, err);
+                console.error("Error processing frame:", err);
+            } finally {
+                frame.close();
             }
-        };
-    
-        let stopFn;
-    
-        const loop = () => {
-            if (
-                !this._videoCapturers.has(videoEl) ||
-                !document.body.contains(videoEl)
-            ) {
-                return;
-            }
-
-            const nowMs = performance.now();
-            if (nowMs - lastCaptureTime >= captureIntervalMs) {
-                lastCaptureTime = nowMs;
-                captureOnce();
-            }
-
-            videoEl.requestVideoFrameCallback(loop);
-        };
-
-        videoEl.requestVideoFrameCallback(loop);
-
-        stopFn = () => {
-            this._videoCapturers.delete(videoEl);
-        };
-        
-        this._videoCapturers.set(videoEl, {
-            participantId,
-            canvas,
-            ctx,
-            stop: stopFn,
-        });
-    
-        console.log(
-          "[MeetVideoFrameInterceptor] Attached capturer for participant:",
-          participantId
-        );
-      }
-  }
+        }
+    } catch (err) {
+        console.error("Error setting up video interceptor:", err);
+    }
+};
 
 function sendChatMessage(text) {
     
@@ -872,10 +763,6 @@ class StyleManager {
 
         if (window.initialData.recordParticipantSpeechStartStopEvents) {
             window.participantSpeechStartStopManager?.start();
-        }
-
-        if (window.initialData.sendPerParticipantVideo) {
-            window.videoFrameInterceptor.start();
         }
 
         console.log('Started StyleManager');
@@ -1836,7 +1723,6 @@ const styleManager = new StyleManager();
 const receiverManager = new ReceiverManager();
 const chatMessageManager = new ChatMessageManager(ws);
 const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager();
-const videoFrameInterceptor = new VideoFrameInterceptor();
 let rtpReceiverInterceptor = null;
 if (window.initialData.sendPerParticipantAudio || window.initialData.recordParticipantSpeechStartStopEvents) {
     rtpReceiverInterceptor = new RTCRtpReceiverInterceptor((receiver, result, ...args) => {
@@ -1850,7 +1736,6 @@ window.styleManager = styleManager;
 window.receiverManager = receiverManager;
 window.chatMessageManager = chatMessageManager;
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
-window.videoFrameInterceptor = videoFrameInterceptor;
 window.sendChatMessage = sendChatMessage;
 // Create decoders for all message types
 const messageDecoders = {};
@@ -2229,6 +2114,9 @@ new RTCInterceptor({
             }
             if (event.track.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
+                if (window.initialData.sendPerParticipantVideo) {
+                    handleVideoTrackForRealTimePerParticipantVideo(event);
+                }
             }
         });
 
