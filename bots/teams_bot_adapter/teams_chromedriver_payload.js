@@ -1,257 +1,90 @@
-class VideoFrameInterceptor {
-    constructor({
-        scanIntervalMs = 2000,
-        fps = 2,
-        targetWidth = 640,      // 360p width
-        targetHeight = 360,     // 360p height
-        jpegQuality = 0.7,      // JPEG quality
-    } = {}) {
-        this.scanIntervalMs = scanIntervalMs;
-        this.captureIntervalMs = 1000 / fps;
-        this.targetWidth = targetWidth;
-        this.targetHeight = targetHeight;
-        this.jpegQuality = jpegQuality;
+const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }) => {
+    try {
+        const firstStreamId = streams?.[0]?.id;
 
-        // Map<HTMLVideoElement, { participantId, canvas, ctx, stop }>
-        this._videoCapturers = new Map();
-        this._scanTimer = null;
-        this._trackIdToFirstStreamId = new Map();
-    }
-
-    addVideoTrack(trackEvent) {
-        const firstStreamId = trackEvent.streams[0]?.id;
-        const trackId = trackEvent.track?.id;
-        this._trackIdToFirstStreamId.set(trackId, firstStreamId);
-    }
-
-    onFrame(frame) {
-        window.ws?.sendPerParticipantVideo(frame.participantId, frame.isScreenshare, frame.dataUrl);
-    }
-  
-    start() {
-        if (this._scanTimer) return;
-        this._scanTimer = setInterval(
-            () => this._scanForVideos(),
-            this.scanIntervalMs
-        );
-        // Initial scan immediately
-        this._scanForVideos();
-    }
-  
-    stop() {
-        if (this._scanTimer) {
-            clearInterval(this._scanTimer);
-            this._scanTimer = null;
-        }
-        for (const { stop } of this._videoCapturers.values()) {
-            try {
-                stop();
-            } catch (_) {}
-        }
-        this._videoCapturers.clear();
-    }
-  
-    _scanForVideos() {
-        const videos = Array.from(document.querySelectorAll("video"));
-        const seen = new Set();
-
-        for (const video of videos) {
-            const participantId = this._getParticipantIdForVideo(video);
-            if (!participantId) continue;
-
-            seen.add(video);
-
-            if (!this._videoCapturers.has(video)) {
-                this._attachCapturer(video, participantId);
-            }
-        }
-  
-        // Cleanup videos no longer present or without IDs
-        for (const [video, info] of this._videoCapturers.entries()) {
-            if (!seen.has(video) || !document.body.contains(video)) {
-            try {
-                info.stop();
-            } catch (_) {}
-            this._videoCapturers.delete(video);
-            }
-        }
-    }
-  
-    /*
-    _getStreamInfoForVideo(videoEl) {
-        const track = videoEl?.srcObject?.getVideoTracks?.()[0];
-        const trackId = track?.id;
-        if (!trackId) return null;
-
-        const firstStreamId = this._trackIdToFirstStreamId.get(trackId);
-        if (!firstStreamId) return null;
-
-        const virtualStreamId =
-            virtualStreamToPhysicalStreamMappingManager
-                .physicalClientStreamIdToVirtualStreamIdMapping[firstStreamId.toString()];
-        if (!virtualStreamId) return null;
-
-        const virtualStream =
-            virtualStreamToPhysicalStreamMappingManager.virtualStreams.get(
-                virtualStreamId.toString()
-            );
-        if (!virtualStream?.participant?.id) return null;
-
-        return {
-            participantId: virtualStream.participant.id,
-            isScreenshare: !!virtualStream.isScreenShare,
-        };
-    }*/
-
-    _getStreamInfoForVideo(videoEl) {
-        const serverStreamId = videoEl?.srcObject?.id;
-        if (!serverStreamId) return null;
+        if (!firstStreamId)
+            return;
 
         const mappingManager = virtualStreamToPhysicalStreamMappingManager;
 
-        const physicalStream =
-            mappingManager.physicalStreamsByServerStreamId.get(serverStreamId);
-        const clientStreamId = physicalStream?.clientStreamId;
-        if (!clientStreamId) return null;
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable.getReader();
 
-        const virtualStreamId =
-            mappingManager.physicalClientStreamIdToVirtualStreamIdMapping[
-                clientStreamId.toString()
-            ];
-        if (!virtualStreamId) return null;
+        const desiredFPS = 2;
+        const frameIntervalMs = 1000 / desiredFPS;
+        let lastSentAt = 0;
 
-        const virtualStream =
-            mappingManager.virtualStreams.get(virtualStreamId.toString());
-        if (!virtualStream?.participant?.id) return null;
-
-        return {
-            participantId: virtualStream.participant.id,
-            isScreenshare: !!virtualStream.isScreenShare,
-        };
-    }
-
-    _getParticipantIdForVideo(videoEl) {
-        return this._getStreamInfoForVideo(videoEl)?.participantId ?? null;
-    }
-  
-    _attachCapturer(videoEl, participantId) {
+        const targetWidth = 640;
+        const targetHeight = 360;
+        const jpegQuality = 0.7;
         const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext("2d");
-    
-        // Fixed 360p target
-        canvas.width = this.targetWidth;
-        canvas.height = this.targetHeight;
-    
-        // Nice downscaling
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-    
-        let lastCaptureTime = 0;
-        const captureIntervalMs = this.captureIntervalMs;
-    
-        const captureOnce = () => {
-            if (videoEl.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
 
-            const srcW = videoEl.videoWidth;
-            const srcH = videoEl.videoHeight;
-            if (!srcW || !srcH) return;
-
-            const targetW = this.targetWidth;
-            const targetH = this.targetHeight;
-
-            const srcAspect = srcW / srcH;
-            const targetAspect = targetW / targetH;
-
-            let drawW, drawH;
-
-            // Scale to fit inside 640x360, preserving aspect ratio (letterboxing)
-            if (srcAspect > targetAspect) {
-                // Source is wider than target
-                drawW = targetW;
-                drawH = Math.round(targetW / srcAspect);
-            } else {
-                // Source is taller/narrower than target
-                drawH = targetH;
-                drawW = Math.round(targetH * srcAspect);
-            }
-
-            const offsetX = Math.round((targetW - drawW) / 2);
-            const offsetY = Math.round((targetH - drawH) / 2);
+        while (true) {
+            const { value: frame, done } = await reader.read();
+            if (done) break;
+            if (!frame) continue;
 
             try {
-                // Clear + black background for letterboxing
-                ctx.fillStyle = "black";
-                ctx.fillRect(0, 0, targetW, targetH);
+                const now = performance.now();
+                const shouldSend = now - lastSentAt >= frameIntervalMs;
 
-                ctx.drawImage(
-                    videoEl,
-                    0,
-                    0,
-                    srcW,
-                    srcH,
-                    offsetX,
-                    offsetY,
-                    drawW,
-                    drawH
-                );
+                if (!shouldSend) continue;
 
-                // JPEG at 0.7 quality instead of PNG
-                const dataUrl = canvas.toDataURL("image/jpeg", this.jpegQuality);
-
-                const streamInfo = this._getStreamInfoForVideo(videoEl);
-                if (!streamInfo) return;
-
-                const { participantId, isScreenshare } = streamInfo;
-
-                this.onFrame({
-                    participantId,
-                    isScreenshare,
-                    timestamp: Date.now(),
-                    dataUrl,
-                });
-            } catch (err) {
-                console.warn("Error capturing frame for participant", participantId, err);
-            }
-        };
-    
-        let stopFn;
-    
-        const loop = () => {
-            if (
-                !this._videoCapturers.has(videoEl) ||
-                !document.body.contains(videoEl)
-            ) {
-                return;
-            }
-
-            const nowMs = performance.now();
-            if (nowMs - lastCaptureTime >= captureIntervalMs) {
-                lastCaptureTime = nowMs;
-                captureOnce();
-            }
-
-            videoEl.requestVideoFrameCallback(loop);
-        };
-
-        videoEl.requestVideoFrameCallback(loop);
-
-        stopFn = () => {
-            this._videoCapturers.delete(videoEl);
-        };
+                const physicalStream = mappingManager.physicalStreamsByServerStreamId.get(firstStreamId);
+                const clientStreamId = physicalStream?.clientStreamId;
+                if (!clientStreamId) continue;        
+                
+                const virtualStreamId = mappingManager.physicalClientStreamIdToVirtualStreamIdMapping[clientStreamId.toString()];
+                if (!virtualStreamId) continue;
         
-        this._videoCapturers.set(videoEl, {
-            participantId,
-            canvas,
-            ctx,
-            stop: stopFn,
-        });
-    
-        console.log(
-          "[MeetVideoFrameInterceptor] Attached capturer for participant:",
-          participantId
-        );
-      }
-  }
+                const virtualStream = mappingManager.virtualStreams.get(virtualStreamId.toString());
+                if (!virtualStream?.participant?.id) continue;
+        
+                const participantId = virtualStream.participant.id;
+                const isScreenShare = !!virtualStream.isScreenShare;
+
+                const srcW = frame.displayWidth;
+                const srcH = frame.displayHeight;
+                if (!srcW || !srcH) continue;
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(frame, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
+
+                const dataUrl = canvas.toDataURL("image/jpeg", jpegQuality);
+                window.ws?.sendPerParticipantVideo(participantId, isScreenShare, dataUrl);
+
+                lastSentAt = now;
+            } catch (err) {
+                console.error("Error processing frame:", err);
+            } finally {
+                frame.close();
+            }
+        }
+    } catch (err) {
+        console.error("Error setting up video interceptor:", err);
+    }
+};
 
 
 (() => {
@@ -436,10 +269,6 @@ class StyleManager {
         this.fakeUserActivityInterval = setInterval(() => {
             this.fakeUserActivity();
         }, 240000);
-
-        if (window.initialData.sendPerParticipantVideo) {
-            window.videoFrameInterceptor.start();
-        }
 
         this.meetingAudioStream = destination.stream;
     }
@@ -1570,7 +1399,7 @@ class WebSocketClient {
         });
     }
 
-    sendPerParticipantVideo(participantId, isScreenshare, videoData) {
+    sendPerParticipantVideo(participantId, isScreenShare, videoData) {
         if (this.ws.readyState !== originalWebSocket.OPEN) {
             realConsole?.error('WebSocket is not connected for per participant video send', this.ws.readyState);
             return;
@@ -1588,7 +1417,7 @@ class WebSocketClient {
             const videoDataBytes = new TextEncoder().encode(videoData);
             
             // Create final message: type (4 bytes) + participantId length (1 byte) + 
-            // participantId bytes + isScreenshare (1 byte) + video data
+            // participantId bytes + isScreenShare (1 byte) + video data
             const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
             const dataView = new DataView(message.buffer);
             
@@ -1601,10 +1430,10 @@ class WebSocketClient {
             // Copy participantId bytes
             message.set(participantIdBytes, 5);
             
-            // Set isScreenshare byte (0 = webcam, 1 = screenshare)
-            dataView.setUint8(5 + participantIdBytes.length, isScreenshare ? 1 : 0);
+            // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
             
-            // Copy video data after type, length, participantId, and isScreenshare
+            // Copy video data after type, length, participantId, and isScreenShare
             message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
             
             // Send the binary message
@@ -2122,9 +1951,6 @@ window.styleManager = styleManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
-
-const videoFrameInterceptor = new VideoFrameInterceptor();
-window.videoFrameInterceptor = videoFrameInterceptor;
 
 const processDominantSpeakerHistoryMessage = (item) => {
     realConsole?.log('processDominantSpeakerHistoryMessage', item);
@@ -2728,7 +2554,7 @@ new RTCInterceptor({
             if (event.track?.kind === 'video') {
                 window.styleManager.addVideoTrack(event);
                 if (window.initialData.sendPerParticipantVideo) {
-                    window.videoFrameInterceptor.addVideoTrack(event);
+                    handleVideoTrackForRealTimePerParticipantVideo(event);
                 }
             }
         });
