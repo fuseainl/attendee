@@ -114,7 +114,7 @@ class BotController:
         return self.save_utterances_for_individual_audio_chunks() or self.bot_in_db.record_async_transcription_audio_chunks()
 
     def disable_incoming_video_for_web_bots(self):
-        return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video)
+        return not (self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video or self.pipeline_configuration.websocket_stream_per_participant_video)
 
     def should_modify_dom_for_video_recording_for_web_bots(self):
         return self.pipeline_configuration.record_video or self.pipeline_configuration.rtmp_stream_video
