@@ -23,5 +23,5 @@ For more details on the API, see the [API reference](https://docs.attendee.dev/a
 
 You can also receive real-time notifications for participant events by setting up a webhook. For participant join/leave events, create a webhook in the dashboard and ensure the `participant_events.join_leave` trigger is enabled. For participant speech start/stop events, create a webhook in the dashboard and ensure the `participant_events.speech_start_stop` trigger is enabled.
 
-When a participant joins or leaves or starts or stops speaking, Attendee will send a webhook payload to your specified URL. For more details on the webhook payload, see the [webhooks documentation](https://docs.attendee.dev/guides/webhooks#payload-for-participantevents.joinleave-and-participantevents.speechstartstop-triggers).
+When a participant joins or leaves or starts or stops speaking, Attendee will send a webhook payload to your specified URL. For more details on the webhook payload, see the [webhooks documentation](https://docs.attendee.dev/guides/webhooks#payload-for-participantevents.joinleave-and-participantevents.speechstartstop).
 
