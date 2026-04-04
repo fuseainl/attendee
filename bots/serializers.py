@@ -980,7 +980,7 @@ WEBSOCKET_SETTINGS_SCHEMA = {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output for details on how to receive and send audio through the websocket connection.",
+                    "description": "The URL of the websocket to use for receiving meeting audio in real time and having the bot output audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio for details on how to receive and send audio through the websocket connection.",
                 },
                 "sample_rate": {
                     "type": "integer",
@@ -997,7 +997,7 @@ WEBSOCKET_SETTINGS_SCHEMA = {
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "The URL of the websocket to use for receiving per participant meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtime-audio-input-and-output for details on how to receive per participant audio through the websocket connection.",
+                    "description": "The URL of the websocket to use for receiving per participant meeting audio in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimeaudio#per-participant-audio-streaming for details on how to receive per participant audio through the websocket connection.",
                 },
                 "sample_rate": {
                     "type": "integer",
@@ -1053,7 +1053,7 @@ VOICE_AGENT_SETTINGS_SCHEMA = {
     "properties": {
         "url": {
             "type": "string",
-            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
+            "description": "URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead.",
         },
         "screenshare_url": {
             "type": "string",
@@ -1872,7 +1872,7 @@ class ParticipantEventSerializer(serializers.Serializer):
 
 
 class PatchBotVoiceAgentSettingsSerializer(serializers.Serializer):
-    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voice-agents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
+    url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text="URL of a website containing a voice agent that gets the user's responses from the microphone. The bot will load this website and stream its video and audio to the meeting. The audio from the meeting will be sent to website via the microphone. See https://docs.attendee.dev/guides/voiceagents for further details. The video will be displayed through the bot's webcam. To display the video through screenshare, use the screenshare_url parameter instead. Set to \"\" to turn off.")
     screenshare_url = serializers.CharField(required=False, allow_null=False, allow_blank=True, help_text='Behaves the same as url, but the video will be displayed through screenshare instead of the bot\'s webcam. Currently, you cannot provide both url and screenshare_url. Set to "" to turn off.')
 
     def validate_url(self, value):
