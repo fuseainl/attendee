@@ -160,12 +160,17 @@ class RealtimePerParticipantVideoFrameGenerator:
         viewable_sharing_user_list = self.get_meeting_sharing_controller_callback().GetViewableSharingUserList()
 
         if viewable_sharing_user_list:
-            sharing_source_info_list = self.get_meeting_sharing_controller_callback().GetSharingSourceInfoList(viewable_sharing_user_list[0])
-            if sharing_source_info_list:
-                active_sharer_id = sharing_source_info_list[0].userid
-                active_sharer_source_id = sharing_source_info_list[0].shareSourceID
+            for sharing_user_id in viewable_sharing_user_list:
+                sharing_source_info_list = self.get_meeting_sharing_controller_callback().GetSharingSourceInfoList(sharing_user_id)
 
-                desired_subscription_ids.add((active_sharer_id, active_sharer_source_id))
+                if not sharing_source_info_list:
+                    continue
+
+                for sharing_source_info in sharing_source_info_list:
+                    if len(desired_subscription_ids) >= self.max_subscriptions:
+                        break
+
+                    desired_subscription_ids.add((sharing_source_info.userid, sharing_source_info.shareSourceID))
 
         # Loop over the participant_ids ordered by how recently they were the active speaker
         # Add participants who have their video turned on to the available_subscriptions list
