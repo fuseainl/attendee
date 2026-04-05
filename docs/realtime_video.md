@@ -1,6 +1,6 @@
 # Realtime Video
 
-Attendee supports realtime per-participant video streaming through websockets. You can receive individual video frames for each participant in a meeting, from both webcam and screenshare.
+Attendee supports realtime per-participant video streaming through websockets. You can receive individual video frames for each participant in a meeting, from both webcam and screenshare. 
 
 ## Setup
 
@@ -59,6 +59,10 @@ On Google Meet and Teams, Attendee captures the video tracks that the meeting cl
 - **`gallery_view`** — You will receive video for all participants visible in the gallery.
 
 Screenshare video is always delivered, since the client always renders the screenshare video.
+
+## Code Samples
+
+See [here](https://github.com/attendee-labs/realtime-per-participant-video-and-audio-example) for an example program showing how use this feature.
 
 ## Retries on Websocket Connections
 
