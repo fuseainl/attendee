@@ -2,8 +2,8 @@ from dataclasses import dataclass
 
 RESOLUTION_PARAMS = {
     "360p": {"width": 640, "height": 360, "framerate": 2.0, "jpeg_quality": 70},
-    "720p": {"width": 1280, "height": 720, "framerate": 1.0, "jpeg_quality": 30},
-    "1080p": {"width": 1920, "height": 1080, "framerate": 1.0, "jpeg_quality": 10},
+    "720p": {"width": 1280, "height": 720, "framerate": 1.0, "jpeg_quality": 60},
+    "1080p": {"width": 1920, "height": 1080, "framerate": 1.0, "jpeg_quality": 50},
 }
 
 
