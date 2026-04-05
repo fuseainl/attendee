@@ -12,11 +12,15 @@ To enable realtime video streaming, configure the `websocket_settings.per_partic
   "bot_name": "Video Bot",
   "websocket_settings": {
     "per_participant_video": {
-      "url": "wss://your-server.com/attendee-websocket"
+      "url": "wss://your-server.com/attendee-websocket",
+      "webcam_resolution": "360p",
+      "screenshare_resolution": "720p"
     }
   }
 }
 ```
+
+You can configure the resolution independently for each video source using `webcam_resolution` and `screenshare_resolution`. Supported values are `"360p"`, `"720p"`, `"1080p"`, and `"none"` (to disable that source). Both default to `"360p"`.
 
 ## Websocket Message Format
 
@@ -35,7 +39,7 @@ Your WebSocket server will receive messages in this format.
 }
 ```
 
-The `frame` field is a base64-encoded JPEG image with 360p resolution (640x360). The `source` field is either `"webcam"` or `"screenshare"`. Frames are delivered at 2 FPS.
+The `frame` field is a base64-encoded JPEG image at the resolution you configured for that source. The `source` field is either `"webcam"` or `"screenshare"`. Frames are delivered at 2 FPS for 360p, or 1 FPS for 720p and 1080p.
 
 To resolve a `participant_uuid` to a full participant object, subscribe to the `participant_events.join_leave` webhook event which will send the full participant object when they join the meeting.
 

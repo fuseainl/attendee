@@ -231,7 +231,7 @@ class RealtimePerParticipantVideoFrameGenerator:
     @staticmethod
     def _scale_i420_to_jpeg(data, target_width: int, target_height: int, jpeg_quality: int) -> bytes | None:
         """
-        Convert a Zoom raw I420 frame to a letterboxed 360p JPEG.
+        Convert a Zoom raw I420 frame to a letterboxed JPEG.
 
         `data` is a Zoom raw video frame object with:
             - GetStreamWidth()
