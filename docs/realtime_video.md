@@ -66,4 +66,4 @@ Attendee will automatically retry to connect to your websocket server if the con
 
 ## Error Messages
 
-Currently, we don't give any feedback on errors with the websocket connection or invalid message formats. We plan to improve this in the future.
+Currently, we don't give any feedback on errors with the websocket connection. We plan to improve this in the future.
