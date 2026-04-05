@@ -2570,13 +2570,33 @@ components:
                 url:
                   type: string
                   description: The URL of the websocket to use for receiving per-participant
-                    video and screenshare in real time. It must start with
-                    wss://. See https://docs.attendee.dev/guides/realtimevideo
-                    for details on how to receive video through the websocket
-                    connection.
-              required:
-              - url
-              additionalProperties: false
+                    video and screenshare in real time. It must start with wss://.
+                    See https://docs.attendee.dev/guides/realtimevideo for details
+                    on how to receive video through the websocket connection.
+                webcam_resolution:
+                  type: string
+                  enum:
+                  - none
+                  - 360p
+                  - 720p
+                  - 1080p
+                  default: 360p
+                  description: 'Resolution for per-participant webcam video. ''none''
+                    disables webcam streaming. Framerate and JPEG quality are determined
+                    by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60),
+                    1080p (1fps, quality 50). Defaults to ''360p''.'
+                screenshare_resolution:
+                  type: string
+                  enum:
+                  - none
+                  - 360p
+                  - 720p
+                  - 1080p
+                  default: 360p
+                  description: 'Resolution for per-participant screenshare video.
+                    ''none'' disables screenshare streaming. Framerate and JPEG quality
+                    are determined by resolution: 360p (2fps, quality 70), 720p (1fps,
+                    quality 60), 1080p (1fps, quality 50). Defaults to ''360p''.'
           required: []
           additionalProperties: false
           description: 'The websocket settings for the bot, e.g. {''audio'': {''url'':
