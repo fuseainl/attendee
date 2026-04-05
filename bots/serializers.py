@@ -1016,6 +1016,18 @@ WEBSOCKET_SETTINGS_SCHEMA = {
                     "type": "string",
                     "description": "The URL of the websocket to use for receiving per-participant video and screenshare in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimevideo for details on how to receive video through the websocket connection.",
                 },
+                "webcam_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 30), 1080p (1fps, quality 10). Defaults to '360p'.",
+                },
+                "screenshare_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 30), 1080p (1fps, quality 10). Defaults to '360p'.",
+                },
             },
             "required": ["url"],
             "additionalProperties": False,
@@ -1372,6 +1384,10 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
                 if audio_url:
                     if not audio_url.lower().startswith("wss://"):
                         raise serializers.ValidationError({audio_type: {"url": "URL must start with wss://"}})
+
+        # Make sure we haven't hit the case where both webcam and screenshare are disabled
+        if value.get("per_participant_video", {}).get("url") and value.get("per_participant_video", {}).get("webcam_resolution") == "none" and value.get("per_participant_video", {}).get("screenshare_resolution") == "none":
+            raise serializers.ValidationError({"per_participant_video": "At least one of webcam_resolution or screenshare_resolution must be set to a non-none value."})
 
         return value
 

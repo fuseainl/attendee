@@ -56,6 +56,10 @@ from bots.models import (
     Utterance,
     WebhookTriggerTypes,
 )
+from bots.per_participant_realtime_video_configuration import (
+    PerParticipantRealtimeVideoConfiguration,
+    PerParticipantRealtimeVideoSourceConfiguration,
+)
 from bots.webhook_payloads import chat_message_webhook_payload, participant_event_webhook_payload, utterance_webhook_payload
 from bots.webhook_utils import trigger_webhook
 from bots.websocket_payloads import mixed_audio_websocket_payload, per_participant_audio_websocket_payload, per_participant_video_websocket_payload
@@ -195,6 +199,7 @@ class BotController:
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
+            per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             google_meet_closed_captions_language=self.bot_in_db.transcription_settings.google_meet_closed_captions_language(),
@@ -229,6 +234,7 @@ class BotController:
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
+            per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             teams_closed_captions_language=self.bot_in_db.transcription_settings.teams_closed_captions_language(),
@@ -300,6 +306,7 @@ class BotController:
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
+            per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
             add_encoded_mp4_chunk_callback=None,
             recording_view=self.bot_in_db.recording_view(),
             should_create_debug_recording=self.bot_in_db.create_debug_recording(),
@@ -338,6 +345,7 @@ class BotController:
             upsert_chat_message_callback=self.on_new_chat_message,
             add_participant_event_callback=self.on_new_participant_event,
             automatic_leave_configuration=self.automatic_leave_configuration,
+            per_participant_realtime_video_configuration=self.per_participant_realtime_video_configuration,
             video_frame_size=self.bot_in_db.recording_dimensions(),
             zoom_tokens=zoom_tokens,
             zoom_meeting_settings=self.bot_in_db.zoom_meeting_settings(),
@@ -676,6 +684,11 @@ class BotController:
         self.pubsub_channel = f"bot_{self.bot_in_db.id}"
 
         self.automatic_leave_configuration = AutomaticLeaveConfiguration(**self.bot_in_db.automatic_leave_settings())
+
+        self.per_participant_realtime_video_configuration = PerParticipantRealtimeVideoConfiguration(
+            webcam_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=self.bot_in_db.websocket_per_participant_video_webcam_resolution()),
+            screenshare_configuration=PerParticipantRealtimeVideoSourceConfiguration(resolution=self.bot_in_db.websocket_per_participant_video_screenshare_resolution()),
+        )
 
         self.pipeline_configuration = self.get_pipeline_configuration()
 

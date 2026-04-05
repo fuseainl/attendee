@@ -22,6 +22,7 @@ from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.automatic_leave_utils import participant_is_another_bot
 from bots.bot_adapter import BotAdapter
 from bots.models import ParticipantEventTypes, RecordingViews
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 from bots.utils import half_ceil, scale_i420
 
 from .debug_screen_recorder import DebugScreenRecorder
@@ -47,6 +48,7 @@ class WebBotAdapter(BotAdapter):
         upsert_chat_message_callback,
         add_participant_event_callback,
         automatic_leave_configuration: AutomaticLeaveConfiguration,
+        per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration,
         recording_view: RecordingViews,
         should_create_debug_recording: bool,
         start_recording_screen_callback,
@@ -103,6 +105,7 @@ class WebBotAdapter(BotAdapter):
         self.video_frame_ticker = 0
 
         self.automatic_leave_configuration = automatic_leave_configuration
+        self.per_participant_realtime_video_configuration = per_participant_realtime_video_configuration
 
         self.should_create_debug_recording = should_create_debug_recording
         self.debug_screen_recorder = None
@@ -617,7 +620,7 @@ class WebBotAdapter(BotAdapter):
         self.driver = webdriver.Chrome(options=options, service=Service(executable_path="/usr/local/bin/chromedriver"))
         logger.info(f"web driver server initialized at port {self.driver.service.port}")
 
-        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
+        initial_data_code = f"window.initialData = {{websocketPort: {self.websocket_port}, videoFrameWidth: {self.video_frame_size[0]}, videoFrameHeight: {self.video_frame_size[1]}, botName: {json.dumps(self.display_name)}, addClickRipple: {'true' if self.should_create_debug_recording else 'false'}, recordingView: '{self.recording_view}', sendMixedAudio: {'true' if self.add_mixed_audio_chunk_callback else 'false'}, sendPerParticipantAudio: {'true' if self.add_audio_chunk_callback else 'false'}, perParticipantRealtimeVideoConfiguration: {json.dumps(self.per_participant_realtime_video_configuration.to_dict())}, sendPerParticipantVideo: {'true' if self.add_per_participant_video_frame_callback else 'false'}, collectCaptions: {'true' if self.upsert_caption_callback else 'false'}, recordParticipantSpeechStartStopEvents: {'true' if self.record_participant_speech_start_stop_events else 'false'}}}"
 
         # Define the CDN libraries needed
         CDN_LIBRARIES = ["https://cdnjs.cloudflare.com/ajax/libs/protobufjs/7.4.0/protobuf.min.js", "https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"]

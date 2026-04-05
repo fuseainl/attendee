@@ -894,6 +894,16 @@ class Bot(models.Model):
         websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
         return websocket_per_participant_video_settings.get("url")
 
+    def websocket_per_participant_video_webcam_resolution(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
+        return websocket_per_participant_video_settings.get("webcam_resolution", "360p")
+
+    def websocket_per_participant_video_screenshare_resolution(self):
+        websocket_settings = self.settings.get("websocket_settings") or {}
+        websocket_per_participant_video_settings = websocket_settings.get("per_participant_video") or {}
+        return websocket_per_participant_video_settings.get("screenshare_resolution", "360p")
+
     def voice_agent_url(self):
         voice_agent_settings = self.settings.get("voice_agent_settings", {}) or {}
         return voice_agent_settings.get("url", None) or voice_agent_settings.get("screenshare_url", None)

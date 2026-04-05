@@ -16,6 +16,12 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         if (!participantId)
             return;
 
+        const videoConfig = window.initialData.perParticipantRealtimeVideoConfiguration;
+        const sourceConfig = isScreenShare ? videoConfig.screenshare_configuration : videoConfig.webcam_configuration;
+
+        if (!sourceConfig.enabled)
+            return;
+
         videoTrackManager.upsertVideoTrack(track, firstStreamId, isScreenShare);
         
         track.addEventListener("ended", () => {
@@ -26,13 +32,13 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         const processor = new MediaStreamTrackProcessor({ track });
         const reader = processor.readable.getReader();
 
-        const desiredFPS = 2;
+        const desiredFPS = sourceConfig.framerate;
         const frameIntervalMs = 1000 / desiredFPS;
         let lastSentAt = 0;
 
-        const targetWidth = 640;
-        const targetHeight = 360;
-        const jpegQuality = 0.7;
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = sourceConfig.jpeg_quality / 100;
         const canvas = document.createElement("canvas");
         canvas.width = targetWidth;
         canvas.height = targetHeight;

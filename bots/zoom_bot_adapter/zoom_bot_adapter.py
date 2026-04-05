@@ -24,6 +24,7 @@ from gi.repository import GLib
 
 from bots.automatic_leave_configuration import AutomaticLeaveConfiguration
 from bots.models import ParticipantEventTypes
+from bots.per_participant_realtime_video_configuration import PerParticipantRealtimeVideoConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class ZoomBotAdapter(BotAdapter):
         upsert_chat_message_callback,
         add_participant_event_callback,
         automatic_leave_configuration: AutomaticLeaveConfiguration,
+        per_participant_realtime_video_configuration: PerParticipantRealtimeVideoConfiguration,
         video_frame_size: tuple[int, int],
         zoom_tokens: dict,
         zoom_meeting_settings: dict,
@@ -163,6 +165,7 @@ class ZoomBotAdapter(BotAdapter):
                 get_participants_ctrl_callback=self.get_participants_ctrl,
                 get_meeting_sharing_controller_callback=self.get_meeting_sharing_controller,
                 get_recording_is_paused_callback=self.get_recording_is_paused,
+                per_participant_realtime_video_configuration=per_participant_realtime_video_configuration,
             )
         else:
             self.realtime_per_participant_video_frame_generator = None

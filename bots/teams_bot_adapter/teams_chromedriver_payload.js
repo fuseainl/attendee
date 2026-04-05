@@ -6,23 +6,30 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
             return;
 
         const mappingManager = virtualStreamToPhysicalStreamMappingManager;
+        const videoConfig = window.initialData.perParticipantRealtimeVideoConfiguration;
+
+        function createCanvasForSource(sourceConfig) {
+            const canvas = document.createElement("canvas");
+            canvas.width = sourceConfig.width;
+            canvas.height = sourceConfig.height;
+            const ctx = canvas.getContext("2d");
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            return { canvas, ctx };
+        }
+
+        const webcamCanvasContext = videoConfig.webcam_configuration.enabled ? createCanvasForSource(videoConfig.webcam_configuration) : null;
+        const screenshareCanvasContext = videoConfig.screenshare_configuration.enabled ? createCanvasForSource(videoConfig.screenshare_configuration) : null;
+
+        const maxFramerate = Math.max(videoConfig.webcam_configuration.framerate, videoConfig.screenshare_configuration.framerate);
+        if (maxFramerate <= 0)
+            return;
+        const minFrameIntervalMs = 1000 / maxFramerate;
 
         const processor = new MediaStreamTrackProcessor({ track });
         const reader = processor.readable.getReader();
 
-        const desiredFPS = 2;
-        const frameIntervalMs = 1000 / desiredFPS;
         let lastSentAt = 0;
-
-        const targetWidth = 640;
-        const targetHeight = 360;
-        const jpegQuality = 0.7;
-        const canvas = document.createElement("canvas");
-        canvas.width = targetWidth;
-        canvas.height = targetHeight;
-        const ctx = canvas.getContext("2d");
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
 
         while (true) {
             const { value: frame, done } = await reader.read();
@@ -31,9 +38,7 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
 
             try {
                 const now = performance.now();
-                const shouldSend = now - lastSentAt >= frameIntervalMs;
-
-                if (!shouldSend) continue;
+                if (now - lastSentAt < minFrameIntervalMs) continue;
 
                 const physicalStream = mappingManager.physicalStreamsByServerStreamId.get(firstStreamId);
                 const clientStreamId = physicalStream?.clientStreamId;
@@ -47,6 +52,17 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
         
                 const participantId = virtualStream.participant.id;
                 const isScreenShare = !!virtualStream.isScreenShare;
+
+                const sourceConfig = isScreenShare ? videoConfig.screenshare_configuration : videoConfig.webcam_configuration;
+                if (!sourceConfig.enabled) continue;
+
+                if (now - lastSentAt < 1000 / sourceConfig.framerate) continue;
+
+                const { canvas, ctx } = isScreenShare ? screenshareCanvasContext : webcamCanvasContext;
+
+                const targetWidth = sourceConfig.width;
+                const targetHeight = sourceConfig.height;
+                const jpegQuality = sourceConfig.jpeg_quality / 100;
 
                 const srcW = frame.displayWidth;
                 const srcH = frame.displayHeight;
