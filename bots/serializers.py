@@ -1009,6 +1009,29 @@ WEBSOCKET_SETTINGS_SCHEMA = {
             "required": ["url"],
             "additionalProperties": False,
         },
+        "per_participant_video": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the websocket to use for receiving per-participant video and screenshare in real time. It must start with wss://. See https://docs.attendee.dev/guides/realtimevideo for details on how to receive video through the websocket connection.",
+                },
+                "webcam_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant webcam video. 'none' disables webcam streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
+                },
+                "screenshare_resolution": {
+                    "type": "string",
+                    "enum": ["none", "360p", "720p", "1080p"],
+                    "default": "360p",
+                    "description": "Resolution for per-participant screenshare video. 'none' disables screenshare streaming. Framerate and JPEG quality are determined by resolution: 360p (2fps, quality 70), 720p (1fps, quality 60), 1080p (1fps, quality 50). Defaults to '360p'.",
+                },
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -1355,12 +1378,16 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             raise serializers.ValidationError(e.message)
 
         # Validate websocket URL format if provided
-        for audio_type in ["audio", "per_participant_audio"]:
+        for audio_type in ["audio", "per_participant_audio", "per_participant_video"]:
             if audio_type in value and value.get(audio_type):
                 audio_url = value.get(audio_type, {}).get("url")
                 if audio_url:
                     if not audio_url.lower().startswith("wss://"):
                         raise serializers.ValidationError({audio_type: {"url": "URL must start with wss://"}})
+
+        # Make sure we haven't hit the case where both webcam and screenshare are disabled
+        if value.get("per_participant_video", {}).get("url") and value.get("per_participant_video", {}).get("webcam_resolution") == "none" and value.get("per_participant_video", {}).get("screenshare_resolution") == "none":
+            raise serializers.ValidationError({"per_participant_video": "At least one of webcam_resolution or screenshare_resolution must be set to a non-none value."})
 
         return value
 
