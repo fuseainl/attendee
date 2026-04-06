@@ -315,19 +315,22 @@ CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(","
 GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
 
 # Content Security Policy
-CONTENT_SECURITY_POLICY = {
-    "DIRECTIVES": {
-        "default-src": ["'self'"],
-        "script-src": ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.jsdelivr.net"],
-        "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
-        "font-src": ["'self'", "https://cdn.jsdelivr.net"],
-        "img-src": ["'self'", "data:"],
-        "connect-src": ["'self'"],
-        "frame-src": ["https://www.loom.com"],
-        "base-uri": ["'self'"],
-        "form-action": ["'self'"],
-    },
-}
+if os.getenv("ENABLE_CSP", "false") == "true":
+    _csp_media_src = [d for d in os.getenv("CSP_MEDIA_SRC", "").split(",") if d]
+    CONTENT_SECURITY_POLICY = {
+        "DIRECTIVES": {
+            "default-src": ["'self'"],
+            "script-src": ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.jsdelivr.net"],
+            "style-src": ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+            "font-src": ["'self'", "https://cdn.jsdelivr.net"],
+            "img-src": ["'self'", "data:"] + _csp_media_src,
+            "media-src": ["'self'"] + _csp_media_src,
+            "connect-src": ["'self'", "https://cdn.jsdelivr.net"],
+            "frame-src": ["https://www.loom.com"],
+            "base-uri": ["'self'"],
+            "form-action": ["'self'"],
+        },
+    }
 
 # Initialize Sentry (only if SENTRY_DSN is set)
 init_sentry()
