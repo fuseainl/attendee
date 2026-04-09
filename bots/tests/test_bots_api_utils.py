@@ -260,7 +260,7 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(error)
         bot_image_errors = error["bot_image"]["non_field_errors"]
         error_message = str(bot_image_errors[0])
-        self.assertEqual(error_message, "Data is not a valid image/png image.")
+        self.assertEqual(error_message, "Data is not a valid png image.")
 
     def test_create_bot_with_invalid_jpeg_image(self):
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "bot_image": {"type": "image/jpeg", "data": "iVBORw0KGgoAAAANSUhEUgAAAAE="}}, source=BotCreationSource.API, project=self.project)
@@ -269,7 +269,7 @@ class TestCreateBot(TestCase):
         self.assertIsNotNone(error)
         bot_image_errors = error["bot_image"]["non_field_errors"]
         error_message = str(bot_image_errors[0])
-        self.assertEqual(error_message, "Data is not a valid image/jpeg image.")
+        self.assertEqual(error_message, "Data is not a valid jpeg image.")
 
     def test_with_too_many_webhooks(self):
         bot, error = create_bot(data={"meeting_url": "https://meet.google.com/abc-defg-hij", "bot_name": "Test Bot", "webhooks": [{"url": "https://example.com", "triggers": ["bot.state_change"]}, {"url": "https://example2.com", "triggers": ["bot.state_change"]}, {"url": "https://example3.com", "triggers": ["bot.state_change"]}]}, source=BotCreationSource.API, project=self.project)

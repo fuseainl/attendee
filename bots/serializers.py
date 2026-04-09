@@ -571,7 +571,8 @@ class BotImageSerializer(serializers.Serializer):
 
         content_type = data.get("type", "")
         if not is_valid_image(image_data, content_type):
-            raise serializers.ValidationError(f"Data is not a valid {content_type} image.")
+            humanized_content_type = content_type.split("/")[1] if "/" in content_type else content_type
+            raise serializers.ValidationError(f"Data is not a valid {humanized_content_type} image.")
 
         data["decoded_data"] = image_data
         return data
