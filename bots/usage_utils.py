@@ -67,7 +67,7 @@ def _build_week_buckets(now):
         microsecond=0,
     )
     labels = [d.strftime("%b %d") for d in bucket_keys]
-    subtitle = "Bot activity over the last 12 weeks (by week start)."
+    subtitle = "Bot activity over the last 12 weeks."
 
     date_ranges = []
     for monday in bucket_keys:
@@ -86,7 +86,7 @@ def _build_week_buckets(now):
 
 def _build_day_buckets(now):
     today = now.date()
-    bucket_keys = [today - timedelta(days=i) for i in range(29, -1, -1)]
+    bucket_keys = [today - timedelta(days=i) for i in range(13, -1, -1)]
     start_date = now.replace(
         year=bucket_keys[0].year,
         month=bucket_keys[0].month,
@@ -97,7 +97,7 @@ def _build_day_buckets(now):
         microsecond=0,
     )
     labels = [d.strftime("%b %d") for d in bucket_keys]
-    subtitle = "Bot activity over the last 30 days."
+    subtitle = "Bot activity over the last 14 days."
 
     date_ranges = [(d.isoformat(), d.isoformat()) for d in bucket_keys]
 
