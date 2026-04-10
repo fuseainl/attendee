@@ -2,9 +2,46 @@
 
 {% block content %}
 <div class="container mt-4">
-    <h2>Usage</h2>
-    
+    <div class="d-flex justify-content-between align-items-center mb-1">
+        <h2 class="mb-0">Usage</h2>
+        <div class="btn-group btn-group-sm">
+            <a href="?interval=months" class="btn {% if interval == 'months' %}btn-primary{% else %}btn-outline-primary{% endif %}">Months</a>
+            <a href="?interval=weeks" class="btn {% if interval == 'weeks' %}btn-primary{% else %}btn-outline-primary{% endif %}">Weeks</a>
+            <a href="?interval=days" class="btn {% if interval == 'days' %}btn-primary{% else %}btn-outline-primary{% endif %}">Days</a>
+        </div>
+    </div>
+    <p class="text-muted">{{ subtitle }}</p>
+
+    <div class="card">
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-bordered mb-0" style="table-layout: fixed; min-width: {% if interval == 'days' %}1800{% else %}900{% endif %}px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 160px; position: sticky; left: 0; z-index: 1; background: #f8f9fa;"></th>
+                            {% for label in column_labels %}
+                            <th class="text-center small text-muted" style="background: #f8f9fa; font-weight: 600;">{{ label }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in usage_rows %}
+                        <tr{% if row.label == "Total" %} style="border-top: 2px solid #dee2e6;"{% endif %}>
+                            <td class="fw-semibold small" style="position: sticky; left: 0; z-index: 1; background: #f8f9fa; vertical-align: middle;">{{ row.label }}</td>
+                            {% for cell in row.cells %}
+                            <td class="text-center p-0" style="vertical-align: middle;{% if cell.bg %} background: {{ cell.bg }};{% endif %}">
+                                <a href="{% url 'projects:project-bots' project.object_id %}{{ cell.link }}"
+                                   target="_blank"
+                                   class="d-block text-decoration-none fw-semibold{% if cell.value == 0 %} text-muted{% else %} text-dark{% endif %}"
+                                   style="font-size: 0.9rem; padding: .5rem;">{{ cell.value }}</a>
+                            </td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 </div>
-
-
 {% endblock %}
