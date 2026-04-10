@@ -1143,6 +1143,12 @@ class ResendWebhookDeliveryAttemptView(LoginRequiredMixin, View):
         )
 
 
+class ProjectUsageView(AdminRequiredMixin, ProjectUrlContextMixin, View):
+    def get(self, request, object_id):
+        project = get_project_for_user(user=request.user, project_object_id=object_id)
+        context = self.get_project_context(object_id, project)
+        return render(request, "projects/project_usage.html", context)
+
 class ProjectBillingView(AdminRequiredMixin, ProjectUrlContextMixin, ListView):
     template_name = "projects/project_billing.html"
     context_object_name = "transactions"
