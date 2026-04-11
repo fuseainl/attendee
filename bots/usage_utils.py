@@ -1,11 +1,12 @@
 import calendar as cal_module
 from datetime import date, timedelta
 
-from django.db.models import Count
-from django.db.models.functions import ExtractMonth, ExtractYear, TruncDate
+from django.db.models import Count, IntegerField, Sum
+from django.db.models.fields.json import KeyTextTransform
+from django.db.models.functions import Cast, ExtractMonth, ExtractYear, TruncDate
 from django.utils import timezone
 
-from .models import Bot, BotEventTypes
+from .models import Bot, BotEvent, BotEventTypes
 
 
 def _build_month_buckets(now):
@@ -110,7 +111,53 @@ def _build_day_buckets(now):
     return bucket_keys, start_date, labels, subtitle, date_ranges, counts_by_bucket
 
 
-def _build_heatmap_row(label, values, color, date_ranges, category_params):
+def _format_duration(seconds):
+    if seconds == 0:
+        return "0m"
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    if hours > 0 and minutes > 0:
+        return f"{hours}h {minutes}m"
+    if hours > 0:
+        return f"{hours}h"
+    return f"{minutes}m"
+
+
+_DURATION_SUM = Sum(Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=IntegerField()))
+
+
+def _build_duration_aggregator(interval):
+    if interval == "months":
+
+        def durations_by_bucket(event_qs):
+            result = {}
+            for row in event_qs.annotate(y=ExtractYear("created_at"), m=ExtractMonth("created_at")).values("y", "m").annotate(total=_DURATION_SUM):
+                result[(row["y"], row["m"])] = row["total"] or 0
+            return result
+
+        return durations_by_bucket
+
+    if interval == "weeks":
+
+        def durations_by_bucket(event_qs):
+            result = {}
+            for row in event_qs.annotate(d=TruncDate("created_at")).values("d").annotate(total=_DURATION_SUM):
+                monday = row["d"] - timedelta(days=row["d"].weekday())
+                result[monday] = result.get(monday, 0) + (row["total"] or 0)
+            return result
+
+        return durations_by_bucket
+
+    def durations_by_bucket(event_qs):
+        result = {}
+        for row in event_qs.annotate(d=TruncDate("created_at")).values("d").annotate(total=_DURATION_SUM):
+            result[row["d"]] = row["total"] or 0
+        return result
+
+    return durations_by_bucket
+
+
+def _build_heatmap_row(label, values, color, date_ranges, category_params, formatter=None):
     max_val = max(values) if values else 0
     cells = []
     for val, (start_str, end_str) in zip(values, date_ranges):
@@ -119,7 +166,8 @@ def _build_heatmap_row(label, values, color, date_ranges, category_params):
         qs = f"?start_date={start_str}&end_date={end_str}"
         if category_params:
             qs += f"&{category_params}"
-        cells.append({"value": val, "bg": bg, "link": qs})
+        display = formatter(val) if formatter else val
+        cells.append({"value": val, "display": display, "bg": bg, "link": qs})
     return {"label": label, "cells": cells}
 
 
@@ -131,14 +179,16 @@ CATEGORY_FILTERS = {
 }
 
 
-def get_usage_data(project, interval):
+def get_usage_data(project, interval, measure="count"):
     """
     Return the template context needed to render the usage heat map.
 
-    Returns a dict with keys: column_labels, usage_rows, interval, subtitle.
+    Returns a dict with keys: column_labels, usage_rows, interval, measure, subtitle.
     """
     if interval not in ("months", "weeks", "days"):
         interval = "months"
+    if measure not in ("count", "time"):
+        measure = "count"
 
     now = timezone.now()
     builders = {
@@ -148,30 +198,42 @@ def get_usage_data(project, interval):
     }
     bucket_keys, start_date, labels, subtitle, date_ranges, counts_by_bucket = builders[interval](now)
 
-    base_qs = Bot.objects.filter(project=project, created_at__gte=start_date)
-    successful = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.POST_PROCESSING_COMPLETED))
-    fatal_error = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
-    could_not_join = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.COULD_NOT_JOIN))
+    if measure == "time":
+        durations_by_bucket = _build_duration_aggregator(interval)
+        event_qs = BotEvent.objects.filter(
+            bot__project=project,
+            bot__created_at__gte=start_date,
+            event_type=BotEventTypes.POST_PROCESSING_COMPLETED,
+        )
+        total_durations = durations_by_bucket(event_qs)
+        total_values = [total_durations.get(key, 0) for key in bucket_keys]
+        rows = [_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration)]
+    else:
+        base_qs = Bot.objects.filter(project=project, created_at__gte=start_date)
+        successful = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.POST_PROCESSING_COMPLETED))
+        fatal_error = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+        could_not_join = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.COULD_NOT_JOIN))
 
-    categories = [
-        ("Successful", successful, "40, 167, 69"),
-        ("Could Not Join", could_not_join, "255, 193, 7"),
-        ("Unexpected Error", fatal_error, "220, 53, 69"),
-    ]
+        categories = [
+            ("Successful", successful, "40, 167, 69"),
+            ("Could Not Join", could_not_join, "255, 193, 7"),
+            ("Unexpected Error", fatal_error, "220, 53, 69"),
+        ]
 
-    rows = []
-    total_values = [0] * len(bucket_keys)
-    for label_text, data, color in categories:
-        values = [data.get(key, 0) for key in bucket_keys]
-        for i, v in enumerate(values):
-            total_values[i] += v
-        rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text]))
+        rows = []
+        total_values = [0] * len(bucket_keys)
+        for label_text, data, color in categories:
+            values = [data.get(key, 0) for key in bucket_keys]
+            for i, v in enumerate(values):
+                total_values[i] += v
+            rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text]))
 
-    rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"]))
+        rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"]))
 
     return {
         "column_labels": labels,
         "usage_rows": rows,
         "interval": interval,
+        "measure": measure,
         "subtitle": subtitle,
     }
