@@ -123,6 +123,14 @@ def _format_duration(seconds):
     return f"{minutes}m"
 
 
+def _format_percent(value):
+    if value == 0:
+        return "0%"
+    if value == 100:
+        return "100%"
+    return f"{value:.1f}%"
+
+
 _DURATION_SUM = Sum(Cast(KeyTextTransform("bot_duration_seconds", "metadata"), output_field=IntegerField()))
 
 
@@ -187,7 +195,7 @@ def get_usage_data(project, interval, measure="count"):
     """
     if interval not in ("months", "weeks", "days"):
         interval = "months"
-    if measure not in ("count", "time"):
+    if measure not in ("count", "time", "percent"):
         measure = "count"
 
     now = timezone.now()
@@ -222,13 +230,22 @@ def get_usage_data(project, interval, measure="count"):
 
         rows = []
         total_values = [0] * len(bucket_keys)
+        category_values = []
         for label_text, data, color in categories:
             values = [data.get(key, 0) for key in bucket_keys]
             for i, v in enumerate(values):
                 total_values[i] += v
-            rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text]))
+            category_values.append((label_text, values, color))
 
-        rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"]))
+        if measure == "percent":
+            for label_text, values, color in category_values:
+                pct_values = [round(v / total_values[i] * 100, 1) if total_values[i] > 0 else 0 for i, v in enumerate(values)]
+                rows.append(_build_heatmap_row(label_text, pct_values, color, date_ranges, CATEGORY_FILTERS[label_text], formatter=_format_percent))
+            rows.append(_build_heatmap_row("Total", [100.0 if t > 0 else 0 for t in total_values], "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_percent))
+        else:
+            for label_text, values, color in category_values:
+                rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text]))
+            rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"]))
 
     return {
         "column_labels": labels,
