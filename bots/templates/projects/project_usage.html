@@ -42,6 +42,7 @@
                             <td class="text-center p-0" style="vertical-align: middle;{% if cell.bg %} background: {{ cell.bg }};{% endif %}">
                                 <a href="{% url 'projects:project-bots' project.object_id %}{{ cell.link }}"
                                    target="_blank"
+                                   data-value="{{ cell.value }}"
                                    class="d-block text-decoration-none fw-semibold{% if cell.value == 0 %} text-muted{% else %} text-dark{% endif %}"
                                    style="font-size: 0.9rem; padding: .5rem;">{{ cell.display }}</a>
                             </td>
@@ -53,5 +54,43 @@
             </div>
         </div>
     </div>
+    <div class="mt-2 text-end">
+        <button id="copy-clipboard-btn" class="btn btn-sm btn-outline-secondary" onclick="copyTableTSV()" title="Copy to clipboard">
+            <i id="clipboard-icon" class="bi bi-clipboard me-1"></i>
+            <i id="clipboard-check-icon" class="bi bi-clipboard-check me-1" style="display:none;"></i>
+            Export
+        </button>
+    </div>
 </div>
+{{ clipboard_dates|json_script:"clipboard-dates" }}
+<script>
+function copyTableTSV() {
+    var dates = JSON.parse(document.getElementById('clipboard-dates').textContent);
+    var tableRows = document.querySelectorAll('table tbody tr');
+    var headers = ['Date'];
+    var seriesData = [];
+    tableRows.forEach(function(row) {
+        var label = row.querySelector('td').textContent.trim();
+        headers.push(label);
+        var values = [];
+        row.querySelectorAll('td:not(:first-child) a').forEach(function(a) {
+            values.push(a.getAttribute('data-value'));
+        });
+        seriesData.push(values);
+    });
+    var lines = [headers.join('\t')];
+    dates.forEach(function(d, i) {
+        var row = [d];
+        seriesData.forEach(function(series) { row.push(series[i]); });
+        lines.push(row.join('\t'));
+    });
+    navigator.clipboard.writeText(lines.join('\n')).then(function() {
+        var icon = document.getElementById('clipboard-icon');
+        var check = document.getElementById('clipboard-check-icon');
+        icon.style.display = 'none';
+        check.style.display = 'inline';
+        setTimeout(function() { icon.style.display = 'inline'; check.style.display = 'none'; }, 2000);
+    });
+}
+</script>
 {% endblock %}

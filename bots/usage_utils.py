@@ -247,10 +247,13 @@ def get_usage_data(project, interval, measure="count"):
                 rows.append(_build_heatmap_row(label_text, values, color, date_ranges, CATEGORY_FILTERS[label_text]))
             rows.append(_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"]))
 
+    clipboard_dates = [dr[0] for dr in date_ranges]
+
     return {
         "column_labels": labels,
         "usage_rows": rows,
         "interval": interval,
         "measure": measure,
         "subtitle": subtitle,
+        "clipboard_dates": clipboard_dates,
     }
