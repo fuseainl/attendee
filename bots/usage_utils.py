@@ -210,9 +210,9 @@ def get_usage_data(project, interval, measure="count"):
         rows = [_build_heatmap_row("Total", total_values, "13, 110, 253", date_ranges, CATEGORY_FILTERS["Total"], formatter=_format_duration)]
     else:
         base_qs = Bot.objects.filter(project=project, created_at__gte=start_date)
-        successful = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.POST_PROCESSING_COMPLETED))
         fatal_error = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.FATAL_ERROR))
-        could_not_join = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.COULD_NOT_JOIN))
+        successful = counts_by_bucket(base_qs.filter(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
+        could_not_join = counts_by_bucket(base_qs.exclude(bot_events__event_type=BotEventTypes.BOT_JOINED_MEETING).exclude(bot_events__event_type=BotEventTypes.FATAL_ERROR))
 
         categories = [
             ("Successful", successful, "40, 167, 69"),
