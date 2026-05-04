@@ -62,7 +62,7 @@ class Project(models.Model):
         return self.name
 
 
-# This model is deprecated in favor of BotLoginGroup. Kept here temporarily to maintain backwards compatibility.
+# This model is deprecated in favor of BotLoginGroup. Kept here to maintain backwards compatibility.
 class GoogleMeetBotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="google_meet_bot_login_groups")
@@ -82,7 +82,7 @@ class GoogleMeetBotLoginGroup(models.Model):
         return f"{self.project.name} - {self.object_id}"
 
 
-# This model is deprecated in favor of BotLogin. Kept here temporarily to maintain backwards compatibility.
+# This model is deprecated in favor of BotLogin. Kept here to maintain backwards compatibility.
 class GoogleMeetBotLogin(models.Model):
     OBJECT_ID_PREFIX = "gbl_"
     group = models.ForeignKey(GoogleMeetBotLoginGroup, on_delete=models.CASCADE, related_name="google_meet_bot_logins")
