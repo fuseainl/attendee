@@ -23,7 +23,7 @@
                                 data-platform-label="Teams"
                                 data-bs-toggle="modal"
                                 data-bs-target="#editBotLoginGroupModal">
-                            Edit Group Name
+                            Edit Group
                         </button>
                         <button type="button"
                                 class="btn btn-outline-danger js-open-delete-entity-modal"
@@ -87,18 +87,20 @@
                     <div class="bot-login-kicker mt-3">No logins in this group yet.</div>
                 {% endif %}
 
+                {% if not group.bot_logins.exists %}
                 <button class="btn btn-primary mt-3"
                                 type="button"
                         data-bs-toggle="modal"
                         data-bs-target="#teamsBotLoginCredentialsModal-{{ group.object_id }}">
                     <i class="bi bi-plus-circle"></i> Add Login
                 </button>
+                {% endif %}
             </div>
         {% endfor %}
 
     {% else %}
         <div class="bot-login-empty">
-            Create a Teams login group first, then add one or more logins inside it.
+            Create a login group first, then add one or more logins inside it.
         </div>
     {% endif %}
 
