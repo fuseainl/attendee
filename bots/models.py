@@ -61,6 +61,7 @@ class Project(models.Model):
     def __str__(self):
         return self.name
 
+
 # This model is deprecated in favor of BotLoginGroup. Kept here temporarily to maintain backwards compatibility.
 class GoogleMeetBotLoginGroup(models.Model):
     OBJECT_ID_PREFIX = "gbg_"
@@ -79,6 +80,7 @@ class GoogleMeetBotLoginGroup(models.Model):
 
     def __str__(self):
         return f"{self.project.name} - {self.object_id}"
+
 
 # This model is deprecated in favor of BotLogin. Kept here temporarily to maintain backwards compatibility.
 class GoogleMeetBotLogin(models.Model):
@@ -138,9 +140,11 @@ class GoogleMeetBotLogin(models.Model):
             models.UniqueConstraint(fields=["group", "email"], name="unique_google_meet_bot_login_email"),
         ]
 
+
 class BotLoginPlatform(models.TextChoices):
     GOOGLE_MEET = "google_meet", "Google Meet"
     TEAMS = "teams", "Teams"
+
 
 # This model replaces the deprecated GoogleMeetBotLoginGroup.
 class BotLoginGroup(models.Model):
@@ -189,6 +193,7 @@ class BotLoginGroup(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["project", "platform", "name"], name="unique_bot_login_group_project_platform_name"),
         ]
+
 
 # This model replaces the deprecated GoogleMeetBotLogin.
 class BotLogin(models.Model):
@@ -2680,7 +2685,7 @@ class Credentials(models.Model):
         OPENAI = 5, "OpenAI"
         ASSEMBLY_AI = 6, "Assembly AI"
         SARVAM = 7, "Sarvam"
-        TEAMS_BOT_LOGIN = 8, "Teams Bot Login" # Deprecrated in favor of BotLogin
+        TEAMS_BOT_LOGIN = 8, "Teams Bot Login"  # Deprecrated in favor of BotLogin
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
