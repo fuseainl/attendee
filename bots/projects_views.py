@@ -1463,7 +1463,7 @@ class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             if platform not in BotLoginPlatform.values:
                 return HttpResponse("Invalid platform", status=400)
             if BotLoginGroup.objects.filter(project=project, platform=platform, name=name).exists():
-                return HttpResponse("A bot login group for this platform with this name already exists", status=400)
+                return HttpResponse("A login group for this platform with this name already exists", status=400)
 
             BotLoginGroup.objects.create(project=project, platform=platform, name=name)
 
@@ -1496,7 +1496,7 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 .exclude(id=bot_login_group.id)
                 .exists()
             ):
-                return HttpResponse("A bot login group with this name already exists", status=400)
+                return HttpResponse("A login group with this name already exists", status=400)
 
             bot_login_group.name = name
             bot_login_group.save(update_fields=["name"])
