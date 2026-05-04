@@ -113,6 +113,14 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
+                    <div class="alert alert-info mb-3">
+                        <i class="bi bi-info-circle"></i>
+                        Need help setting up signed-in bots for Teams? See our
+                        <a href="https://docs.attendee.dev/guides/signedinbots#signed-in-teams-bots" target="_blank" rel="noopener noreferrer">
+                            documentation
+                        </a>.
+                    </div>
+
                     <form autocomplete="off"
                         action="{% url 'projects:create-teams-bot-login' project.object_id %}"
                         method="post"

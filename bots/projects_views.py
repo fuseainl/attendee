@@ -1462,6 +1462,8 @@ class CreateBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
                 return HttpResponse("Missing required fields: platform and name are required", status=400)
             if platform not in BotLoginPlatform.values:
                 return HttpResponse("Invalid platform", status=400)
+            if not BotLoginGroup.is_valid_name(name):
+                return HttpResponse("Name can only contain alphanumeric characters, spaces, or underscores", status=400)
             if BotLoginGroup.objects.filter(project=project, platform=platform, name=name).exists():
                 return HttpResponse("A login group for this platform with this name already exists", status=400)
 
@@ -1486,6 +1488,8 @@ class EditBotLoginGroupView(LoginRequiredMixin, ProjectUrlContextMixin, View):
             name = request.POST.get("name")
             if not name:
                 return HttpResponse("Missing required field: name is required", status=400)
+            if not BotLoginGroup.is_valid_name(name):
+                return HttpResponse("Name can only contain alphanumeric characters, spaces, or underscores", status=400)
 
             if (
                 BotLoginGroup.objects.filter(

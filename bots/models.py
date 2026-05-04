@@ -169,6 +169,21 @@ class BotLoginGroup(models.Model):
         return f"{self.project.name} - {self.object_id}"
 
     @classmethod
+    def is_valid_name(cls, name):
+        """
+        Validates that a bot login group name only contains alphanumeric characters,
+        spaces, or underscores. Returns True if valid, False otherwise.
+        """
+        if not name:
+            return False
+        if not all(c.isalnum() or c in (" ", "_") for c in name):
+            return False
+        # Disallow names that are entirely spaces and/or underscores (must contain at least one alphanumeric character)
+        if not any(c.isalnum() for c in name):
+            return False
+        return True
+
+    @classmethod
     def first_available_login(cls, project, platform, group_name=None):
         """
         Returns the least recently used BotLogin for the specified project and platform.
