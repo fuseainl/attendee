@@ -47,6 +47,11 @@ def populate_bot_login_groups_from_deprecated_models(apps, schema_editor):
     per_project_meet_index = defaultdict(lambda: 1)
     per_project_teams_index = defaultdict(lambda: 1)
 
+    meet_groups_migrated = 0
+    meet_logins_migrated = 0
+    teams_groups_migrated = 0
+    teams_credentials_skipped = 0
+
     for legacy_group in legacy_groups:
         project_id = legacy_group.project_id
         name = f"Meet login group {per_project_meet_index[project_id]}"
@@ -58,6 +63,7 @@ def populate_bot_login_groups_from_deprecated_models(apps, schema_editor):
             platform=GOOGLE_MEET_PLATFORM,
             name=name,
         )
+        meet_groups_migrated += 1
 
         for legacy_login in legacy_group.google_meet_bot_logins.all():
             BotLogin.objects.create(
@@ -69,6 +75,9 @@ def populate_bot_login_groups_from_deprecated_models(apps, schema_editor):
                 is_active=legacy_login.is_active,
                 last_used_at=legacy_login.last_used_at,
             )
+            meet_logins_migrated += 1
+
+    print(f"Migrated {meet_groups_migrated} Google Meet bot login group(s) and {meet_logins_migrated} bot login(s).")
 
     # Backfill legacy Teams bot login credentials, which were stored as a
     # project-scoped Credentials row of type TEAMS_BOT_LOGIN. The encrypted
@@ -86,10 +95,19 @@ def populate_bot_login_groups_from_deprecated_models(apps, schema_editor):
         if not credential._encrypted_data:
             continue
 
-        decrypted = json.loads(fernet.decrypt(bytes(credential._encrypted_data)).decode())
+        try:
+            decrypted = json.loads(fernet.decrypt(bytes(credential._encrypted_data)).decode())
+        except Exception as exc:
+            # If the payload can't be decrypted (e.g. it was encrypted with a
+            # rotated key that's no longer available), just skip this row
+            # rather than failing the entire migration.
+            print(f"Skipping Teams credential id={credential.id} (project_id={credential.project_id}) due to decrypt failure: {repr(exc)}")
+            teams_credentials_skipped += 1
+            continue
         email = (decrypted.get("username") or "").strip()
         password = decrypted.get("password")
         if not email or not password:
+            teams_credentials_skipped += 1
             continue
 
         project_id = credential.project_id
@@ -109,6 +127,9 @@ def populate_bot_login_groups_from_deprecated_models(apps, schema_editor):
             _encrypted_data=fernet.encrypt(json.dumps({"password": password}).encode()),
             email=email,
         )
+        teams_groups_migrated += 1
+
+    print(f"Migrated {teams_groups_migrated} Teams bot login group(s); skipped {teams_credentials_skipped} legacy Teams credential(s).")
 
 
 def reverse_populate_bot_login_groups_from_deprecated_models(apps, schema_editor):
