@@ -55,3 +55,40 @@ class TestBotLoginGroups(TestCase):
         self.assertEqual(selected_login, never_used_login)
         self.assertNotEqual(selected_login, recently_used_login)
         self.assertNotEqual(selected_login, older_used_login)
+
+    def test_first_available_login_returns_none_when_no_groups_exist(self):
+        selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.TEAMS)
+
+        self.assertIsNone(selected_login)
+
+    def test_first_available_login_returns_none_when_group_name_does_not_match(self):
+        group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Existing Group")
+        BotLogin.objects.create(group=group, email="login@example.com")
+
+        selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.TEAMS, group_name="Nonexistent Group")
+
+        self.assertIsNone(selected_login)
+
+    def test_first_available_login_returns_none_when_selected_group_has_no_logins(self):
+        BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Empty Group")
+
+        selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.TEAMS)
+
+        self.assertIsNone(selected_login)
+
+    def test_first_available_login_does_not_return_logins_from_other_platforms(self):
+        teams_group = BotLoginGroup.objects.create(project=self.project, platform=BotLoginPlatform.TEAMS, name="Teams Group")
+        BotLogin.objects.create(group=teams_group, email="teams@example.com")
+
+        selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.GOOGLE_MEET)
+
+        self.assertIsNone(selected_login)
+
+    def test_first_available_login_does_not_return_logins_from_other_projects(self):
+        other_project = Project.objects.create(name="Other Project", organization=self.organization)
+        other_group = BotLoginGroup.objects.create(project=other_project, platform=BotLoginPlatform.TEAMS, name="Other Project Group")
+        BotLogin.objects.create(group=other_group, email="other-project@example.com")
+
+        selected_login = BotLoginGroup.first_available_login(project=self.project, platform=BotLoginPlatform.TEAMS)
+
+        self.assertIsNone(selected_login)

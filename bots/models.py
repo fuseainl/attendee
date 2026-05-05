@@ -197,6 +197,8 @@ class BotLoginGroup(models.Model):
         if group_name is not None:
             groups = groups.filter(name=group_name)
         group = groups.order_by("created_at", "id").first()
+        if group is None:
+            return None
 
         available_login = group.bot_logins.order_by(F("last_used_at").asc(nulls_first=True), "id").first()
         if available_login:
