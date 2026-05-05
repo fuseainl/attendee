@@ -374,7 +374,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"]')),
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"], button[aria-label="Close dialogue"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
@@ -424,7 +424,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button",
-            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"]')),
+            condition=EC.element_to_be_clickable((By.CSS_SELECTOR, '[aria-modal="true"] button[aria-label="Close dialog"], [aria-modal="true"] button[aria-label="Close dialogue"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
@@ -963,7 +963,7 @@ class GoogleMeetUIMethods:
         logger.info("Waiting for the close button")
         close_button = self.locate_element(
             step="close_button_for_language_selection",
-            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"]')),
+            condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'button[aria-label="Close dialog"], button[aria-label="Close dialogue"]')),
             wait_time_seconds=6,
         )
         logger.info("Clicking the close button")
