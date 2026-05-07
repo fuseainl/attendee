@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("bots", "0081_remove_botevent_valid_event_type_event_sub_type_combinations_and_more"),
+        ("bots", "0083_backfill_populate_bot_login_groups_from_deprecated_models"),
     ]
 
     operations = [
