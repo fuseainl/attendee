@@ -2881,7 +2881,9 @@ components:
         mute_video:
           type: boolean
           default: false
-          description: Whether to mute the video's audio track. Defaults to false.
+          description: Whether to mute the video's audio track. Main purpose is to
+            play a video as the bot's webcam while keeping the bot's microphone muted.
+            Defaults to false.
       required:
       - url
     PaginatedBotList:

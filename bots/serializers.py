@@ -983,7 +983,7 @@ class OutputVideoRequestSerializer(serializers.Serializer):
     mute_video = serializers.BooleanField(
         required=False,
         default=False,
-        help_text="Whether to mute the video's audio track. Defaults to false.",
+        help_text="Whether to mute the video's audio track. Main purpose is to play a video as the bot's webcam while keeping the bot's microphone muted. Defaults to false.",
     )
 
     def validate_url(self, value: str) -> str:
