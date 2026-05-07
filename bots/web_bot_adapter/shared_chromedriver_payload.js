@@ -171,7 +171,8 @@ class BotVideoOutputStream {
 
         await this.videoElement.play();
         this.ensureInputOn();
-        this.ensureMicOn();
+        if (!muteVideo)
+            this.ensureMicOn();
 
         this._startVideoDrawingLoop();
 
@@ -264,7 +265,8 @@ class BotVideoOutputStream {
 
         await this.videoElement.play();
         this.ensureInputOn();
-        this.ensureMicOn();
+        if (!muteVideo)
+            this.ensureMicOn();
 
         this._startVideoDrawingLoop();
 
