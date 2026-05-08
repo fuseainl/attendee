@@ -198,3 +198,10 @@ class ZoomWebBotAdapter(WebBotAdapter, ZoomWebUIMethods):
                 "errorMessage": "Fail to join the meeting.",
             }
         )
+
+    # Currently, it will not show the Gallery view when GPU is disabled
+    def subclass_specific_use_disable_gpu_chrome_option(self):
+        if self.recording_view == RecordingViews.GALLERY_VIEW:
+            return False
+
+        return super().subclass_specific_use_disable_gpu_chrome_option()
