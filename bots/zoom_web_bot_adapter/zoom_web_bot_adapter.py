@@ -8,6 +8,7 @@ from typing import Callable
 import jwt
 
 from bots.meeting_url_utils import parse_zoom_join_url
+from bots.models import RecordingViews
 from bots.web_bot_adapter import WebBotAdapter
 from bots.zoom_web_bot_adapter.zoom_web_ui_methods import UiZoomWebGenericJoinErrorException, ZoomWebUIMethods
 
