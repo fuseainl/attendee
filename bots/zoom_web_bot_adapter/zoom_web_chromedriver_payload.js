@@ -1,3 +1,486 @@
+// Captures per-participant webcam video by scanning the DOM for Zoom <video-player>
+// elements. Zoom renders the gallery into a shared <canvas>, so for each participant
+// we crop the region of that shared canvas that overlaps the participant's
+// <video-player> element.
+class PerParticipantVideoCaptureManager {
+    constructor() {
+        this.scanIntervalMs = 250;
+        this.scanIntervalId = null;
+        // participantId -> { videoPlayer, sourceCanvas, sourceVideo, targetCanvas, ctx, captureIntervalId, stopped }
+        this.activeCaptures = new Map();
+    }
+  
+    start() {
+        (() => {
+            const canvas = document.createElement("canvas");
+            const gl =
+              canvas.getContext("webgl2") ||
+              canvas.getContext("webgl") ||
+              canvas.getContext("experimental-webgl");
+          
+            if (!gl) {
+              return { webgl: false };
+            }
+          
+            const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          
+            window.ws.sendJson({
+              type: 'WebGLInfo',
+              webgl: true,
+              vendor: dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+              renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+              version: gl.getParameter(gl.VERSION),
+            });
+          })();
+
+        if (this.scanIntervalId) return;
+        this.scan();
+        this.scanIntervalId = setInterval(() => this.scan(), this.scanIntervalMs);
+    }
+  
+    stop() {
+        if (this.scanIntervalId) {
+            clearInterval(this.scanIntervalId);
+            this.scanIntervalId = null;
+        }
+        for (const participantId of Array.from(this.activeCaptures.keys())) {
+            this.stopCapture(participantId);
+        }
+    }
+  
+    scan() {
+        try {
+            const videoPlayers = document.querySelectorAll('video-player');
+            const seenParticipantIds = new Set();
+  
+            videoPlayers.forEach(videoPlayer => {
+                const nodeId = parseInt(videoPlayer.getAttribute('node-id'));
+                const participantIdInteger = nodeId >> 10 << 10;
+                const participantId = participantIdInteger.toString();
+                if (!participantId) return;
+                const isScreenShare = nodeId !== participantIdInteger;
+  
+                // Only capture frames for participants we know about in the user manager
+                // if (!window.userManager?.currentUsersMap.has(participantId)) return;
+  
+                const sourceCanvas = videoPlayer.container?.shadowRoot?.querySelector('canvas');
+  
+                // New fallback: sometimes Zoom renders an actual <video> inside <video-player>.
+                const sourceVideo = sourceCanvas ? null : videoPlayer.querySelector('video');
+  
+                if (!sourceCanvas && !sourceVideo) {
+                  window.ws.sendJson({
+                    type: 'NoParticipantVideoCanvasFound',
+                    participantId: participantId,
+                    innerHTML: videoPlayer.innerHTML,
+                  });
+                }
+  
+                seenParticipantIds.add(participantId);
+  
+                const existingCapture = this.activeCaptures.get(participantId);
+  
+                // If Zoom replaced the element or the source, restart this capture.
+                if (
+                    existingCapture &&
+                    (
+                        existingCapture.videoPlayer !== videoPlayer ||
+                        existingCapture.sourceCanvas !== sourceCanvas ||
+                        existingCapture.sourceVideo !== sourceVideo
+                    )
+                ) {
+                    window.ws?.sendJson({
+                        type: 'PerParticipantVideoCaptureManagerStopCapture',
+                        participantId: participantId,
+                    });
+                    this.stopCapture(participantId);
+                }
+  
+                if (!this.activeCaptures.has(participantId)) {
+                    if (sourceCanvas) {
+                        this.startCanvasElementCapture({
+                            participantId,
+                            videoPlayer,
+                            sourceCanvas,
+                            isScreenShare,
+                        });
+                        window.ws?.sendJson({
+                            type: 'PerParticipantVideoCaptureManagerStartCanvasElementCapture',
+                            participantId: participantId,
+                        });
+                    } else if (sourceVideo) {
+                        this.startVideoElementCapture({
+                            participantId,
+                            videoPlayer,
+                            sourceVideo,
+                            isScreenShare,
+                        });
+                        window.ws?.sendJson({
+                            type: 'PerParticipantVideoCaptureManagerStartVideoElementCapture',
+                            participantId: participantId,
+                        });
+                    }
+                }
+            });
+  
+            // Stop captures whose participant/player/source disappeared.
+            for (const [participantId, capture] of Array.from(this.activeCaptures.entries())) {
+                const sourceStillConnected =
+                    capture.videoPlayer?.isConnected &&
+                    seenParticipantIds.has(participantId) &&
+                    (
+                        capture.sourceCanvas?.isConnected ||
+                        capture.sourceVideo?.isConnected
+                    );
+  
+                if (!sourceStillConnected) {
+                    this.stopCapture(participantId);
+                }
+            }
+        } catch (err) {
+            console.error('[PerParticipantVideoCaptureManager] Error scanning video players:', err);
+        }
+    }
+  
+    getSourceConfig(isScreenShare) {
+        const videoConfig = window.initialData?.perParticipantRealtimeVideoConfiguration;
+        if (!videoConfig) return null;
+  
+        return isScreenShare
+            ? videoConfig.screenshare_configuration
+            : videoConfig.webcam_configuration;
+    }
+  
+    getCropRectFromOverlay(videoPlayer, sourceCanvas) {
+        const playerRect = videoPlayer.getBoundingClientRect();
+        const canvasRect = sourceCanvas.getBoundingClientRect();
+  
+        if (
+            !playerRect.width ||
+            !playerRect.height ||
+            !canvasRect.width ||
+            !canvasRect.height ||
+            !sourceCanvas.width ||
+            !sourceCanvas.height
+        ) {
+            return null;
+        }
+  
+        // Clip the participant rect to the visible canvas rect in CSS/viewport coords.
+        const left = Math.max(playerRect.left, canvasRect.left);
+        const top = Math.max(playerRect.top, canvasRect.top);
+        const right = Math.min(playerRect.right, canvasRect.right);
+        const bottom = Math.min(playerRect.bottom, canvasRect.bottom);
+  
+        const cssW = right - left;
+        const cssH = bottom - top;
+  
+        if (cssW <= 0 || cssH <= 0) {
+            return null;
+        }
+  
+        // Convert CSS pixels to canvas backing-store pixels.
+        const scaleX = sourceCanvas.width / canvasRect.width;
+        const scaleY = sourceCanvas.height / canvasRect.height;
+  
+        return {
+            sx: Math.round((left - canvasRect.left) * scaleX),
+            sy: Math.round((top - canvasRect.top) * scaleY),
+            sw: Math.round(cssW * scaleX),
+            sh: Math.round(cssH * scaleY),
+        };
+    }
+  
+    drawCropLetterboxed({
+        sourceCanvas,
+        cropRect,
+        targetCanvas,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        const { sx, sy, sw, sh } = cropRect;
+  
+        if (!sw || !sh) return false;
+  
+        const srcAspect = sw / sh;
+        const targetAspect = targetWidth / targetHeight;
+  
+        let drawW, drawH;
+        if (srcAspect > targetAspect) {
+            drawW = targetWidth;
+            drawH = Math.round(targetWidth / srcAspect);
+        } else {
+            drawH = targetHeight;
+            drawW = Math.round(targetHeight * srcAspect);
+        }
+  
+        const offsetX = Math.round((targetWidth - drawW) / 2);
+        const offsetY = Math.round((targetHeight - drawH) / 2);
+  
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+  
+        ctx.drawImage(
+            sourceCanvas,
+            sx,
+            sy,
+            sw,
+            sh,
+            offsetX,
+            offsetY,
+            drawW,
+            drawH
+        );
+  
+        return true;
+    }
+  
+    drawVideoElementLetterboxed({
+        sourceVideo,
+        targetCanvas,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        if (
+            !sourceVideo.videoWidth ||
+            !sourceVideo.videoHeight ||
+            sourceVideo.readyState < 2
+        ) {
+            return false;
+        }
+  
+        const srcAspect = sourceVideo.videoWidth / sourceVideo.videoHeight;
+        const targetAspect = targetWidth / targetHeight;
+  
+        let drawW, drawH;
+        if (srcAspect > targetAspect) {
+            drawW = targetWidth;
+            drawH = Math.round(targetWidth / srcAspect);
+        } else {
+            drawH = targetHeight;
+            drawW = Math.round(targetHeight * srcAspect);
+        }
+  
+        const offsetX = Math.round((targetWidth - drawW) / 2);
+        const offsetY = Math.round((targetHeight - drawH) / 2);
+  
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+  
+        ctx.drawImage(
+            sourceVideo,
+            offsetX,
+            offsetY,
+            drawW,
+            drawH
+        );
+  
+        return true;
+    }
+  
+    startCanvasElementCapture({ participantId, videoPlayer, sourceCanvas, isScreenShare }) {
+        const sourceConfig = this.getSourceConfig(isScreenShare);
+  
+        if (!sourceConfig?.enabled) {
+            return;
+        }
+  
+        const desiredFPS = sourceConfig.framerate || 1;
+        const captureIntervalMs = Math.max(1, Math.round(1000 / desiredFPS));
+  
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
+  
+        if (!targetWidth || !targetHeight) {
+            console.error('[PerParticipantVideoCaptureManager] Missing target dimensions:', sourceConfig);
+            return;
+        }
+  
+        const targetCanvas = document.createElement('canvas');
+        targetCanvas.width = targetWidth;
+        targetCanvas.height = targetHeight;
+  
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+            console.error('[PerParticipantVideoCaptureManager] Could not create target canvas context');
+            return;
+        }
+  
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+  
+        const capture = {
+            videoPlayer,
+            sourceCanvas,
+            sourceVideo: null,
+            targetCanvas,
+            ctx,
+            captureIntervalId: null,
+            stopped: false,
+            lastSentAt: 0,
+        };
+  
+        const captureFrame = () => {
+            if (capture.stopped) return;
+  
+            try {
+                if (!window.ws?.mediaSendingEnabled) return;
+  
+                if (!videoPlayer.isConnected || !sourceCanvas.isConnected) {
+                    this.stopCapture(participantId);
+                    return;
+                }
+  
+                const cropRect = this.getCropRectFromOverlay(videoPlayer, sourceCanvas);
+                if (!cropRect) return;
+  
+                const didDraw = this.drawCropLetterboxed({
+                    sourceCanvas,
+                    cropRect,
+                    targetCanvas,
+                    ctx,
+                    targetWidth,
+                    targetHeight,
+                });
+  
+                if (!didDraw) return;
+  
+                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
+                if (!base64) return;
+  
+                window.ws.sendPerParticipantVideo(participantId, isScreenShare, base64);
+                capture.lastSentAt = performance.now();
+            } catch (err) {
+                console.error('[PerParticipantVideoCaptureManager] Error capturing video frame:', err);
+            }
+        };
+  
+        capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
+        this.activeCaptures.set(participantId, capture);
+  
+        captureFrame();
+  
+        console.log('[PerParticipantVideoCaptureManager] Started capture:', {
+            participantId,
+            isScreenShare,
+            sourceType: 'canvas',
+            targetWidth,
+            targetHeight,
+            desiredFPS,
+        });
+    }
+  
+    startVideoElementCapture({ participantId, videoPlayer, sourceVideo, isScreenShare }) {
+        const sourceConfig = this.getSourceConfig(isScreenShare);
+  
+        if (!sourceConfig?.enabled) {
+            return;
+        }
+  
+        const desiredFPS = sourceConfig.framerate || 1;
+        const captureIntervalMs = Math.max(1, Math.round(1000 / desiredFPS));
+  
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
+  
+        if (!targetWidth || !targetHeight) {
+            console.error('[PerParticipantVideoCaptureManager] Missing target dimensions:', sourceConfig);
+            return;
+        }
+  
+        const targetCanvas = document.createElement('canvas');
+        targetCanvas.width = targetWidth;
+        targetCanvas.height = targetHeight;
+  
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+            console.error('[PerParticipantVideoCaptureManager] Could not create target canvas context');
+            return;
+        }
+  
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+  
+        const capture = {
+            videoPlayer,
+            sourceCanvas: null,
+            sourceVideo,
+            targetCanvas,
+            ctx,
+            captureIntervalId: null,
+            stopped: false,
+            lastSentAt: 0,
+        };
+  
+        const captureFrame = () => {
+            if (capture.stopped) return;
+  
+            try {
+                if (!window.ws?.mediaSendingEnabled) return;
+  
+                if (!videoPlayer.isConnected || !sourceVideo.isConnected) {
+                    this.stopCapture(participantId);
+                    return;
+                }
+  
+                const didDraw = this.drawVideoElementLetterboxed({
+                    sourceVideo,
+                    targetCanvas,
+                    ctx,
+                    targetWidth,
+                    targetHeight,
+                });
+  
+                if (!didDraw) return;
+  
+                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
+                if (!base64) return;
+  
+                window.ws.sendPerParticipantVideo(participantId, isScreenShare, base64);
+                capture.lastSentAt = performance.now();
+            } catch (err) {
+                console.error('[PerParticipantVideoCaptureManager] Error capturing video element frame:', err);
+            }
+        };
+  
+        capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
+        this.activeCaptures.set(participantId, capture);
+  
+        captureFrame();
+  
+        console.log('[PerParticipantVideoCaptureManager] Started capture:', {
+            participantId,
+            isScreenShare,
+            sourceType: 'video',
+            targetWidth,
+            targetHeight,
+            desiredFPS,
+        });
+    }
+  
+    stopCapture(participantId) {
+        const capture = this.activeCaptures.get(participantId);
+        if (!capture) return;
+  
+        capture.stopped = true;
+  
+        if (capture.captureIntervalId) {
+            clearInterval(capture.captureIntervalId);
+            capture.captureIntervalId = null;
+        }
+  
+        this.activeCaptures.delete(participantId);
+  
+        console.log('[PerParticipantVideoCaptureManager] Stopped capture:', {
+            participantId,
+        });
+    }
+  }
+
 class ParticipantSpeechStartStopManager {
     constructor() {
         // Only one active speaker at a time
@@ -369,6 +852,10 @@ class StyleManager {
         if (window.zoomInitialData.modifyDomForVideoRecording) {
             this.onlyShowSubsetofZoomUI();
         }
+
+        if (initialData.sendPerParticipantVideo) {
+            window.perParticipantVideoCaptureManager.start();
+        }
     }
     
     getMeetingAudioStream() {
@@ -453,7 +940,8 @@ class WebSocketClient {
         VIDEO: 2,
         AUDIO: 3,
         ENCODED_MP4_CHUNK: 4,
-        PER_PARTICIPANT_AUDIO: 5
+        PER_PARTICIPANT_AUDIO: 5,
+        PER_PARTICIPANT_VIDEO: 6,
     };
 
     constructor() {
@@ -584,6 +1072,51 @@ class WebSocketClient {
             console.error('Error sending WebSocket audio message:', error);
         }
     }
+
+    sendPerParticipantVideo(participantId, isScreenShare, videoData) {
+        if (this.ws.readyState !== WebSocket.OPEN) {
+          console.error('WebSocket is not connected for per participant video send', this.ws.readyState);
+          return;
+        }
+    
+        if (!this.mediaSendingEnabled) {
+          return;
+        }
+    
+        try {
+            // Convert participantId to UTF-8 bytes
+            const participantIdBytes = new TextEncoder().encode(participantId);
+            
+            // Convert videoData string to UTF-8 bytes
+            const videoDataBytes = new TextEncoder().encode(videoData);
+            
+            // Create final message: type (4 bytes) + participantId length (1 byte) + 
+            // participantId bytes + isScreenShare (1 byte) + video data
+            const message = new Uint8Array(4 + 1 + participantIdBytes.length + 1 + videoDataBytes.length);
+            const dataView = new DataView(message.buffer);
+            
+            // Set message type (6 for PER_PARTICIPANT_VIDEO)
+            dataView.setInt32(0, WebSocketClient.MESSAGE_TYPES.PER_PARTICIPANT_VIDEO, true);
+            
+            // Set participantId length as uint8 (1 byte)
+            dataView.setUint8(4, participantIdBytes.length);
+            
+            // Copy participantId bytes
+            message.set(participantIdBytes, 5);
+            
+            // Set isScreenShare byte (0 = webcam, 1 = screenshare)
+            dataView.setUint8(5 + participantIdBytes.length, isScreenShare ? 1 : 0);
+            
+            // Copy video data after type, length, participantId, and isScreenShare
+            message.set(videoDataBytes, 5 + participantIdBytes.length + 1);
+            
+            // Send the binary message
+            this.ws.send(message.buffer);
+        } catch (error) {
+            console.error('Error sending WebSocket video message:', error);
+        }
+      }
+  
 
     sendMixedAudio(timestamp, audioData) {
         if (this.ws.readyState !== WebSocket.OPEN) {
@@ -795,6 +1328,8 @@ const participantSpeechStartStopManager = new ParticipantSpeechStartStopManager(
 window.participantSpeechStartStopManager = participantSpeechStartStopManager;
 const mixedAudioStreamManager = new MixedAudioStreamManager();
 window.mixedAudioStreamManager = mixedAudioStreamManager;
+const perParticipantVideoCaptureManager = new PerParticipantVideoCaptureManager();
+window.perParticipantVideoCaptureManager = perParticipantVideoCaptureManager;
 
 const turnOnCameraArialLabel = "start my video"
 const turnOffCameraArialLabel = "stop my video"
