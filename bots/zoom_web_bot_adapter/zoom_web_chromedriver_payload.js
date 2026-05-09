@@ -306,146 +306,105 @@ class PerParticipantVideoCaptureManager {
         const desiredFPS = sourceConfig.framerate || 1;
         const captureIntervalMs = Math.max(1, Math.round(1000 / desiredFPS));
 
-        const blobToDataURL = (blob) => new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
+        const targetWidth = sourceConfig.width;
+        const targetHeight = sourceConfig.height;
+        const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
+
+        if (!targetWidth || !targetHeight) {
+            console.error('[PerParticipantVideoCaptureManager] Missing target dimensions:', sourceConfig);
+            return;
+        }
+
+        const targetCanvas = document.createElement('canvas');
+        targetCanvas.width = targetWidth;
+        targetCanvas.height = targetHeight;
+
+        const ctx = targetCanvas.getContext('2d', { alpha: false });
+        if (!ctx) {
+            console.error('[PerParticipantVideoCaptureManager] Could not create target canvas context');
+            return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
 
         const capture = {
             videoPlayer,
             sourceCanvas,
             sourceVideo: null,
-            targetCanvas: null,
-            ctx: null,
+            targetCanvas,
+            ctx,
             captureIntervalId: null,
             stopped: false,
             lastSentAt: 0,
             inFlight: false,
         };
 
-        // Just mark that we got this far
-        window.ws?.sendJson({
-            type: 'PerParticipantVideoCaptureManagerStartCanvasElementCapturezz',
-            participantId: participantId,
-        });
-
         const captureFrame = async () => {
-            window.ws?.sendJson({
-                type: 'PerParticipantVideoCaptureManagerCaptureFrameqq',
-                participantId: participantId,
-                stopped: capture.stopped,
-                inFlight: capture.inFlight,
-            });
             if (capture.stopped) return;
             if (capture.inFlight) return;
 
-            window.ws?.sendJson({
-                type: 'PerParticipantVideoCaptureManagerCaptureFrameqq0',
-                participantId: participantId,
-                stopped: capture.stopped,
-                inFlight: capture.inFlight,
-            });
             try {
                 if (!window.ws?.mediaSendingEnabled) return;
 
-                window.ws?.sendJson({
-                    type: 'PerParticipantVideoCaptureManagerCaptureFrameqq1',
-                    participantId: participantId,
-                    stopped: capture.stopped,
-                    inFlight: capture.inFlight,
-                });
-
                 if (!videoPlayer.isConnected) {
                     this.stopCapture(participantId);
-                    window.ws?.sendJson({
-                        type: 'PerParticipantVideoCaptureManagerStopCapturezqqq',
-                        participantId: participantId,
-                    });
                     return;
                 }
-
-
-                window.ws?.sendJson({
-                    type: 'PerParticipantVideoCaptureManagerCaptureFrameqq3',
-                    participantId: participantId,
-                    stopped: capture.stopped,
-                    inFlight: capture.inFlight,
-                });
 
                 const sdk = videoPlayer.render?.getSDK?.();
                 if (!sdk || typeof sdk.ScreenShot !== 'function') {
                     console.warn('[PerParticipantVideoCaptureManager] Zoom SDK not available on videoPlayer');
-                    window.ws?.sendJson({
-                        type: 'PerParticipantVideoCaptureManagerZoomSDKNotAvailable',
-                        participantId: participantId,
-                    });
                     return;
                 }
-
-
-                window.ws?.sendJson({
-                    type: 'PerParticipantVideoCaptureManagerCaptureFrameqq55',
-                    participantId: participantId,
-                    stopped: capture.stopped,
-                    inFlight: capture.inFlight,
-                });
 
                 const nodeId = videoPlayer.getAttribute('node-id');
                 if (!nodeId) {
                     console.warn('[PerParticipantVideoCaptureManager] videoPlayer missing node-id attribute');
-                    window.ws?.sendJson({
-                        type: 'PerParticipantVideoCaptureManagerVideoPlayerMissingNodeIdAttribute',
-                        participantId: participantId,
-                    });
                     return;
                 }
 
                 capture.inFlight = true;
 
-
-                window.ws?.sendJson({
-                    type: 'PerParticipantVideoCaptureManagerCaptureFrameqq177',
-                    participantId: participantId,
-                    stopped: capture.stopped,
-                    inFlight: capture.inFlight,
-                });
-
                 const blob = await sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video');
 
-
-                window.ws?.sendJson({
-                    type: 'PerParticipantVideoCaptureManagerCaptureFrameqq1113',
-                    participantId: participantId,
-                    stopped: capture.stopped,
-                    inFlight: capture.inFlight,
-                });
-
                 if (!blob) {
-                    window.ws?.sendJson({
-                        type: 'PerParticipantVideoCaptureManagerScreenShotFailed',
-                        participantId: participantId,
-                    });
                     return;
                 }
 
                 const bitmap = await createImageBitmap(blob);
-                const jpegCanvas = document.createElement('canvas');
-                jpegCanvas.width = bitmap.width;
-                jpegCanvas.height = bitmap.height;
-                const jpegCtx = jpegCanvas.getContext('2d');
-                jpegCtx.drawImage(bitmap, 0, 0);
-                bitmap.close?.();
-                const dataUrl = jpegCanvas.toDataURL('image/jpeg', 0.05);
 
-                window.ws?.sendJson({
-                    type: 'PerParticipantVideoScreenshot',
-                    participantId: String(participantId),
-                    isScreenShare,
-                    nodeId,
-                    dataUrl,
-                });
+                const srcW = bitmap.width;
+                const srcH = bitmap.height;
+                if (!srcW || !srcH) {
+                    bitmap.close?.();
+                    return;
+                }
+
+                const srcAspect = srcW / srcH;
+                const targetAspect = targetWidth / targetHeight;
+
+                let drawW, drawH;
+                if (srcAspect > targetAspect) {
+                    drawW = targetWidth;
+                    drawH = Math.round(targetWidth / srcAspect);
+                } else {
+                    drawH = targetHeight;
+                    drawW = Math.round(targetHeight * srcAspect);
+                }
+
+                const offsetX = Math.round((targetWidth - drawW) / 2);
+                const offsetY = Math.round((targetHeight - drawH) / 2);
+
+                ctx.fillStyle = 'black';
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+                ctx.drawImage(bitmap, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
+                bitmap.close?.();
+
+                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
+                if (!base64) return;
+
+                window.ws.sendPerParticipantVideo(participantId, isScreenShare, base64);
                 capture.lastSentAt = performance.now();
             } catch (err) {
                 console.error('[PerParticipantVideoCaptureManager] Error capturing video frame via SDK:', err);
@@ -463,6 +422,8 @@ class PerParticipantVideoCaptureManager {
             participantId,
             isScreenShare,
             sourceType: 'sdk-screenshot',
+            targetWidth,
+            targetHeight,
             desiredFPS,
         });
     }
