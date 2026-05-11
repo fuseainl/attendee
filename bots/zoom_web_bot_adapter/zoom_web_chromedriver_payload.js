@@ -1,223 +1,172 @@
-
-
-function blobToDataURL(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-// Captures per-participant webcam video by scanning the DOM for Zoom <video-player>
-// elements. Zoom renders the gallery into a shared <canvas>, so for each participant
-// we crop the region of that shared canvas that overlaps the participant's
-// <video-player> element.
+// Captures per-participant webcam/screenshare video by periodically scanning
+// Zoom <video-player> elements and reconciling that scan with active captures.
 class PerParticipantVideoCaptureManager {
     constructor() {
         this.scanIntervalMs = 250;
         this.scanIntervalId = null;
-        // participantId -> { videoPlayer, sourceCanvas, sourceVideo, targetCanvas, ctx, captureIntervalId, stopped }
+
+        // captureKey ("<participantId>:webcam" | "<participantId>:screenshare") ->
+        //   { participantId, isScreenShare, videoPlayer, targetCanvas, ctx,
+        //     captureIntervalId, inFlight }
         this.activeCaptures = new Map();
     }
-  
-    start() {
-        (() => {
-            const canvas = document.createElement("canvas");
-            const gl =
-              canvas.getContext("webgl2") ||
-              canvas.getContext("webgl") ||
-              canvas.getContext("experimental-webgl");
-          
-            if (!gl) {
-              return { webgl: false };
-            }
-          
-            const dbg = gl.getExtension("WEBGL_debug_renderer_info");
-          
-            window.ws.sendJson({
-              type: 'WebGLInfo',
-              webgl: true,
-              vendor: dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-              renderer: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
-              version: gl.getParameter(gl.VERSION),
-            });
-          })();
 
+    start() {
         if (this.scanIntervalId) return;
+
         this.scan();
         this.scanIntervalId = setInterval(() => this.scan(), this.scanIntervalMs);
     }
-  
+
     stop() {
         if (this.scanIntervalId) {
             clearInterval(this.scanIntervalId);
             this.scanIntervalId = null;
         }
-        for (const participantId of Array.from(this.activeCaptures.keys())) {
-            this.stopCapture(participantId);
+
+        for (const captureKey of Array.from(this.activeCaptures.keys())) {
+            this.stopCapture(captureKey);
         }
     }
-  
+
+    makeCaptureKey(participantId, isScreenShare) {
+        return `${participantId}:${isScreenShare ? 'screenshare' : 'webcam'}`;
+    }
+
+    getParticipantInfo(videoPlayer) {
+        const rawNodeId = videoPlayer.getAttribute('node-id');
+        if (!rawNodeId) return null;
+
+        const nodeId = Number.parseInt(rawNodeId, 10);
+
+        const participantIdInteger = nodeId >> 10 << 10;
+        const participantId = participantIdInteger.toString();
+        const isScreenShare = nodeId !== participantIdInteger;
+
+        return {
+            nodeId,
+            participantId,
+            isScreenShare,
+            captureKey: this.makeCaptureKey(participantId, isScreenShare),
+        };
+    }
+
+    getSourceElements(videoPlayer) {
+        const shadowRoot = videoPlayer.container?.shadowRoot;
+
+        const sourceCanvas = shadowRoot?.querySelector('canvas');
+
+        if (sourceCanvas) {
+            return { sourceCanvas, sourceVideo: null };
+        }
+
+        const sourceVideo = videoPlayer.querySelector?.('video');
+        if (sourceVideo) {
+            return { sourceCanvas: null, sourceVideo };
+        }
+
+        return { sourceCanvas: null, sourceVideo: null };
+    }
+
+    getEligibleCaptureCandidates() {
+        const candidatesByCaptureKey = new Map();
+
+        document.querySelectorAll('video-player').forEach(videoPlayer => {
+            const participantInfo = this.getParticipantInfo(videoPlayer);
+            if (!participantInfo) return;
+
+            const { participantId, isScreenShare, captureKey } = participantInfo;
+
+            if (!window.userManager?.currentUsersMap?.has?.(participantId)) {
+                return;
+            }
+
+            const { sourceCanvas, sourceVideo } = this.getSourceElements(videoPlayer);
+            if (!sourceCanvas && !sourceVideo) {
+                return;
+            }
+
+            const rect = videoPlayer.getBoundingClientRect();
+            const area = rect.width * rect.height;
+
+            const existingCandidate = candidatesByCaptureKey.get(captureKey);
+            if (!existingCandidate || area > existingCandidate.area) {
+                candidatesByCaptureKey.set(captureKey, {
+                    captureKey,
+                    participantId,
+                    isScreenShare,
+                    videoPlayer,
+                    sourceType: sourceCanvas ? 'canvas' : 'video',
+                    area,
+                });
+            }
+        });
+
+        return candidatesByCaptureKey;
+    }
+
     scan() {
         try {
-            const videoPlayers = document.querySelectorAll('video-player');
-            const seenParticipantIds = new Set();
-  
-            videoPlayers.forEach(videoPlayer => {
-                const nodeId = parseInt(videoPlayer.getAttribute('node-id'));
-                const participantIdInteger = nodeId >> 10 << 10;
-                const participantId = participantIdInteger.toString();
-                if (!participantId) return;
-                const isScreenShare = nodeId !== participantIdInteger;
-  
-                // Only capture frames for participants we know about in the user manager
-                // if (!window.userManager?.currentUsersMap.has(participantId)) return;
-  
-                const sourceCanvas = videoPlayer.container?.shadowRoot?.querySelector('canvas');
-  
-                // New fallback: sometimes Zoom renders an actual <video> inside <video-player>.
-                const sourceVideo = sourceCanvas ? null : videoPlayer.querySelector('video');
-  
-                if (!sourceCanvas && !sourceVideo) {
-                  window.ws.sendJson({
-                    type: 'NoParticipantVideoCanvasFound',
-                    participantId: participantId,
-                    innerHTML: videoPlayer.innerHTML,
-                  });
+            const candidatesByCaptureKey = this.getEligibleCaptureCandidates();
+
+            // Remove captures that no longer appear in the latest scan.
+            for (const captureKey of Array.from(this.activeCaptures.keys())) {
+                if (!candidatesByCaptureKey.has(captureKey)) {
+                    this.stopCapture(captureKey);
                 }
-  
-                seenParticipantIds.add(participantId);
-  
-                const existingCapture = this.activeCaptures.get(participantId);
-  
-                // If Zoom replaced the element or the source, restart this capture.
-                if (
-                    existingCapture &&
-                    (
-                        existingCapture.videoPlayer !== videoPlayer ||
-                        existingCapture.sourceCanvas !== sourceCanvas ||
-                        existingCapture.sourceVideo !== sourceVideo
-                    )
-                ) {
-                    window.ws?.sendJson({
-                        type: 'PerParticipantVideoCaptureManagerStopCapture',
-                        participantId: participantId,
-                    });
-                    this.stopCapture(participantId);
+            }
+
+            // Add new captures, or replace captures whose selected <video-player>
+            // changed due to deduping / layout changes.
+            for (const candidate of candidatesByCaptureKey.values()) {
+                const existingCapture = this.activeCaptures.get(candidate.captureKey);
+
+                if (!existingCapture) {
+                    this.startCapture(candidate);
+                    continue;
                 }
-  
-                if (!this.activeCaptures.has(participantId)) {
-                    if (sourceCanvas) {
-                        this.startCanvasElementCapture({
-                            participantId,
-                            videoPlayer,
-                            sourceCanvas,
-                            isScreenShare,
-                        });
-                        window.ws?.sendJson({
-                            type: 'PerParticipantVideoCaptureManagerStartCanvasElementCapture',
-                            participantId: participantId,
-                        });
-                    } else if (sourceVideo) {
-                        this.startVideoElementCapture({
-                            participantId,
-                            videoPlayer,
-                            sourceVideo,
-                            isScreenShare,
-                        });
-                        window.ws?.sendJson({
-                            type: 'PerParticipantVideoCaptureManagerStartVideoElementCapture',
-                            participantId: participantId,
-                        });
-                    }
-                }
-            });
-  
-            // Stop captures whose participant/player/source disappeared.
-            for (const [participantId, capture] of Array.from(this.activeCaptures.entries())) {
-                const sourceStillConnected =
-                    capture.videoPlayer?.isConnected &&
-                    seenParticipantIds.has(participantId) &&
-                    (
-                        capture.sourceCanvas?.isConnected ||
-                        capture.sourceVideo?.isConnected
-                    );
-  
-                if (!sourceStillConnected) {
-                    this.stopCapture(participantId);
+
+                if (existingCapture.videoPlayer !== candidate.videoPlayer) {
+                    this.stopCapture(candidate.captureKey);
+                    this.startCapture(candidate);
                 }
             }
         } catch (err) {
             console.error('[PerParticipantVideoCaptureManager] Error scanning video players:', err);
+            window.ws?.sendJson?.({
+                type: 'ErrorCapturingPerParticipantVideo',
+                error: err.message,
+            });
         }
     }
-  
+
     getSourceConfig(isScreenShare) {
         const videoConfig = window.initialData?.perParticipantRealtimeVideoConfiguration;
         if (!videoConfig) return null;
-  
+
         return isScreenShare
             ? videoConfig.screenshare_configuration
             : videoConfig.webcam_configuration;
     }
-  
-    getCropRectFromOverlay(videoPlayer, sourceCanvas) {
-        const playerRect = videoPlayer.getBoundingClientRect();
-        const canvasRect = sourceCanvas.getBoundingClientRect();
-  
-        if (
-            !playerRect.width ||
-            !playerRect.height ||
-            !canvasRect.width ||
-            !canvasRect.height ||
-            !sourceCanvas.width ||
-            !sourceCanvas.height
-        ) {
-            return null;
-        }
-  
-        // Clip the participant rect to the visible canvas rect in CSS/viewport coords.
-        const left = Math.max(playerRect.left, canvasRect.left);
-        const top = Math.max(playerRect.top, canvasRect.top);
-        const right = Math.min(playerRect.right, canvasRect.right);
-        const bottom = Math.min(playerRect.bottom, canvasRect.bottom);
-  
-        const cssW = right - left;
-        const cssH = bottom - top;
-  
-        if (cssW <= 0 || cssH <= 0) {
-            return null;
-        }
-  
-        // Convert CSS pixels to canvas backing-store pixels.
-        const scaleX = sourceCanvas.width / canvasRect.width;
-        const scaleY = sourceCanvas.height / canvasRect.height;
-  
-        return {
-            sx: Math.round((left - canvasRect.left) * scaleX),
-            sy: Math.round((top - canvasRect.top) * scaleY),
-            sw: Math.round(cssW * scaleX),
-            sh: Math.round(cssH * scaleY),
-        };
-    }
-  
-    drawCropLetterboxed({
-        sourceCanvas,
-        cropRect,
-        targetCanvas,
+
+    drawImageSourceLetterboxed({
+        source,
+        sourceWidth,
+        sourceHeight,
         ctx,
         targetWidth,
         targetHeight,
     }) {
-        const { sx, sy, sw, sh } = cropRect;
-  
-        if (!sw || !sh) return false;
-  
-        const srcAspect = sw / sh;
+        if (!sourceWidth || !sourceHeight) {
+            return false;
+        }
+
+        const srcAspect = sourceWidth / sourceHeight;
         const targetAspect = targetWidth / targetHeight;
-  
-        let drawW, drawH;
+
+        let drawW;
+        let drawH;
+
         if (srcAspect > targetAspect) {
             drawW = targetWidth;
             drawH = Math.round(targetWidth / srcAspect);
@@ -225,31 +174,60 @@ class PerParticipantVideoCaptureManager {
             drawH = targetHeight;
             drawW = Math.round(targetHeight * srcAspect);
         }
-  
+
         const offsetX = Math.round((targetWidth - drawW) / 2);
         const offsetY = Math.round((targetHeight - drawH) / 2);
-  
+
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, targetWidth, targetHeight);
-  
-        ctx.drawImage(
-            sourceCanvas,
-            sx,
-            sy,
-            sw,
-            sh,
-            offsetX,
-            offsetY,
-            drawW,
-            drawH
-        );
-  
+
+        ctx.drawImage(source, offsetX, offsetY, drawW, drawH);
+
         return true;
     }
-  
+
+    async drawSdkScreenshotLetterboxed({
+        videoPlayer,
+        isScreenShare,
+        ctx,
+        targetWidth,
+        targetHeight,
+    }) {
+        const sdk = videoPlayer.render?.getSDK?.();
+        if (!sdk || typeof sdk.ScreenShot !== 'function') {
+            return false;
+        }
+
+        const nodeId = videoPlayer.getAttribute('node-id');
+        if (!nodeId) {
+            return false;
+        }
+
+        const blob = await sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video');
+        if (!blob) {
+            return false;
+        }
+
+        let bitmap = null;
+
+        try {
+            bitmap = await createImageBitmap(blob);
+
+            return this.drawImageSourceLetterboxed({
+                source: bitmap,
+                sourceWidth: bitmap.width,
+                sourceHeight: bitmap.height,
+                ctx,
+                targetWidth,
+                targetHeight,
+            });
+        } finally {
+            bitmap?.close?.();
+        }
+    }
+
     drawVideoElementLetterboxed({
         sourceVideo,
-        targetCanvas,
         ctx,
         targetWidth,
         targetHeight,
@@ -261,45 +239,21 @@ class PerParticipantVideoCaptureManager {
         ) {
             return false;
         }
-  
-        const srcAspect = sourceVideo.videoWidth / sourceVideo.videoHeight;
-        const targetAspect = targetWidth / targetHeight;
-  
-        let drawW, drawH;
-        if (srcAspect > targetAspect) {
-            drawW = targetWidth;
-            drawH = Math.round(targetWidth / srcAspect);
-        } else {
-            drawH = targetHeight;
-            drawW = Math.round(targetHeight * srcAspect);
-        }
-  
-        const offsetX = Math.round((targetWidth - drawW) / 2);
-        const offsetY = Math.round((targetHeight - drawH) / 2);
-  
-        ctx.fillStyle = 'black';
-        ctx.fillRect(0, 0, targetWidth, targetHeight);
-  
-        ctx.drawImage(
-            sourceVideo,
-            offsetX,
-            offsetY,
-            drawW,
-            drawH
-        );
-  
-        return true;
+
+        return this.drawImageSourceLetterboxed({
+            source: sourceVideo,
+            sourceWidth: sourceVideo.videoWidth,
+            sourceHeight: sourceVideo.videoHeight,
+            ctx,
+            targetWidth,
+            targetHeight,
+        });
     }
-  
-    startCanvasElementCapture({ participantId, videoPlayer, sourceCanvas, isScreenShare }) {
+
+    startCapture({ captureKey, participantId, isScreenShare, videoPlayer, sourceType }) {
         const sourceConfig = this.getSourceConfig(isScreenShare);
 
         if (!sourceConfig?.enabled) {
-            window.ws?.sendJson({
-                type: 'PerParticipantVideoCaptureManagerSourceConfigNotEnabled',
-                participantId: participantId,
-                sourceConfig: sourceConfig,
-            });
             return;
         }
 
@@ -329,212 +283,114 @@ class PerParticipantVideoCaptureManager {
         ctx.imageSmoothingQuality = 'high';
 
         const capture = {
+            participantId,
+            isScreenShare,
             videoPlayer,
-            sourceCanvas,
-            sourceVideo: null,
             targetCanvas,
             ctx,
             captureIntervalId: null,
-            stopped: false,
-            lastSentAt: 0,
             inFlight: false,
         };
 
         const captureFrame = async () => {
-            if (capture.stopped) return;
             if (capture.inFlight) return;
 
             try {
                 if (!window.ws?.mediaSendingEnabled) return;
 
-                if (!videoPlayer.isConnected) {
-                    this.stopCapture(participantId);
-                    return;
-                }
+                // Do not remove the capture from here. The next scan owns cleanup.
+                if (!capture.videoPlayer?.isConnected) return;
+                if (this.activeCaptures.get(captureKey) !== capture) return;
 
-                const sdk = videoPlayer.render?.getSDK?.();
-                if (!sdk || typeof sdk.ScreenShot !== 'function') {
-                    console.warn('[PerParticipantVideoCaptureManager] Zoom SDK not available on videoPlayer');
-                    return;
-                }
-
-                const nodeId = videoPlayer.getAttribute('node-id');
-                if (!nodeId) {
-                    console.warn('[PerParticipantVideoCaptureManager] videoPlayer missing node-id attribute');
-                    return;
-                }
+                const { sourceCanvas, sourceVideo } = this.getSourceElements(capture.videoPlayer);
+                if (!sourceCanvas && !sourceVideo) return;
 
                 capture.inFlight = true;
 
-                const blob = await sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video');
+                let didDraw = false;
 
-                if (!blob) {
-                    return;
+                if (sourceCanvas?.isConnected) {
+                    didDraw = await this.drawSdkScreenshotLetterboxed({
+                        videoPlayer: capture.videoPlayer,
+                        isScreenShare: capture.isScreenShare,
+                        ctx,
+                        targetWidth,
+                        targetHeight,
+                    });
+                } else if (sourceVideo?.isConnected) {
+                    didDraw = this.drawVideoElementLetterboxed({
+                        sourceVideo,
+                        ctx,
+                        targetWidth,
+                        targetHeight,
+                    });
                 }
 
-                const bitmap = await createImageBitmap(blob);
-
-                const srcW = bitmap.width;
-                const srcH = bitmap.height;
-                if (!srcW || !srcH) {
-                    bitmap.close?.();
-                    return;
-                }
-
-                const srcAspect = srcW / srcH;
-                const targetAspect = targetWidth / targetHeight;
-
-                let drawW, drawH;
-                if (srcAspect > targetAspect) {
-                    drawW = targetWidth;
-                    drawH = Math.round(targetWidth / srcAspect);
-                } else {
-                    drawH = targetHeight;
-                    drawW = Math.round(targetHeight * srcAspect);
-                }
-
-                const offsetX = Math.round((targetWidth - drawW) / 2);
-                const offsetY = Math.round((targetHeight - drawH) / 2);
-
-                ctx.fillStyle = 'black';
-                ctx.fillRect(0, 0, targetWidth, targetHeight);
-                ctx.drawImage(bitmap, 0, 0, srcW, srcH, offsetX, offsetY, drawW, drawH);
-                bitmap.close?.();
+                if (!didDraw) return;
 
                 const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
                 if (!base64) return;
 
-                window.ws.sendPerParticipantVideo(participantId, isScreenShare, base64);
-                capture.lastSentAt = performance.now();
+                window.ws?.sendPerParticipantVideo?.(
+                    capture.participantId,
+                    capture.isScreenShare,
+                    base64
+                );
             } catch (err) {
-                console.error('[PerParticipantVideoCaptureManager] Error capturing video frame via SDK:', err);
+                console.error('[PerParticipantVideoCaptureManager] Error capturing video frame:', err);
             } finally {
                 capture.inFlight = false;
             }
         };
 
         capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
-        this.activeCaptures.set(participantId, capture);
+        this.activeCaptures.set(captureKey, capture);
+
+        window.ws?.sendJson?.({
+            type: sourceType === 'canvas'
+                ? 'PerParticipantVideoCaptureManagerStartCanvasElementCapture'
+                : 'PerParticipantVideoCaptureManagerStartVideoElementCapture',
+            participantId,
+            isScreenShare,
+        });
 
         captureFrame();
 
         console.log('[PerParticipantVideoCaptureManager] Started capture:', {
+            captureKey,
             participantId,
             isScreenShare,
-            sourceType: 'sdk-screenshot',
+            sourceType,
             targetWidth,
             targetHeight,
             desiredFPS,
         });
     }
-  
-    startVideoElementCapture({ participantId, videoPlayer, sourceVideo, isScreenShare }) {
-        const sourceConfig = this.getSourceConfig(isScreenShare);
-  
-        if (!sourceConfig?.enabled) {
-            return;
-        }
-  
-        const desiredFPS = sourceConfig.framerate || 1;
-        const captureIntervalMs = Math.max(1, Math.round(1000 / desiredFPS));
-  
-        const targetWidth = sourceConfig.width;
-        const targetHeight = sourceConfig.height;
-        const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
-  
-        if (!targetWidth || !targetHeight) {
-            console.error('[PerParticipantVideoCaptureManager] Missing target dimensions:', sourceConfig);
-            return;
-        }
-  
-        const targetCanvas = document.createElement('canvas');
-        targetCanvas.width = targetWidth;
-        targetCanvas.height = targetHeight;
-  
-        const ctx = targetCanvas.getContext('2d', { alpha: false });
-        if (!ctx) {
-            console.error('[PerParticipantVideoCaptureManager] Could not create target canvas context');
-            return;
-        }
-  
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-  
-        const capture = {
-            videoPlayer,
-            sourceCanvas: null,
-            sourceVideo,
-            targetCanvas,
-            ctx,
-            captureIntervalId: null,
-            stopped: false,
-            lastSentAt: 0,
-        };
-  
-        const captureFrame = () => {
-            if (capture.stopped) return;
-  
-            try {
-                if (!window.ws?.mediaSendingEnabled) return;
-  
-                if (!videoPlayer.isConnected || !sourceVideo.isConnected) {
-                    this.stopCapture(participantId);
-                    return;
-                }
-  
-                const didDraw = this.drawVideoElementLetterboxed({
-                    sourceVideo,
-                    targetCanvas,
-                    ctx,
-                    targetWidth,
-                    targetHeight,
-                });
-  
-                if (!didDraw) return;
-  
-                const base64 = targetCanvas.toDataURL('image/jpeg', jpegQuality).split(',', 2)[1];
-                if (!base64) return;
-  
-                window.ws.sendPerParticipantVideo(participantId, isScreenShare, base64);
-                capture.lastSentAt = performance.now();
-            } catch (err) {
-                console.error('[PerParticipantVideoCaptureManager] Error capturing video element frame:', err);
-            }
-        };
-  
-        capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
-        this.activeCaptures.set(participantId, capture);
-  
-        captureFrame();
-  
-        console.log('[PerParticipantVideoCaptureManager] Started capture:', {
-            participantId,
-            isScreenShare,
-            sourceType: 'video',
-            targetWidth,
-            targetHeight,
-            desiredFPS,
-        });
-    }
-  
-    stopCapture(participantId) {
-        const capture = this.activeCaptures.get(participantId);
+
+    stopCapture(captureKey) {
+        const capture = this.activeCaptures.get(captureKey);
         if (!capture) return;
-  
-        capture.stopped = true;
-  
+
         if (capture.captureIntervalId) {
             clearInterval(capture.captureIntervalId);
             capture.captureIntervalId = null;
         }
-  
-        this.activeCaptures.delete(participantId);
-  
+
+        this.activeCaptures.delete(captureKey);
+
+        window.ws?.sendJson?.({
+            type: 'PerParticipantVideoCaptureManagerStopCapture',
+            participantId: capture.participantId,
+            isScreenShare: capture.isScreenShare,
+        });
+
         console.log('[PerParticipantVideoCaptureManager] Stopped capture:', {
-            participantId,
+            captureKey,
+            participantId: capture.participantId,
+            isScreenShare: capture.isScreenShare,
         });
     }
-  }
+}
 
 class ParticipantSpeechStartStopManager {
     constructor() {
