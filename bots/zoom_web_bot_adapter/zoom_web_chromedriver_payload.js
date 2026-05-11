@@ -9,6 +9,41 @@ class PerParticipantVideoCaptureManager {
         //   { participantId, isScreenShare, videoPlayer, targetCanvas, ctx,
         //     captureIntervalId, inFlight }
         this.activeCaptures = new Map();
+
+        // Throttle state for throttledLogAndSend so that flapping/errored states
+        // can't flood the JS console or the Python websocket every 250ms.
+        // key -> { lastEmittedAt, suppressedCount }
+        this.throttleIntervalMs = 5000;
+        this.throttleState = new Map();
+    }
+
+    makeThrottleKey(payload) {
+        return [
+            payload.type,
+            payload.participantId ?? '',
+            payload.isScreenShare ?? '',
+        ].join('|');
+    }
+
+    throttledLogAndSend(payload) {
+        const key = this.makeThrottleKey(payload);
+        const now = Date.now();
+        const state = this.throttleState.get(key) ?? { lastEmittedAt: 0, suppressedCount: 0 };
+
+        if (now - state.lastEmittedAt < this.throttleIntervalMs) {
+            state.suppressedCount += 1;
+            this.throttleState.set(key, state);
+            return;
+        }
+
+        const enriched = state.suppressedCount > 0
+            ? { ...payload, suppressedSinceLastEmit: state.suppressedCount }
+            : payload;
+
+        console.log('[PerParticipantVideoCaptureManager]', enriched);
+        window.ws?.sendJson?.(enriched);
+
+        this.throttleState.set(key, { lastEmittedAt: now, suppressedCount: 0 });
     }
 
     start() {
@@ -132,8 +167,7 @@ class PerParticipantVideoCaptureManager {
                 }
             }
         } catch (err) {
-            console.error('[PerParticipantVideoCaptureManager] Error scanning video players:', err);
-            window.ws?.sendJson?.({
+            this.throttledLogAndSend({
                 type: 'ErrorCapturingPerParticipantVideo',
                 error: err.message,
             });
@@ -265,7 +299,12 @@ class PerParticipantVideoCaptureManager {
         const jpegQuality = (sourceConfig.jpeg_quality ?? 80) / 100;
 
         if (!targetWidth || !targetHeight) {
-            console.error('[PerParticipantVideoCaptureManager] Missing target dimensions:', sourceConfig);
+            this.throttledLogAndSend({
+                type: 'PerParticipantVideoCaptureManagerMissingTargetDimensions',
+                participantId,
+                isScreenShare,
+                sourceConfig,
+            });
             return;
         }
 
@@ -275,7 +314,11 @@ class PerParticipantVideoCaptureManager {
 
         const ctx = targetCanvas.getContext('2d', { alpha: false });
         if (!ctx) {
-            console.error('[PerParticipantVideoCaptureManager] Could not create target canvas context');
+            this.throttledLogAndSend({
+                type: 'PerParticipantVideoCaptureManagerNoCanvasContext',
+                participantId,
+                isScreenShare,
+            });
             return;
         }
 
@@ -337,7 +380,12 @@ class PerParticipantVideoCaptureManager {
                     base64
                 );
             } catch (err) {
-                console.error('[PerParticipantVideoCaptureManager] Error capturing video frame:', err);
+                this.throttledLogAndSend({
+                    type: 'PerParticipantVideoCaptureManagerCaptureFrameError',
+                    participantId: capture.participantId,
+                    isScreenShare: capture.isScreenShare,
+                    error: err.message,
+                });
             } finally {
                 capture.inFlight = false;
             }
@@ -346,17 +394,10 @@ class PerParticipantVideoCaptureManager {
         capture.captureIntervalId = setInterval(captureFrame, captureIntervalMs);
         this.activeCaptures.set(captureKey, capture);
 
-        window.ws?.sendJson?.({
+        this.throttledLogAndSend({
             type: sourceType === 'canvas'
                 ? 'PerParticipantVideoCaptureManagerStartCanvasElementCapture'
                 : 'PerParticipantVideoCaptureManagerStartVideoElementCapture',
-            participantId,
-            isScreenShare,
-        });
-
-        captureFrame();
-
-        console.log('[PerParticipantVideoCaptureManager] Started capture:', {
             captureKey,
             participantId,
             isScreenShare,
@@ -365,6 +406,8 @@ class PerParticipantVideoCaptureManager {
             targetHeight,
             desiredFPS,
         });
+
+        captureFrame();
     }
 
     stopCapture(captureKey) {
@@ -378,13 +421,8 @@ class PerParticipantVideoCaptureManager {
 
         this.activeCaptures.delete(captureKey);
 
-        window.ws?.sendJson?.({
+        this.throttledLogAndSend({
             type: 'PerParticipantVideoCaptureManagerStopCapture',
-            participantId: capture.participantId,
-            isScreenShare: capture.isScreenShare,
-        });
-
-        console.log('[PerParticipantVideoCaptureManager] Stopped capture:', {
             captureKey,
             participantId: capture.participantId,
             isScreenShare: capture.isScreenShare,
