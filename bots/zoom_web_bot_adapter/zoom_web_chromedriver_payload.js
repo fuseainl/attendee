@@ -15,6 +15,30 @@ class PerParticipantVideoCaptureManager {
         // key -> { lastEmittedAt, suppressedCount }
         this.throttleIntervalMs = 5000;
         this.throttleState = new Map();
+
+        // Once the current user has been observed in window.userManager.currentUsersMap,
+        // we latch this to true so we don't re-scan the map on every tick.
+        this.currentUserObserved = false;
+    }
+
+    hasCurrentUserJoined() {
+        if (this.currentUserObserved) {
+            return true;
+        }
+
+        const currentUsersMap = window.userManager?.currentUsersMap;
+        if (!currentUsersMap) {
+            return false;
+        }
+
+        for (const user of currentUsersMap.values()) {
+            if (user?.isCurrentUser) {
+                this.currentUserObserved = true;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     makeThrottleKey(payload) {
@@ -106,13 +130,22 @@ class PerParticipantVideoCaptureManager {
     getEligibleCaptureCandidates() {
         const candidatesByCaptureKey = new Map();
 
+        if (!this.hasCurrentUserJoined()) {
+            return candidatesByCaptureKey;
+        }
+
         document.querySelectorAll('video-player').forEach(videoPlayer => {
             const participantInfo = this.getParticipantInfo(videoPlayer);
             if (!participantInfo) return;
 
             const { participantId, isScreenShare, captureKey } = participantInfo;
 
-            if (!window.userManager?.currentUsersMap?.has?.(participantId)) {
+            const participantUser = window.userManager?.currentUsersMap?.get?.(participantId);
+            if (!participantUser) {
+                return;
+            }
+
+            if (participantUser.isCurrentUser) {
                 return;
             }
 
