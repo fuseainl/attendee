@@ -1928,6 +1928,16 @@ class ReceiverManager {
             if (!isActive)
                 continue;
 
+            if (receiver.track?.readyState === 'ended') {
+                this.receiverMap.set(receiver, false);
+                window.ws?.sendJson({
+                    type: 'ReceiverManagerUpdate',
+                    update: "setReceiverInactive",
+                    receiverTrackId: receiver.track?.id
+                });
+                continue;
+            }
+
             const recentContributingSources = contributingSources.filter(contributingSource => currentTime - contributingSource.timestamp <= 50);
             const receiverSpeakingParticipantIds = window.callManager?.getSpeakingParticipantIds(recentContributingSources) || [];
 
