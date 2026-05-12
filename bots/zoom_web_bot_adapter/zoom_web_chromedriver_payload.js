@@ -19,6 +19,25 @@ class PerParticipantVideoCaptureManager {
         // Once the current user has been observed in window.userManager.currentUsersMap,
         // we latch this to true so we don't re-scan the map on every tick.
         this.currentUserObserved = false;
+
+        this.screenshotChain = Promise.resolve();
+    }
+
+    async runScreenshotExclusive(fn) {
+        const previous = this.screenshotChain;
+    
+        let release;
+        this.screenshotChain = new Promise(resolve => {
+            release = resolve;
+        });
+    
+        await previous;
+    
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
     }
 
     hasCurrentUserJoined() {
@@ -270,7 +289,9 @@ class PerParticipantVideoCaptureManager {
             return false;
         }
 
-        const blob = await sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video');
+        const blob = await this.runScreenshotExclusive(() =>
+            sdk.ScreenShot(nodeId, isScreenShare ? 'sharing' : 'video')
+        );
         if (!blob) {
             return false;
         }
