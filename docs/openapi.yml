@@ -2408,13 +2408,6 @@ components:
                     docs for details.
                 speech_model:
                   type: string
-                  enum:
-                  - best
-                  - nano
-                  - slam-1
-                  - universal
-                  - universal-2
-                  - universal-3-pro
                   description: The speech model to use for transcription. See AssemblyAI
                     docs for details. This parameter is deprecated, use the speech_models
                     param instead.
@@ -2422,13 +2415,6 @@ components:
                   type: array
                   items:
                     type: string
-                    enum:
-                    - best
-                    - nano
-                    - slam-1
-                    - universal
-                    - universal-2
-                    - universal-3-pro
                   uniqueItems: true
                   description: The speech models to use for transcription in order
                     of preference. Defaults to ['universal-3-pro', 'universal-2'].
