@@ -2423,6 +2423,10 @@ components:
                   items:
                     type: string
                     enum:
+                    - best
+                    - nano
+                    - slam-1
+                    - universal
                     - universal-2
                     - universal-3-pro
                   uniqueItems: true
