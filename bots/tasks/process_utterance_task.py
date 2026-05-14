@@ -586,9 +586,6 @@ def _request_custom_async_transcription(utterance, headers, data):
     except (json.JSONDecodeError, ValueError) as e:
         logger.error(f"Custom async transcription response parsing failed: {str(e)}")
         return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "error": f"Invalid JSON response: {str(e)}"}
-    except Exception as e:
-        logger.error(f"Custom async transcription unexpected error: {str(e)}")
-        return None, {"reason": TranscriptionFailureReasons.INTERNAL_ERROR, "error": str(e)}
 
 
 def _serialize_form_data(form_data):
