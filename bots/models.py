@@ -754,8 +754,11 @@ class TranscriptionSettings:
     def custom_async_additional_props(self):
         return self._settings.get("custom_async", {})
 
-    def custom_async_v2_additional_props(self):
-        return self._settings.get("custom_async_v2", {})
+    def custom_async_v2_form_data(self):
+        return self._settings.get("custom_async_v2", {}).get("form_data", {})
+
+    def custom_async_v2_headers(self):
+        return self._settings.get("custom_async_v2", {}).get("headers", {})
 
     def deepgram_language(self):
         return self._settings.get("deepgram", {}).get("language", None)
