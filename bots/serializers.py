@@ -429,6 +429,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                 "headers": {
                     "type": "object",
                     "description": "Key-value pairs to be sent as headers in the request to the custom transcription service.",
+                    "additionalProperties": {"type": "string"},
                 },
                 "form_data": {
                     "type": "object",
