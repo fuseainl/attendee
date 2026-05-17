@@ -310,7 +310,10 @@ class TeamsUIMethods:
         self.set_layout(self.get_layout_to_select())
 
         if self.disable_incoming_video:
-            self.disable_incoming_video_in_ui()
+            try:
+                self.disable_incoming_video_in_ui()
+            except UiCouldNotLocateElementException as e:
+                logger.warning(f"Could not disable incoming video in Teams UI; continuing without disabling it. Error: {e}")
 
         self.ready_to_show_bot_image()
 
