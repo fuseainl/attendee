@@ -119,51 +119,249 @@ const handleVideoTrackForRealTimePerParticipantVideo = async ({ track, streams }
     };
   })();
 
-class StyleManager {
+  class MixedAudioStreamManager {
     constructor() {
-        this.audioContext = null;
         this.audioTracks = [];
-        this.silenceThreshold = 0.0;
-        this.silenceCheckInterval = null;
-        this.frameStyleElement = null;
-        this.frameAdjustInterval = null;
-        this.neededInteractionsInterval = null;
-        this.fakeUserActivityInterval = null;
-
-        // Stream used which combines the audio tracks from the meeting. Does NOT include the bot's audio
         this.meetingAudioStream = null;
+        this.audioTracksToBeAdded = [];
+        this.audioContext = null;
+        this.destination = null;
+        this.seenTrackIds = new Set();
+        this.sourceNodes = [];
+
+        // Silence detection state
+        this.silenceThreshold = 0.0;
+        this.analyser = null;
+        this.audioDataArray = null;
+        this.mixedAudioTrack = null;
     }
 
-    addAudioTrack(audioTrack) {
-        this.audioTracks.push(audioTrack);
-        if (this.audioTracks.length > 1) {
-            window.ws?.sendJson({
-                type: 'MultipleAudioTracksDetected',
-                numberOfTracks: this.audioTracks.length,
-            });
+
+    addAudioStream(audioStream) {
+        const track = audioStream.getAudioTracks()[0];
+        if (track) {
+            this.addAudioTrack(track);
         }
     }
 
+    addAudioTrackFromTrackEvent(trackEvent) {
+        if (!trackEvent.track)
+            return;
+        const firstStreamId = trackEvent.streams[0]?.id;
+        // streamId must contain mainAudio in it, which means it's from Teams, not from a voice agent.
+        if (!firstStreamId?.includes('mainAudio')) {
+            window.ws?.sendJson({
+                type: 'AudioTrackNotAddedToMeetingAudioStream',
+                trackId: trackEvent.track.id,
+                streams: trackEvent.streams?.map(stream => stream?.id),
+            });
+            return;
+        }
+        window.ws?.sendJson({
+            type: 'AudioTrackAddedToMeetingAudioStream',
+            trackId: trackEvent.track.id,
+            streams: trackEvent.streams?.map(stream => stream?.id),
+        });
+        this.addAudioTrack(trackEvent.track);
+    }
+
+    addAudioTrack(track) {
+        if (!track || this.seenTrackIds.has(track.id)) {
+            return;
+        }
+
+        // If start() already ran, patch the new track into the existing mix.
+        if (this.audioContext && this.destination) {
+            const mediaStream = new MediaStream([track]);
+            const source = this.audioContext.createMediaStreamSource(mediaStream);
+            source.connect(this.destination);
+            this.sourceNodes.push(source);
+            this.seenTrackIds.add(track.id);
+            if (this.seenTrackIds.size > 1) {
+                window.ws?.sendJson({
+                    type: 'MultipleAudioTracksDetected',
+                    numberOfTracks: this.seenTrackIds.size,
+                });
+            }
+        }
+        else {
+            this.audioTracksToBeAdded.push(track);
+        }
+    }
+
+    createStream() {
+        if (this.meetingAudioStream)
+            return;
+        this.audioContext = new AudioContext({ sampleRate: 48000 });
+        this.destination = this.audioContext.createMediaStreamDestination();
+
+        this.audioTracksToBeAdded.forEach(track => this.addAudioTrack(track));
+
+        this.meetingAudioStream = this.destination.stream;
+
+        // Create a source from the destination's stream so that it actually plays
+        const mixedSource = this.audioContext.createMediaStreamSource(this.destination.stream);
+
+        // Set up an analyser on the mixed stream so we can detect silence
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.audioDataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        mixedSource.connect(this.analyser);
+
+        this.mixedAudioTrack = this.destination.stream.getAudioTracks()[0];
+
+        // Process and send mixed audio if enabled
+        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
+            this.processMixedAudioTrack();
+        }
+
+        window.ws?.sendJson({
+            type: 'MeetingAudioStreamCreated',
+            message: 'Meeting audio stream created',
+        });
+    }
+
+    getMeetingAudioStream() {
+        this.createStream();
+        return this.meetingAudioStream;
+    }
+
     checkAudioActivity() {
+        if (!this.analyser || !this.audioDataArray) {
+            return;
+        }
+
         // Get audio data
         this.analyser.getByteTimeDomainData(this.audioDataArray);
-        
+
         // Calculate deviation from the center value (128)
         let sumDeviation = 0;
         for (let i = 0; i < this.audioDataArray.length; i++) {
             // Calculate how much each sample deviates from the center (128)
             sumDeviation += Math.abs(this.audioDataArray[i] - 128);
         }
-        
+
         const averageDeviation = sumDeviation / this.audioDataArray.length;
-        
+
         // If average deviation is above threshold, we have audio activity
         if (averageDeviation > this.silenceThreshold) {
             window.ws.sendJson({
                 type: 'SilenceStatus',
                 isSilent: false
             });
+            window.audioConnectionDiagnosticsManager?.recordNonSilenceFromSilenceDetection();
         }
+    }
+
+    async processMixedAudioTrack() {
+        try {
+            // Create processor to get raw audio frames from the mixed audio track
+            const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
+            const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
+
+            // Get readable stream of audio frames
+            const readable = processor.readable;
+            const writable = generator.writable;
+
+            // Transform stream to intercept and send audio frames
+            const transformStream = new TransformStream({
+                async transform(frame, controller) {
+                    if (!frame) {
+                        return;
+                    }
+
+                    try {
+                        // Check if controller is still active
+                        if (controller.desiredSize === null) {
+                            frame.close();
+                            return;
+                        }
+
+                        // Copy the audio data
+                        const numChannels = frame.numberOfChannels;
+                        const numSamples = frame.numberOfFrames;
+                        const audioData = new Float32Array(numSamples);
+
+                        // Copy data from each channel
+                        // If multi-channel, average all channels together to create mono output
+                        if (numChannels > 1) {
+                            // Temporary buffer to hold each channel's data
+                            const channelData = new Float32Array(numSamples);
+
+                            // Sum all channels
+                            for (let channel = 0; channel < numChannels; channel++) {
+                                frame.copyTo(channelData, { planeIndex: channel });
+                                for (let i = 0; i < numSamples; i++) {
+                                    audioData[i] += channelData[i];
+                                }
+                            }
+
+                            // Average by dividing by number of channels
+                            for (let i = 0; i < numSamples; i++) {
+                                audioData[i] /= numChannels;
+                            }
+                        } else {
+                            // If already mono, just copy the data
+                            frame.copyTo(audioData, { planeIndex: 0 });
+                        }
+
+                        // Send mixed audio data via websocket
+                        const timestamp = performance.now();
+                        window.ws.sendMixedAudio(timestamp, audioData);
+
+                        // Pass through the original frame
+                        controller.enqueue(frame);
+                    } catch (error) {
+                        console.error('Error processing mixed audio frame:', error);
+                        frame.close();
+                    }
+                },
+                flush() {
+                    console.log('Mixed audio transform stream flush called');
+                }
+            });
+
+            // Create an abort controller for cleanup
+            const abortController = new AbortController();
+
+            try {
+                // Connect the streams
+                await readable
+                    .pipeThrough(transformStream)
+                    .pipeTo(writable, {
+                        signal: abortController.signal
+                    })
+                    .catch(error => {
+                        if (error.name !== 'AbortError') {
+                            console.error('Mixed audio pipeline error:', error);
+                        }
+                    });
+            } catch (error) {
+                console.error('Mixed audio stream pipeline error:', error);
+                abortController.abort();
+            }
+
+        } catch (error) {
+            console.error('Error setting up mixed audio processor:', error);
+        }
+    }
+}
+
+class StyleManager {
+    constructor() {
+        this.silenceCheckInterval = null;
+        this.frameStyleElement = null;
+        this.frameAdjustInterval = null;
+        this.neededInteractionsInterval = null;
+        this.fakeUserActivityInterval = null;
+
+        this.started = false;
+    }
+
+    checkAudioActivity() {
+        // Silence detection lives in MixedAudioStreamManager, which owns the mixed
+        // meeting audio stream and its analyser.
+        window.mixedAudioStreamManager?.checkAudioActivity();
     }
 
     // Prevents Teams from going into mode where it stops receiving chat messages
@@ -233,38 +431,9 @@ class StyleManager {
     }
 
     startSilenceDetection() {
-         // Set up audio context and processing as before
-         this.audioContext = new AudioContext();
-
-         this.audioSources = this.audioTracks.map(track => {
-             const mediaStream = new MediaStream([track]);
-             return this.audioContext.createMediaStreamSource(mediaStream);
-         });
- 
-         // Create a destination node
-         const destination = this.audioContext.createMediaStreamDestination();
- 
-         // Connect all sources to the destination
-         this.audioSources.forEach(source => {
-             source.connect(destination);
-         });
- 
-         // Create analyzer and connect it to the destination
-         this.analyser = this.audioContext.createAnalyser();
-         this.analyser.fftSize = 256;
-         const bufferLength = this.analyser.frequencyBinCount;
-         this.audioDataArray = new Uint8Array(bufferLength);
- 
-         // Create a source from the destination's stream and connect it to the analyzer
-         const mixedSource = this.audioContext.createMediaStreamSource(destination.stream);
-         mixedSource.connect(this.analyser);
- 
-         this.mixedAudioTrack = destination.stream.getAudioTracks()[0];
-
-        // Process and send mixed audio if enabled
-        if (window.initialData.sendMixedAudio && this.mixedAudioTrack) {
-            this.processMixedAudioTrack();
-        }
+        // Ensure the mixed meeting audio stream (and its analyser) is set up. The
+        // audio graph and silence/mixed-audio analysis now live in MixedAudioStreamManager.
+        window.mixedAudioStreamManager?.getMeetingAudioStream();
 
         // Clear any existing interval
         if (this.silenceCheckInterval) {
@@ -293,105 +462,12 @@ class StyleManager {
         this.fakeUserActivityInterval = setInterval(() => {
             this.fakeUserActivity();
         }, 240000);
-
-        this.meetingAudioStream = destination.stream;
     }
     
     getMeetingAudioStream() {
-        return this.meetingAudioStream;
-    }
-
-    async processMixedAudioTrack() {
-        try {
-            // Create processor to get raw audio frames from the mixed audio track
-            const processor = new MediaStreamTrackProcessor({ track: this.mixedAudioTrack });
-            const generator = new MediaStreamTrackGenerator({ kind: 'audio' });
-            
-            // Get readable stream of audio frames
-            const readable = processor.readable;
-            const writable = generator.writable;
-
-            // Transform stream to intercept and send audio frames
-            const transformStream = new TransformStream({
-                async transform(frame, controller) {
-                    if (!frame) {
-                        return;
-                    }
-
-                    try {
-                        // Check if controller is still active
-                        if (controller.desiredSize === null) {
-                            frame.close();
-                            return;
-                        }
-
-                        // Copy the audio data
-                        const numChannels = frame.numberOfChannels;
-                        const numSamples = frame.numberOfFrames;
-                        const audioData = new Float32Array(numSamples);
-                        
-                        // Copy data from each channel
-                        // If multi-channel, average all channels together to create mono output
-                        if (numChannels > 1) {
-                            // Temporary buffer to hold each channel's data
-                            const channelData = new Float32Array(numSamples);
-                            
-                            // Sum all channels
-                            for (let channel = 0; channel < numChannels; channel++) {
-                                frame.copyTo(channelData, { planeIndex: channel });
-                                for (let i = 0; i < numSamples; i++) {
-                                    audioData[i] += channelData[i];
-                                }
-                            }
-                            
-                            // Average by dividing by number of channels
-                            for (let i = 0; i < numSamples; i++) {
-                                audioData[i] /= numChannels;
-                            }
-                        } else {
-                            // If already mono, just copy the data
-                            frame.copyTo(audioData, { planeIndex: 0 });
-                        }
-
-                        // Send mixed audio data via websocket
-                        const timestamp = performance.now();
-                        window.ws.sendMixedAudio(timestamp, audioData);
-                        
-                        // Pass through the original frame
-                        controller.enqueue(frame);
-                    } catch (error) {
-                        console.error('Error processing mixed audio frame:', error);
-                        frame.close();
-                    }
-                },
-                flush() {
-                    console.log('Mixed audio transform stream flush called');
-                }
-            });
-
-            // Create an abort controller for cleanup
-            const abortController = new AbortController();
-
-            try {
-                // Connect the streams
-                await readable
-                    .pipeThrough(transformStream)
-                    .pipeTo(writable, {
-                        signal: abortController.signal
-                    })
-                    .catch(error => {
-                        if (error.name !== 'AbortError') {
-                            console.error('Mixed audio pipeline error:', error);
-                        }
-                    });
-            } catch (error) {
-                console.error('Mixed audio stream pipeline error:', error);
-                abortController.abort();
-            }
-
-        } catch (error) {
-            console.error('Error setting up mixed audio processor:', error);
-        }
+        if (!this.started)
+            return null;
+        return window.mixedAudioStreamManager?.getMeetingAudioStream();
     }
  
     makeMainVideoFillFrame = function() {
@@ -431,6 +507,15 @@ class StyleManager {
             [data-test-segment-type="central"], 
             [data-test-segment-type="central"] * {
                 pointer-events: auto !important;
+            }
+            /* break stacking contexts on every ancestor of the central pane */
+            :has([data-test-segment-type="central"]) {
+                transform: none !important;
+                will-change: auto !important;
+                filter: none !important;
+                contain: none !important;
+                isolation: auto !important;
+                perspective: none !important;
             }
         `;
         document.head.appendChild(style);
@@ -515,6 +600,7 @@ class StyleManager {
     }
 
     start() {
+        this.started = true;
         this.startSilenceDetection();
 
         if (window.teamsInitialData.modifyDomForVideoRecording) {
@@ -646,6 +732,61 @@ class DominantSpeakerManager {
 
     getDominantSpeaker() {
         return virtualStreamToPhysicalStreamMappingManager.virtualStreamIdToParticipant(this.dominantSpeakerStreamId);
+    }
+}
+
+// Receives events from other parts of the payload and determines whether the audio
+// connection appears to be in an inconsistent state. If we've observed active speaker
+// activity (which implies people are talking) but have never received any non-silent
+// audio, it's likely the audio connection is broken and we surface a warning.
+class AudioConnectionDiagnosticsManager {
+    constructor(checkIntervalMs = 60000) {
+        this.checkIntervalMs = checkIntervalMs;
+        this.hasEncounteredNonSilenceFromSilenceDetection = false;
+        this.numberOfChecksWithUnMutedParticipant = 0;
+        this.hasSentInconsistencyWarning = false;
+        this.intervalId = null;
+        this.lastUpdate = null;
+    }
+
+    start() {
+        if (this.intervalId !== null)
+            return;
+
+        this.intervalId = setInterval(() => this.check(), this.checkIntervalMs);
+    }
+
+    stop() {
+        if (this.intervalId === null)
+            return;
+
+        clearInterval(this.intervalId);
+        this.intervalId = null;
+    }
+
+    recordNonSilenceFromSilenceDetection() {
+        this.hasEncounteredNonSilenceFromSilenceDetection = true;
+    }
+
+    recordUnMutedParticipant() {
+        this.numberOfChecksWithUnMutedParticipant++;
+    }
+
+    check() {
+        if (!window.ws?.mediaSendingEnabled)
+            return;
+
+        if (window.callManager?.getUnmutedParticipantIds()?.length) {
+            this.recordUnMutedParticipant();
+        }
+
+        if (this.numberOfChecksWithUnMutedParticipant > 5 && !this.hasEncounteredNonSilenceFromSilenceDetection && !this.hasSentInconsistencyWarning) {
+            this.hasSentInconsistencyWarning = true;
+            window.ws?.sendJson({
+                type: 'AudioConnectionDiagnosticsWarning',
+                message: `Observed unmuted participants across ${this.numberOfChecksWithUnMutedParticipant} checks but never received any non-silent audio`
+            });
+        }
     }
 }
 
@@ -1993,8 +2134,15 @@ window.chatMessageManager = chatMessageManager;
 const virtualStreamToPhysicalStreamMappingManager = new VirtualStreamToPhysicalStreamMappingManager();
 const dominantSpeakerManager = new DominantSpeakerManager();
 
+const audioConnectionDiagnosticsManager = new AudioConnectionDiagnosticsManager();
+window.audioConnectionDiagnosticsManager = audioConnectionDiagnosticsManager;
+audioConnectionDiagnosticsManager.start();
+
 const styleManager = new StyleManager();
 window.styleManager = styleManager;
+
+const mixedAudioStreamManager = new MixedAudioStreamManager();
+window.mixedAudioStreamManager = mixedAudioStreamManager;
 
 const receiverManager = new ReceiverManager();
 window.receiverManager = receiverManager;
@@ -2562,6 +2710,18 @@ const handleVideoTrack = async (event) => {
 new RTCInterceptor({
     onPeerConnectionCreate: (peerConnection) => {
         realConsole?.log('New RTCPeerConnection created:', peerConnection);
+
+        // Unique id so downstream consumers can tell which peer connection a
+        // given stats/state message belongs to (Teams creates several).
+        const peerConnectionId = (crypto?.randomUUID?.() ?? `pc-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+        window.ws?.sendJson({
+            type: 'WebRTCPeerConnectionCreated',
+            peerConnectionId,
+            connectionState: peerConnection.connectionState,
+            iceConnectionState: peerConnection.iceConnectionState,
+        });
+
         peerConnection.addEventListener('datachannel', (event) => {
             realConsole?.log('datachannel', event);
             realConsole?.log('datachannel label', event.channel.label);
@@ -2589,7 +2749,7 @@ new RTCInterceptor({
             // We need to capture every audio track in the meeting,
             // but we don't need to do anything with the video tracks
             if (event.track?.kind === 'audio') {
-                window.styleManager.addAudioTrack(event.track);
+                window.mixedAudioStreamManager?.addAudioTrackFromTrackEvent(event);
                 if (window.initialData.sendPerParticipantAudio) {
                     handleAudioTrack(event);
                 }
@@ -2671,6 +2831,116 @@ new RTCInterceptor({
         peerConnection.addEventListener('icecandidate', (event) => {
             if (event.candidate) {
                 //console.log('ICE Candidate:', event.candidate);
+            }
+        });
+
+        // Periodically collect and report WebRTC receive-path stats for this peer connection
+        const collectReceivePathStats = async (pc) => {
+            // close() does not fire connectionstatechange, so guard here to stop
+            // reporting (and leaking the interval) once the PC is gone.
+            if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+                window.ws?.sendJson({
+                    type: 'WebRTCConnectionStateChanged',
+                    peerConnectionId,
+                    connectionState: pc.connectionState,
+                });
+                clearInterval(receivePathStatsInterval);
+                return;
+            }
+            try {
+                const stats = await pc.getStats();
+
+                let selectedPair;
+                let localCandidate;
+                let remoteCandidate;
+                const inboundAudio = [];
+                const dataChannels = [];
+
+                for (const report of stats.values()) {
+                    if (report.type === "candidate-pair" && report.selected) {
+                        selectedPair = report;
+                    }
+
+                    if (report.type === "local-candidate") {
+                        localCandidate ??= report;
+                    }
+
+                    if (report.type === "remote-candidate") {
+                        remoteCandidate ??= report;
+                    }
+
+                    if (report.type === "inbound-rtp" && report.kind === "audio") {
+                        inboundAudio.push({
+                            ssrc: report.ssrc,
+                            bytesReceived: report.bytesReceived,
+                            packetsReceived: report.packetsReceived,
+                            packetsLost: report.packetsLost,
+                            jitter: report.jitter,
+                        });
+                    }
+
+                    if (report.type === "data-channel") {
+                        dataChannels.push({
+                            label: report.label,
+                            state: report.state,
+                            messagesReceived: report.messagesReceived,
+                            bytesReceived: report.bytesReceived,
+                            messagesSent: report.messagesSent,
+                        });
+                    }
+                }
+
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStats",
+                    peerConnectionId,
+                    connectionState: pc.connectionState,
+                    iceConnectionState: pc.iceConnectionState,
+                    selectedPair: selectedPair && {
+                        state: selectedPair.state,
+                        nominated: selectedPair.nominated,
+                        bytesSent: selectedPair.bytesSent,
+                        bytesReceived: selectedPair.bytesReceived,
+                        currentRoundTripTime: selectedPair.currentRoundTripTime,
+                        localCandidateId: selectedPair.localCandidateId,
+                        remoteCandidateId: selectedPair.remoteCandidateId,
+                    },
+                    localCandidate: localCandidate && {
+                        candidateType: localCandidate.candidateType,
+                        protocol: localCandidate.protocol,
+                        address: localCandidate.address,
+                        port: localCandidate.port,
+                    },
+                    remoteCandidate: remoteCandidate && {
+                        candidateType: remoteCandidate.candidateType,
+                        protocol: remoteCandidate.protocol,
+                        address: remoteCandidate.address,
+                        port: remoteCandidate.port,
+                    },
+                    inboundAudio,
+                    dataChannels,
+                });
+            } catch (error) {
+                window.ws?.sendJson({
+                    type: "WebRTCReceivePathStatsError",
+                    peerConnectionId,
+                    error: error?.message ?? String(error),
+                });
+            }
+        };
+
+        const receivePathStatsInterval = setInterval(() => {
+            collectReceivePathStats(peerConnection);
+        }, 60000);
+
+        peerConnection.addEventListener('connectionstatechange', () => {
+            window.ws?.sendJson({
+                type: 'WebRTCConnectionStateChanged',
+                peerConnectionId,
+                connectionState: peerConnection.connectionState,
+            });
+            if (peerConnection.connectionState === 'closed' ||
+                peerConnection.connectionState === 'failed') {
+                clearInterval(receivePathStatsInterval);
             }
         });
     },
@@ -3027,6 +3297,49 @@ class CallManager {
         // return this.activeCall.currentUserSkypeIdentity?.id;
     }
 
+    disableVideoEffects() {
+        try {
+            this.setActiveCall();
+            if (!this.activeCall) {
+                return false;
+            }
+
+            const videoEffectManager = this.activeCall?.mediaAgent?.deviceManager?.effectsManagerInternal?.videoEffectManager;
+            if (!videoEffectManager) {
+                return false;
+            }
+
+            if (!videoEffectManager.__attendeeIsEffectEnabledPatched) {
+                Object.defineProperty(videoEffectManager, "isEffectEnabled", {
+                    get() {
+                        return false;
+                    },
+                    configurable: true,
+                });
+                videoEffectManager.__attendeeIsEffectEnabledPatched = true;
+            }
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    getUnmutedParticipantIds() {
+        this.setActiveCall();
+        if (!this.activeCall) {
+            return [];
+        }
+        if (!this.activeCall.participants) {
+            return [];
+        }
+        const unmutedParticipantIds = new Set();
+        this.activeCall.participants.forEach(participant => {
+            if (participant.isServerMuted === false && participant.displayName) {
+                unmutedParticipantIds.add(participant.id);
+            }
+        });
+        return Array.from(unmutedParticipantIds);
+    }
 
     getSpeakingParticipantIds(contributingSources) {
         this.setActiveCall();
@@ -3172,3 +3485,305 @@ class CallManager {
 
 const callManager = new CallManager();
 window.callManager = callManager;
+
+if (window.teamsInitialData?.shouldLogNetworkRequests) {
+    
+(function installFetchAndXhrNetworkInterceptor() {
+    if (window.__attendeeNetworkInterceptorInstalled) {
+      return;
+    }
+    window.__attendeeNetworkInterceptorInstalled = true;
+    
+    let enabled = false;
+    let interceptorStarted = false;
+    let nextRequestId = 1;
+  
+    function nowMs() {
+      return Math.round(performance.timeOrigin + performance.now());
+    }
+  
+    function safeSendJson(payload) {
+      try {
+        window.ws?.sendJson({
+          type: "NetworkRequest",
+          ...payload,
+        });
+      } catch (err) {
+        // Never let logging interfere with the page.
+      }
+    }
+  
+    function truncateForLog(value, maxChars) {
+      if (value == null) {
+        return "";
+      }
+  
+      const str = String(value);
+      if (str.length <= maxChars) {
+        return str;
+      }
+  
+      return str.slice(0, maxChars);
+    }
+  
+    function normalizeFetchUrl(input) {
+      try {
+        if (typeof input === "string") {
+          return input;
+        }
+  
+        if (input instanceof URL) {
+          return input.toString();
+        }
+  
+        if (input instanceof Request) {
+          return input.url;
+        }
+  
+        return String(input);
+      } catch (err) {
+        return "<unknown>";
+      }
+    }
+  
+    function normalizeFetchMethod(input, init) {
+      try {
+        if (init?.method) {
+          return String(init.method).toUpperCase();
+        }
+  
+        if (input instanceof Request && input.method) {
+          return String(input.method).toUpperCase();
+        }
+  
+        return "GET";
+      } catch (err) {
+        return "GET";
+      }
+    }
+  
+    async function readResponsePreview(response, maxChars) {
+      try {
+        const clone = response.clone();
+  
+        // Use streaming when available so we do not need to buffer an entire large response.
+        if (clone.body?.getReader) {
+          const reader = clone.body.getReader();
+          const decoder = new TextDecoder("utf-8", { fatal: false });
+  
+          let preview = "";
+          while (preview.length < maxChars) {
+            const { value, done } = await reader.read();
+            if (done) {
+              break;
+            }
+  
+            preview += decoder.decode(value, { stream: true });
+          }
+  
+          try {
+            await reader.cancel();
+          } catch (err) {}
+  
+          preview += decoder.decode();
+          return truncateForLog(preview, maxChars);
+        }
+  
+        // Fallback for older browsers / weird Response objects.
+        return truncateForLog(await clone.text(), maxChars);
+      } catch (err) {
+        return `<response body unavailable: ${err?.name || "Error"}: ${err?.message || String(err)}>`;
+      }
+    }
+  
+    window.startInterceptingFetchAndXhrRequests = function startInterceptingFetchAndXhrRequests(options = {}) {
+      if (interceptorStarted) {
+        return;
+      }
+        
+      interceptorStarted = true;
+      enabled = true;
+  
+      const originalFetch = window.fetch;
+      const originalXhrOpen = XMLHttpRequest.prototype.open;
+      const originalXhrSend = XMLHttpRequest.prototype.send;
+      const originalXhrSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+      const maxResponseChars = Number.isFinite(options.maxResponseChars)
+        ? options.maxResponseChars
+        : 500;
+  
+      safeSendJson({
+        event: "network_interceptor_started",
+        timestampMs: nowMs(),
+        maxResponseChars,
+      });
+  
+      window.fetch = function interceptedFetch(input, init) {
+        if (!enabled) {
+          return originalFetch.apply(this, arguments);
+        }
+  
+        const requestId = nextRequestId++;
+        const startedAtMs = nowMs();
+        const url = normalizeFetchUrl(input);
+        const method = normalizeFetchMethod(input, init);
+  
+        let fetchPromise;
+        try {
+          fetchPromise = originalFetch.apply(this, arguments);
+        } catch (err) {
+          safeSendJson({
+            event: "request_failed",
+            requestId,
+            requestType: "fetch",
+            method,
+            url,
+            startedAtMs,
+            finishedAtMs: nowMs(),
+            errorName: err?.name,
+            errorMessage: err?.message || String(err),
+          });
+          throw err;
+        }
+  
+        return fetchPromise.then(
+          (response) => {
+            const finishedAtMs = nowMs();
+  
+            // Do this async and do not delay the page's fetch caller.
+            readResponsePreview(response, maxResponseChars).then((responsePreview) => {
+              safeSendJson({
+                event: "request_finished",
+                requestId,
+                requestType: "fetch",
+                method,
+                url,
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+                responseUrl: response.url,
+                contentType: response.headers?.get?.("content-type"),
+                startedAtMs,
+                finishedAtMs,
+                durationMs: finishedAtMs - startedAtMs,
+                responsePreview,
+              });
+            });
+  
+            return response;
+          },
+          (err) => {
+            safeSendJson({
+              event: "request_failed",
+              requestId,
+              requestType: "fetch",
+              method,
+              url,
+              startedAtMs,
+              finishedAtMs: nowMs(),
+              errorName: err?.name,
+              errorMessage: err?.message || String(err),
+            });
+            throw err;
+          }
+        );
+      };
+  
+      XMLHttpRequest.prototype.open = function interceptedXhrOpen(method, url) {
+        this.__attendeeNetworkLog = {
+          requestId: nextRequestId++,
+          requestType: "xhr",
+          method: method ? String(method).toUpperCase() : "GET",
+          url: url ? String(url) : "<unknown>",
+          startedAtMs: null,
+          requestHeaders: {},
+        };
+  
+        return originalXhrOpen.apply(this, arguments);
+      };
+  
+      XMLHttpRequest.prototype.setRequestHeader = function interceptedXhrSetRequestHeader(name, value) {
+        try {
+          if (this.__attendeeNetworkLog) {
+            this.__attendeeNetworkLog.requestHeaders[String(name)] = String(value);
+          }
+        } catch (err) {}
+  
+        return originalXhrSetRequestHeader.apply(this, arguments);
+      };
+  
+      XMLHttpRequest.prototype.send = function interceptedXhrSend() {
+        if (!enabled || !this.__attendeeNetworkLog) {
+          return originalXhrSend.apply(this, arguments);
+        }
+  
+        const metadata = this.__attendeeNetworkLog;
+        metadata.startedAtMs = nowMs();
+  
+        this.addEventListener("loadend", function onXhrLoadEnd() {
+          const finishedAtMs = nowMs();
+  
+          let responsePreview = "";
+          try {
+            // responseText throws unless responseType is "" or "text".
+            if (this.responseType === "" || this.responseType === "text") {
+              responsePreview = truncateForLog(this.responseText, maxResponseChars);
+            } else {
+              responsePreview = `<non-text responseType: ${this.responseType}>`;
+            }
+          } catch (err) {
+            responsePreview = `<response body unavailable: ${err?.name || "Error"}: ${err?.message || String(err)}>`;
+          }
+  
+          let responseUrl = metadata.url;
+          try {
+            responseUrl = this.responseURL || metadata.url;
+          } catch (err) {}
+  
+          let contentType = null;
+          try {
+            contentType = this.getResponseHeader("content-type");
+          } catch (err) {}
+  
+          safeSendJson({
+            event: "request_finished",
+            requestId: metadata.requestId,
+            requestType: "xhr",
+            method: metadata.method,
+            url: metadata.url,
+            status: this.status,
+            statusText: this.statusText,
+            ok: this.status >= 200 && this.status < 300,
+            responseUrl,
+            contentType,
+            startedAtMs: metadata.startedAtMs,
+            finishedAtMs,
+            durationMs: finishedAtMs - metadata.startedAtMs,
+            responsePreview,
+          });
+        });
+  
+        try {
+          return originalXhrSend.apply(this, arguments);
+        } catch (err) {
+          safeSendJson({
+            event: "request_failed",
+            requestId: metadata.requestId,
+            requestType: "xhr",
+            method: metadata.method,
+            url: metadata.url,
+            startedAtMs: metadata.startedAtMs,
+            finishedAtMs: nowMs(),
+            errorName: err?.name,
+            errorMessage: err?.message || String(err),
+          });
+          throw err;
+        }
+      };
+    };
+  })();
+
+
+    window.startInterceptingFetchAndXhrRequests({ maxResponseChars: 500 });
+  }

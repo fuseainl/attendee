@@ -194,6 +194,9 @@ CELERY_TASK_ROUTES = {
     "bots.tasks.launch_scheduled_bot_task.launch_scheduled_bot": {
         "queue": os.getenv("LAUNCH_SCHEDULED_BOT_CELERY_QUEUE", "celery"),
     },
+    "bots.tasks.launch_adhoc_bot_task.launch_adhoc_bot": {
+        "queue": os.getenv("LAUNCH_ADHOC_BOT_CELERY_QUEUE", "celery"),
+    },
     "bots.tasks.deliver_webhook_task.deliver_webhook": {
         "queue": os.getenv("DELIVER_WEBHOOK_CELERY_QUEUE", "celery"),
     },
@@ -306,6 +309,8 @@ CHARGE_CREDITS_FOR_BOTS = os.getenv("CHARGE_CREDITS_FOR_BOTS", "false") == "true
 BOT_POD_NAMESPACE = os.getenv("BOT_POD_NAMESPACE", "attendee")
 WEBPAGE_STREAMER_POD_NAMESPACE = os.getenv("WEBPAGE_STREAMER_POD_NAMESPACE", "attendee-webpage-streamer")
 REQUIRE_HTTPS_WEBHOOKS = os.getenv("REQUIRE_HTTPS_WEBHOOKS", "true") == "true"
+REQUIRE_PUBLIC_WEBHOOK_URLS = os.getenv("REQUIRE_PUBLIC_WEBHOOK_URLS", "false") == "true"
+SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD = os.getenv("SHOW_CATEGORY_SELECTOR_IN_USAGE_DASHBOARD", "false") == "true"
 REQUIRE_STRING_VALUES_IN_METADATA = os.getenv("REQUIRE_STRING_VALUES_IN_METADATA", "true") == "true"
 MAX_METADATA_LENGTH = int(os.getenv("MAX_METADATA_LENGTH", 1000))
 SITE_DOMAIN = os.getenv("SITE_DOMAIN", "app.attendee.dev")
@@ -314,6 +319,12 @@ ENFORCE_DOMAIN_ALLOWLIST_IN_CHROME = os.getenv("ENFORCE_DOMAIN_ALLOWLIST_IN_CHRO
 CUSTOM_BOT_POD_SPEC_TYPES = os.getenv("CUSTOM_BOT_POD_SPEC_TYPES", "").split(",") if os.getenv("CUSTOM_BOT_POD_SPEC_TYPES") else []
 GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT = int(os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT")) if os.getenv("GLOBAL_WEBHOOK_DELIVERIES_PER_SECOND_RATE_LIMIT") else None
 LOG_BOT_STATE_CHANGES = os.getenv("LOG_BOT_STATE_CHANGES", "false") == "true"
+LAUNCH_ADHOC_BOTS_ASYNC = os.getenv("LAUNCH_ADHOC_BOTS_ASYNC", "false") == "true"
+SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS = os.getenv("SHOW_TEAMS_BOT_IDENTIFICATION_CREDENTIALS", "false") == "true"
+
+STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA = os.getenv("STORE_INFRASTRUCTURE_INFORMATION_IN_BOT_EVENT_METADATA", "true") == "true"
+
+CONCURRENT_BOTS_LIMIT = int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
 
 # Content Security Policy
 if os.getenv("ENABLE_CSP", "false") == "true":

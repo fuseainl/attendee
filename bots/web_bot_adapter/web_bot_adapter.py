@@ -657,9 +657,13 @@ class WebBotAdapter(BotAdapter):
                 libraries_code += library_file.read() + "\n"
             logger.info(f"Loaded library from {os.path.relpath(library_path, current_dir)}")
 
-        # Read your payload using path relative to current file
-        with open(os.path.join(current_dir, "..", self.get_chromedriver_payload_file_name()), "r") as file:
-            payload_code = file.read()
+        # Read the subclass payload files using paths relative to current file.
+        # Files are concatenated in order, so later files can depend on earlier ones.
+        payload_code = ""
+        for payload_file_name in self.get_chromedriver_payload_file_names():
+            with open(os.path.join(current_dir, "..", payload_file_name), "r") as file:
+                payload_code += file.read() + "\n"
+            logger.info(f"Loaded chromedriver payload from {payload_file_name}")
 
         # Read shared_chromedriver_payload.js
         with open(os.path.join(current_dir, "shared_chromedriver_payload.js"), "r") as file:
@@ -681,7 +685,7 @@ class WebBotAdapter(BotAdapter):
         self.display_var_for_debug_recording = os.environ.get("DISPLAY")
         if os.environ.get("DISPLAY") is None:
             # Create virtual display only if no real display is available
-            self.display = Display(visible=0, size=(1930, 1090))
+            self.display = Display(visible=0, size=(1930, 1090), use_xauth=True)
             self.display.start()
             self.display_var_for_debug_recording = self.display.new_display_var
 
@@ -710,7 +714,7 @@ class WebBotAdapter(BotAdapter):
         num_expected_exceptions = 0
         num_retries = 0
         max_retries = 3
-        attempts_to_join_started_at = time.time()
+        authorized_user_not_in_meeting_first_seen_at = None
 
         while num_retries <= max_retries:
             try:
@@ -753,12 +757,15 @@ class WebBotAdapter(BotAdapter):
                 return
 
             except UiAuthorizedUserNotInMeetingTimeoutExceededException:
+                if authorized_user_not_in_meeting_first_seen_at is None:
+                    authorized_user_not_in_meeting_first_seen_at = time.time()
+
                 # If the timeout has exceeded, send the message. If not, we will retry again.
-                if time.time() - attempts_to_join_started_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
+                if time.time() - authorized_user_not_in_meeting_first_seen_at > self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds:
                     self.send_message_callback({"message": self.Messages.AUTHORIZED_USER_NOT_IN_MEETING_TIMEOUT_EXCEEDED})
                     return
                 else:
-                    logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded, so retrying")
+                    logger.info(f"Failed to join meeting and the UiAuthorizedUserNotInMeetingTimeoutExceededException exception has occurred but the timeout of {self.automatic_leave_configuration.authorized_user_not_in_meeting_timeout_seconds} seconds has not exceeded ({time.time() - authorized_user_not_in_meeting_first_seen_at:.1f} seconds elapsed), so retrying")
 
             except UiInfinitelyRetryableException as e:
                 # Exceptions of this type will always be retried, it is up to the adapter to

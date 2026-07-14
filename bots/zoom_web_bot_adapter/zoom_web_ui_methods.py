@@ -114,11 +114,21 @@ class ZoomWebUIMethods:
             retry_time_seconds = int(os.getenv("ZOOM_ONBEHALF_TOKEN_RETRY_TIME_SECONDS", 5))
             logger.warning(f"Bot failed to join because onbehalf token user not in meeting. Raising UiAuthorizedUserNotInMeetingTimeoutExceededException after sleeping for {retry_time_seconds} seconds.")
             time.sleep(retry_time_seconds)  # Sleep for some seconds, so we're not constantly retrying
+            self.authorized_user_not_in_meeting_retries += 1
             raise UiAuthorizedUserNotInMeetingTimeoutExceededException("Bot failed to join because onbehalf token user not in meeting")
 
     def check_if_failed_to_join_because_generic_join_error(self):
         failed_to_join_because_generic_join_error = self.driver.execute_script("return window.userHasEncounteredGenericJoinError && window.userHasEncounteredGenericJoinError()")
-        if failed_to_join_because_generic_join_error:
+
+        try:
+            network_timeout_shown = self.driver.find_element(
+                By.XPATH,
+                '//*[contains(text(), "Your network connection has timed out or your organization has disabled access to Zoom from the browser")]',
+            ).is_displayed()
+        except Exception:
+            network_timeout_shown = False
+
+        if failed_to_join_because_generic_join_error or network_timeout_shown:
             self.handle_generic_join_error()
 
     def wait_to_be_admitted_to_meeting(self):

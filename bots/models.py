@@ -37,6 +37,12 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    concurrent_bots_limit_override = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Per-project concurrent bots limit. If null, the global CONCURRENT_BOTS_LIMIT setting is used.",
+    )
+
     @classmethod
     def accessible_to(cls, user):
         if not user.is_active:
@@ -49,7 +55,9 @@ class Project(models.Model):
         return self.organization.users.filter(is_active=True).filter(Q(project_accesses__project=self) | Q(role=UserRole.ADMIN))
 
     def concurrent_bots_limit(self):
-        return int(os.getenv("CONCURRENT_BOTS_LIMIT", 2500))
+        if self.concurrent_bots_limit_override is not None:
+            return self.concurrent_bots_limit_override
+        return settings.CONCURRENT_BOTS_LIMIT
 
     def save(self, *args, **kwargs):
         if not self.object_id:
@@ -507,7 +515,7 @@ class CalendarEvent(models.Model):
 
     platform_uuid = models.CharField(max_length=1024)
 
-    meeting_url = models.CharField(max_length=511, null=True, blank=True)
+    meeting_url = models.CharField(max_length=2048, null=True, blank=True)
 
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)
@@ -710,6 +718,12 @@ class TranscriptionSettings:
     def assemblyai_keyterms_prompt(self):
         return self._settings.get("assembly_ai", {}).get("keyterms_prompt", None)
 
+    def assemblyai_custom_spelling(self):
+        return self._settings.get("assembly_ai", {}).get("custom_spelling", None)
+
+    def assemblyai_prompt(self):
+        return self._settings.get("assembly_ai", {}).get("prompt", None)
+
     def assemblyai_speech_model(self):
         return self._settings.get("assembly_ai", {}).get("speech_model", None)
 
@@ -741,6 +755,9 @@ class TranscriptionSettings:
 
     def sarvam_model(self):
         return self._settings.get("sarvam", {}).get("model", None)
+
+    def sarvam_mode(self):
+        return self._settings.get("sarvam", {}).get("mode", None)
 
     def elevenlabs_model_id(self):
         return self._settings.get("elevenlabs", {}).get("model_id", "scribe_v1")
@@ -828,7 +845,7 @@ class Bot(models.Model):
     project = models.ForeignKey(Project, on_delete=models.PROTECT, related_name="bots")
 
     name = models.CharField(max_length=255, default="My bot")
-    meeting_url = models.CharField(max_length=511)
+    meeting_url = models.CharField(max_length=2048)
     meeting_uuid = models.CharField(max_length=511, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -974,6 +991,9 @@ class Bot(models.Model):
 
     def google_meet_login_mode_is_always(self):
         return self.settings.get("google_meet_settings", {}).get("login_mode", "always") == "always"
+
+    def google_meet_ui_interaction_mode(self):
+        return self.settings.get("google_meet_settings", {}).get("ui_interaction_mode", "humanized")
 
     def google_meet_login_group_name(self):
         return self.settings.get("google_meet_settings", {}).get("login_group_name")
@@ -2524,7 +2544,7 @@ class AsyncTranscription(models.Model):
 
     @property
     def use_grouped_utterances(self):
-        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+        return self.transcription_provider in [TranscriptionProviders.ASSEMBLY_AI, TranscriptionProviders.DEEPGRAM]
 
 
 class AsyncTranscriptionManager:
@@ -2713,6 +2733,7 @@ class Credentials(models.Model):
         EXTERNAL_MEDIA_STORAGE = 9, "External Media Storage"
         ELEVENLABS = 10, "ElevenLabs"
         KYUTAI = 11, "Kyutai"
+        TEAMS_BOT_IDENTIFICATION_CREDENTIALS = 12, "Teams Bot Identification Credentials"
 
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="credentials")
     credential_type = models.IntegerField(choices=CredentialTypes.choices, null=False)
@@ -3123,7 +3144,7 @@ class WebhookSubscription(models.Model):
             self.object_id = f"{self.OBJECT_ID_PREFIX}{random_string}"
         super().save(*args, **kwargs)
 
-    url = models.URLField()
+    url = models.URLField(max_length=2048)
     triggers = models.JSONField(default=default_triggers)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

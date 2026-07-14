@@ -343,8 +343,10 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "description": "Whether to automatically detect the spoken language.",
                 },
                 "keyterms_prompt": {"type": "array", "items": {"type": "string"}, "description": "List of words or phrases to boost in the transcript. Only supported for when using the 'slam-1' speech model. See AssemblyAI docs for details."},
+                "custom_spelling": {"type": "array", "items": {"type": "object", "properties": {"from": {"type": "array", "items": {"type": "string"}}, "to": {"type": "string"}}, "required": ["from", "to"], "additionalProperties": False}, "description": "List of {from: [...], to: ...} entries that deterministically replace known misspellings with the correct spelling at the engine level, preserving word-level timestamps. See AssemblyAI docs for details."},
+                "prompt": {"type": "string", "description": "Natural language prompt of up to 1500 words providing contextual information (e.g. meeting topic, participant names, domain terms) to bias transcription. Only supported for the 'universal-3-5-pro' speech model; ignored otherwise. See AssemblyAI docs for details."},
                 "speech_model": {"type": "string", "description": "The speech model to use for transcription. See AssemblyAI docs for details. This parameter is deprecated, use the speech_models param instead."},
-                "speech_models": {"type": "array", "items": {"type": "string"}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-pro', 'universal-2']. See AssemblyAI docs for details."},
+                "speech_models": {"type": "array", "items": {"type": "string"}, "uniqueItems": True, "description": "The speech models to use for transcription in order of preference. Defaults to ['universal-3-5-pro', 'universal-2']. See AssemblyAI docs for details."},
                 "speaker_labels": {"type": "boolean", "description": "Whether to enable AssemblyAI's ML-based diarization. Only needed if multiple people are speaking into a single microphone. Defaults to false."},
                 "use_eu_server": {"type": "boolean", "description": "Whether to use the EU server for transcription. Defaults to false."},
                 "language_detection_options": {"type": "object", "properties": {"expected_languages": {"type": "array", "items": {"type": "string"}}, "fallback_language": {"type": "string"}}, "description": "Options for controlling the automatic language detection. See AssemblyAI docs for details.", "additionalProperties": False},
@@ -380,7 +382,6 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
             "properties": {
                 "model": {
                     "type": "string",
-                    "enum": ["saarika:v2", "saarika:v2.5"],
                     "description": "The Sarvam model to use for transcription",
                 },
                 "language_code": {
@@ -388,6 +389,7 @@ TRANSCRIPTION_SETTINGS_SCHEMA = {
                     "enum": ["unknown", "hi-IN", "bn-IN", "kn-IN", "ml-IN", "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN", "en-IN", "gu-IN"],
                     "description": "The language code to use for transcription",
                 },
+                "mode": {"type": "string", "enum": ["transcribe", "translate", "verbatim", "translit", "codemix"], "description": "Mode of operation."},
             },
             "required": [],
             "additionalProperties": False,
@@ -737,6 +739,12 @@ GOOGLE_MEET_SETTINGS_SCHEMA = {
             "enum": ["always", "only_if_required"],
             "description": "The mode to use for the Google Meet bot login. 'always' means the bot will always login, 'only_if_required' means the bot will only login if the meeting requires authentication.",
             "default": "always",
+        },
+        "ui_interaction_mode": {
+            "type": "string",
+            "enum": ["robotic", "humanized"],
+            "description": "The UI interaction mode for the Google Meet bot. 'humanized' performs more human-like interactions to evade bot detection, but the bot will take about 10 seconds longer to join the meeting.",
+            "default": "humanized",
         },
         "login_group_name": {
             "type": ["string", "null"],
@@ -1088,7 +1096,7 @@ class WebsocketSettingsJSONField(serializers.JSONField):
         "properties": {
             "zoom_tokens_url": {
                 "type": "string",
-                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}.',
+                "description": 'URL of an endpoint on your server that returns Zoom authentication tokens the bot will use when it joins the meeting. Our server will make a POST request to this URL with information about the bot and expects a JSON response with the format: {"zak_token": "<zak_token>", "join_token": "<join_token>", "app_privilege_token": "<app_privilege_token>", "onbehalf_token": "<onbehalf_token>"}. Not every token needs to be provided, i.e. you can reply with {"zak_token": "<zak_token>"}. For the onbehalf_token attribute, you can send a comma separated list of tokens which will be tried one by one, if the previous one failed.',
             },
         },
         "required": [],
@@ -1470,7 +1478,7 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
     google_meet_settings = GoogleMeetSettingsJSONField(
         help_text="The Google Meet-specific settings for the bot.",
         required=False,
-        default={"use_login": False, "login_mode": "always", "login_group_name": None},
+        default={"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None},
     )
 
     def validate_google_meet_settings(self, value):
@@ -1478,7 +1486,12 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
             return value
 
         # Define defaults
-        defaults = {"use_login": False, "login_mode": "always", "login_group_name": None}
+        defaults = {"use_login": False, "login_mode": "always", "ui_interaction_mode": "humanized", "login_group_name": None}
+
+        # If use_login is set to true, then ui_interaction_mode should default to "robotic" (when not
+        # explicitly provided), because in this case humanized motion is not needed.
+        if value.get("use_login"):
+            defaults["ui_interaction_mode"] = "robotic"
 
         try:
             jsonschema.validate(instance=value, schema=GOOGLE_MEET_SETTINGS_SCHEMA)

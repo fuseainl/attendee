@@ -19,6 +19,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         google_meet_bot_login_should_be_used: bool,
         create_google_meet_bot_login_session_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
+        ui_interaction_mode: str,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -29,6 +30,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         self.google_meet_bot_login_session = None
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
         self.number_of_times_blocked_by_google = 0
+        self.number_of_times_mocap_sequence_not_available = 0
+        self.ui_interaction_mode = ui_interaction_mode
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
@@ -46,8 +49,8 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         logger.info("Meeting requires login and Google meet bot login is available, so we will retry by logging in")
         return True
 
-    def get_chromedriver_payload_file_name(self):
-        return "google_meet_bot_adapter/google_meet_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return ["google_meet_bot_adapter/google_meet_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8765

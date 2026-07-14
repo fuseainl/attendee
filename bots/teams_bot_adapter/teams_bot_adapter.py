@@ -55,6 +55,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         teams_bot_login_should_be_used: bool,
         fetch_teams_bot_login_credentials_callback: Callable[[], dict],
         modify_dom_for_video_recording: bool,
+        fetch_teams_bot_identification_token_callback: Callable[[], str | None],
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -63,6 +64,9 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         self.teams_bot_login_should_be_used = teams_bot_login_should_be_used and teams_bot_login_is_available
         self.fetch_teams_bot_login_credentials_callback = fetch_teams_bot_login_credentials_callback
         self.modify_dom_for_video_recording = modify_dom_for_video_recording
+        self.fetch_teams_bot_identification_token_callback = fetch_teams_bot_identification_token_callback
+        self.should_log_network_requests = False
+        self.had_disable_light_experience_redirect = False
 
     def should_retry_joining_meeting_that_requires_login_by_logging_in(self):
         # If we don't have the ability to login, we can't retry
@@ -80,8 +84,8 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         logger.info("Meeting requires login and Teams bot login credentials are available, so we will retry by logging in")
         return True
 
-    def get_chromedriver_payload_file_name(self):
-        return "teams_bot_adapter/teams_chromedriver_payload.js"
+    def get_chromedriver_payload_file_names(self):
+        return ["teams_bot_adapter/teams_chromedriver_payload.js"]
 
     def get_websocket_port(self):
         return 8097
@@ -159,6 +163,7 @@ class TeamsBotAdapter(WebBotAdapter, TeamsUIMethods):
         enforce_teams_closed_captions_language_timeout_seconds = int(os.getenv("ENFORCE_TEAMS_CLOSED_CAPTIONS_LANGUAGE_TIMEOUT_SECONDS", "0"))
         return f"""
             window.teamsInitialData = {{
+                shouldLogNetworkRequests: {"true" if self.should_log_network_requests else "false"},
                 modifyDomForVideoRecording: {"true" if self.modify_dom_for_video_recording else "false"},
                 enforceTeamsClosedCaptionsLanguageTimeoutSeconds: {enforce_teams_closed_captions_language_timeout_seconds}
             }}

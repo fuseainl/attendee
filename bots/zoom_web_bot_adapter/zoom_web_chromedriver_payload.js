@@ -1,3 +1,63 @@
+(() => {
+    if (window.self !== window.top) {
+        console.log("Running inside an iframe, aborting payload.");
+        return;
+    }
+    const fullUrl = window.location.href;
+    console.log("Full URL:", fullUrl);
+  
+    if (!fullUrl.startsWith("http://127.0.0.1")) {
+        // This means we shunted to a zoom.com url which means the meeting has ended.
+        // Currently SDK does not give us any feedback on this.
+        // window.ws may not be ready yet, so retry until the send succeeds.
+        const trySendMeetingEnded = () => {
+            try {
+                window.ws.sendJson({
+                    type: 'MeetingStatusChange',
+                    change: 'meeting_ended',
+                });
+            } catch (e) {
+                setTimeout(trySendMeetingEnded, 200);
+            }
+        };
+        setTimeout(trySendMeetingEnded, 200);
+    }
+  })();
+
+// Get the frontend tracking id for debugging
+(() => {
+    function interceptJsonpCallback(name) {
+      Object.defineProperty(window, name, {
+        configurable: true,
+  
+        set(originalCallback) {
+          Object.defineProperty(window, name, {
+            configurable: true,
+            writable: true,
+            value: function interceptedZoomJsonpResponse(payload) {
+              try {
+                window.ws?.sendJson({
+                  type: 'ZoomFrontendTrackingId',
+                  trackingId: payload?.result?.tid ?? 'No tracking id found'
+                });
+              } catch (e) {
+                console.warn('ZoomFrontendTrackingId send failed', e);
+              }
+
+              return originalCallback.call(this, payload);
+            },
+          });
+        },
+  
+        get() {
+          return undefined;
+        },
+      });
+    }
+  
+    interceptJsonpCallback("localJsonpCallback1");
+  })();
+
 // Captures per-participant webcam/screenshare video by periodically scanning
 // Zoom <video-player> elements and reconciling that scan with active captures.
 class PerParticipantVideoCaptureManager {
@@ -876,6 +936,14 @@ class StyleManager {
 
     onlyShowSubsetofZoomUI() {
         try {
+            // Inject a style element that hides any ReactModal content
+            if (!document.getElementById('attendee-custom-style')) {
+                const styleElement = document.createElement('style');
+                styleElement.id = 'attendee-custom-style';
+                styleElement.textContent = '.ReactModal__Content { display: none !important; } #notificationManager { display: none !important; }';
+                document.head.appendChild(styleElement);
+            }
+
             // Find the main element that contains all the video elements
             this.mainElement = document.querySelector('#video-pip-container');
             if (!this.mainElement) {
@@ -913,6 +981,12 @@ class StyleManager {
 
 
     showAllOfZoomUI() {
+        // Remove the injected style element that hid the ReactModal content
+        const styleElement = document.getElementById('attendee-custom-style');
+        if (styleElement) {
+            styleElement.remove();
+        }
+
         // Restore all elements that were hidden by onlyShowSubsetofZoomUI
         document.querySelectorAll('body *').forEach(element => {
             if (element.style.display === 'none') {

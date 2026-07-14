@@ -1,8 +1,10 @@
 import logging
+import os
 import random
+import threading
 import time
 
-from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException, ElementNotInteractableException, InvalidSessionIdException, NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -89,6 +91,39 @@ class TeamsUIMethods:
         logger.info(f"Sleeping for {time_to_sleep_for} seconds.")
         time.sleep(time_to_sleep_for)
 
+    def ensure_x11_input(self):
+        if not hasattr(self, "x11_input"):
+            from bots.web_bot_adapter.x11_input import X11Input
+
+            self.x11_input = X11Input()
+
+    # Wiggle mouse to defeat bot detection
+    def wiggle_mouse(self):
+        try:
+            self.ensure_x11_input()
+
+            # The root window geometry matches the (virtual) screen size, so we
+            # can pick random in-bounds targets to move the OS cursor to.
+            geometry = self.x11_input.root.get_geometry()
+            screen_width = max(1, geometry.width)
+            screen_height = max(1, geometry.height)
+
+            # Start from the center of the screen before wiggling around.
+            self.x11_input.move_abs(screen_width // 2, screen_height // 2)
+            time.sleep(random.uniform(0.1, 0.4))
+
+            num_movements = 5
+            logger.info(f"Wiggling mouse at OS level with {num_movements} movements")
+            for _ in range(num_movements):
+                target_x = random.randint(0, screen_width - 1)
+                target_y = random.randint(0, screen_height - 1)
+                self.x11_input.move_abs(target_x, target_y)
+                time.sleep(0.1)
+        except Exception as e:
+            # Mouse wiggling is best-effort anti-bot-detection; never let it
+            # break the join flow.
+            logger.warning(f"Error wiggling mouse at OS level: {e}")
+
     def fill_out_name_input(self):
         num_attempts = 60
         logger.info("Waiting for the name input field...")
@@ -100,6 +135,7 @@ class TeamsUIMethods:
                 return
             except TimeoutException as e:
                 self.look_for_microsoft_login_form_element("name_input")
+                self.look_for_invalid_url_element("name_input")
 
                 if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used and self.join_now_button_is_present():
                     logger.info("Join now button is present. Assuming name input is not present because we don't need to fill it out, so returning.")
@@ -142,6 +178,77 @@ class TeamsUIMethods:
         logger.info("Clicking the closed captions button...")
         self.click_element(closed_captions_button, "closed_captions_button")
 
+    def check_if_waiting_room_connection_failed(self, waiting_room_timeout_started_at, step):
+        if os.getenv("CHECK_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "false":
+            return
+
+        try:
+            # If it has been less than 30 seconds since the waiting room timeout started, then we should not assume that the connection failed
+            if time.time() - waiting_room_timeout_started_at < 30:
+                return
+
+            # If it has been more than 300 seconds, then we should also return
+            if time.time() - waiting_room_timeout_started_at > 300:
+                return
+
+            # If the join button is present but it is NOT disabled, then we should assume the connection failed and things were reset.
+            join_button = self.find_element_by_selector(By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')
+            issue_detected = join_button and join_button.is_enabled()
+            should_raise_exception = os.getenv("RAISE_IF_TEAMS_WAITING_ROOM_CONNECTION_FAILED", "false") == "true"
+
+            if issue_detected:
+                # When bot retries joining the meeting, this will cause it to log network requests from the start
+                self.should_log_network_requests = True
+
+            if issue_detected and should_raise_exception:
+                logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Raising UiTeamsBlockingUsException")
+                raise UiTeamsBlockingUsException("Waiting room connection failed.", step)
+
+            if issue_detected and not should_raise_exception:
+                if not getattr(self, "_waiting_room_connection_failed_logged", False):
+                    logger.info("Join button is present but it is NOT disabled after entering waiting room. Assuming waiting room connection failed. Not raising exception.")
+                    self._waiting_room_connection_failed_logged = True
+                return
+
+        except UiTeamsBlockingUsException:
+            raise
+        except Exception as e:
+            logger.info(f"Unknown error occurred in check_if_waiting_room_connection_failed. Exception type = {type(e)}")
+            return
+
+    def monitor_for_disable_light_experience_redirect(self):
+        # Capture the driver this thread was started for. If a retry replaces self.driver
+        # with a new instance, this thread is stale and should exit instead of polling the
+        # new driver (which has its own monitor thread).
+        thread_id = threading.get_ident()
+        logger.info(f"monitor_for_disable_light_experience_redirect thread started (thread_id={thread_id})")
+        driver = self.driver
+
+        # Polling driver.current_url from this thread while the main thread is also
+        # issuing webdriver commands overflows selenium's urllib3 connection pool
+        # (size 1), which spams "Connection pool is full, discarding connection".
+        # Temporarily raise the urllib3 connectionpool log level for as long as this
+        # thread runs, then restore it when the thread leaves.
+        urllib3_logger = logging.getLogger("urllib3.connectionpool")
+        previous_level = urllib3_logger.level
+        urllib3_logger.setLevel(logging.ERROR)
+        try:
+            while not self.had_disable_light_experience_redirect and not self.joined_at and self.driver is driver:
+                try:
+                    current_url = driver.current_url
+                except InvalidSessionIdException:
+                    logger.info(f"Driver session has expired. monitor_for_disable_light_experience_redirect thread exiting (thread_id={thread_id})")
+                    return
+                if "lightExperience=false" in current_url:
+                    logger.info(f"Disable light experience redirect occurred (lightExperience=false is in the url). Current page url: {current_url}. Quitting driver to trigger retry.")
+                    self.had_disable_light_experience_redirect = True
+                    # Since we're on a separate thread, we can't just raise an exception, we need to quit the driver to trigger the retry.
+                    driver.quit()
+                time.sleep(0.5)
+            logger.info(f"monitor_for_disable_light_experience_redirect thread leaving (thread_id={thread_id})")
+        finally:
+            urllib3_logger.setLevel(previous_level)
+
     def check_if_waiting_room_timeout_exceeded(self, waiting_room_timeout_started_at, step):
         waiting_room_timeout_exceeded = time.time() - waiting_room_timeout_started_at > self.automatic_leave_configuration.waiting_room_timeout_seconds
         if waiting_room_timeout_exceeded:
@@ -154,6 +261,9 @@ class TeamsUIMethods:
 
                 logger.info("Waiting room timeout exceeded, but there is more than one participant in the meeting. Not aborting join attempt.")
                 return
+
+            # Take a screenshot to confirm that we are in the waiting room
+            self.send_screenshot_and_mhtml_file_message()
 
             try:
                 self.click_cancel_join_button()
@@ -181,6 +291,7 @@ class TeamsUIMethods:
                 self.look_for_we_could_not_connect_you_element("click_show_more_button")
 
                 self.check_if_waiting_room_timeout_exceeded(waiting_room_timeout_started_at, "click_show_more_button")
+                self.check_if_waiting_room_connection_failed(waiting_room_timeout_started_at, "click_show_more_button")
 
             except Exception as e:
                 logger.info("Exception raised in locate_element for show_more_button")
@@ -216,6 +327,12 @@ class TeamsUIMethods:
 
             logger.info("Captcha detected. Raising UiBlockedByCaptchaException")
             raise UiBlockedByCaptchaException("Captcha detected", step)
+
+    def look_for_invalid_url_element(self, step):
+        invalid_url_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "Looks like the meeting URL is incorrect. Please check the URL and try again.")]')
+        if invalid_url_element:
+            logger.info("Invalid URL detected. Raising UiMeetingNotFoundException")
+            raise UiMeetingNotFoundException("Invalid URL detected", step)
 
     def look_for_microsoft_login_form_element(self, step):
         # Check for Microsoft login form (email input)
@@ -272,12 +389,73 @@ class TeamsUIMethods:
         else:
             return "speaker"
 
+    def meeting_url_with_identification_token(self):
+        token = self.fetch_teams_bot_identification_token_callback() if self.fetch_teams_bot_identification_token_callback else None
+        if not token:
+            return self.meeting_url
+
+        # The token is attached to the URL as a fragment, e.g.
+        # https://teams.microsoft.com/meet/1234?p=abc#token=<TOKEN>
+        # Preserve any existing fragment that may already be on the URL.
+        base_url, separator, existing_fragment = self.meeting_url.partition("#")
+        token_fragment = f"token={token}"
+        if existing_fragment:
+            new_fragment = f"{existing_fragment}&{token_fragment}"
+        else:
+            new_fragment = token_fragment
+
+        obfuscated_token = f"{(token or '')[:6]}...{(token or '')[-6:]}"
+        if existing_fragment:
+            obfuscated_fragment = f"{existing_fragment}&token={obfuscated_token}"
+        else:
+            obfuscated_fragment = f"token={obfuscated_token}"
+
+        logger.info(f"Attaching Teams bot identification token to meeting URL: {self.meeting_url} -> {base_url}#{obfuscated_fragment}")
+        return f"{base_url}#{new_fragment}"
+
+    def wait_for_page_url_to_stabilize(self):
+        # We only do this if a disable light experience redirect occurred in the previous join attempt
+        # We wait for the page url to stabilize because the disable light experience redirect may have caused the page to reload
+        # If we don't wait then the reload may occur in the middle of our UI navigation which breaks things.
+        if not self.had_disable_light_experience_redirect:
+            return
+
+        stable_period_seconds = 10
+        max_wait_seconds = 60
+        poll_interval_seconds = 1
+
+        start_time = time.time()
+        last_url = self.driver.current_url
+        last_change_time = start_time
+        logger.info(f"Waiting for page url to stabilize. Current url: {last_url}")
+
+        while True:
+            time.sleep(poll_interval_seconds)
+
+            current_url = self.driver.current_url
+            now = time.time()
+
+            if current_url != last_url:
+                logger.info(f"Page url changed: {last_url} -> {current_url}")
+                last_url = current_url
+                last_change_time = now
+
+            if now - last_change_time >= stable_period_seconds:
+                logger.info(f"Page url has been stable for {stable_period_seconds} seconds: {last_url}")
+                return
+
+            if now - start_time >= max_wait_seconds:
+                logger.info(f"Page url did not stabilize within {max_wait_seconds} seconds. Proceeding with url: {last_url}")
+                return
+
     # Returns nothing if succeeded, raises an exception if failed
     def attempt_to_join_meeting(self):
+        threading.Thread(target=self.monitor_for_disable_light_experience_redirect, daemon=True).start()
+
         if self.teams_bot_login_is_available and self.teams_bot_login_should_be_used:
             self.login_to_microsoft_account()
 
-        self.driver.get(self.meeting_url)
+        self.driver.get(self.meeting_url_with_identification_token())
 
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
@@ -292,9 +470,15 @@ class TeamsUIMethods:
             },
         )
 
+        self.wait_for_page_url_to_stabilize()
+
         self.fill_out_name_input()
 
+        self.wiggle_mouse()
+
         self.turn_off_media_inputs()
+
+        self.disable_video_effects()
 
         logger.info("Waiting for the Join now button...")
         join_button = self.locate_element(step="join_button", condition=EC.presence_of_element_located((By.CSS_SELECTOR, '[data-tid="prejoin-join-button"]')), wait_time_seconds=10)
@@ -316,6 +500,18 @@ class TeamsUIMethods:
                 logger.warning(f"Could not disable incoming video in Teams UI; continuing without disabling it. Error: {e}")
 
         self.ready_to_show_bot_image()
+
+    def disable_video_effects(self):
+        if not (self.teams_bot_login_is_available and self.teams_bot_login_should_be_used):
+            logger.info("Not disabling video effects because teams bot is not logged in.")
+            return
+
+        logger.info("Disabling video effects...")
+        disable_video_effects_result = self.driver.execute_script("return window.callManager?.disableVideoEffects()")
+        if disable_video_effects_result:
+            logger.info("Video effects disabled programmatically")
+        else:
+            logger.error("Failed to disable video effects programmatically")
 
     def disable_incoming_video_in_ui(self):
         logger.info("Waiting for the view button...")
@@ -403,9 +599,37 @@ class TeamsUIMethods:
         time.sleep(1)
 
         logger.info("Waiting for the password input...")
-        password_input = self.locate_element(step="password_input", condition=EC.presence_of_element_located((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
-        logger.info("Filling in the password...")
-        password_input.send_keys(credentials["password"])
+        # Verify that the password input is filled in. If it is not, try again several times
+        num_password_attempts = 5
+        password_filled_in = False
+        for password_attempt_index in range(num_password_attempts):
+            try:
+                password_input = self.locate_element(step="password_input", condition=EC.element_to_be_clickable((By.CSS_SELECTOR, 'input[name="passwd"]')), wait_time_seconds=10)
+            except UiCouldNotLocateElementException as e:
+                # If we see the incorrect username error, then we should raise a more specific exception
+                if self.find_element_by_selector(By.ID, "usernameError"):
+                    logger.info("Incorrect username element found. Raising UiLoginAttemptFailedException")
+                    raise UiLoginAttemptFailedException("Incorrect username", "login_to_microsoft_account")
+                raise e
+
+            logger.info(f"Filling in the password (attempt {password_attempt_index + 1}/{num_password_attempts})...")
+            password_input.send_keys(credentials["password"])
+            time.sleep(1)
+            filled_value = password_input.get_attribute("value") or ""
+            if filled_value == credentials["password"]:
+                logger.info("Password input filled in successfully")
+                password_filled_in = True
+                break
+
+            logger.warning(f"Password input was not filled in correctly (got {len(filled_value)} characters, expected {len(credentials['password'])}). Retrying...")
+            try:
+                password_input.clear()
+            except Exception as e:
+                logger.warning(f"Error clearing password input: {e}")
+            time.sleep(1)
+
+        if not password_filled_in:
+            logger.warning("Failed to fill in the password input after multiple attempts.")
 
         time.sleep(1)
 
